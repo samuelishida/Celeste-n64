@@ -92,12 +92,13 @@ void DrawCube(const T3DVertPacked* vertices, T3DMat4FP* matrix_fp) {
 }
 
 PlayerInput ReadPlayerInput() {
-    joypad_inputs_t held = joypad_get_inputs(JOYPAD_PORT_1);
+    joypad_inputs_t held_inputs = joypad_get_inputs(JOYPAD_PORT_1);
     joypad_buttons_t pressed = joypad_get_buttons_pressed(JOYPAD_PORT_1);
+    joypad_buttons_t held = joypad_get_buttons_held(JOYPAD_PORT_1);
 
     constexpr float stick_max = 80.0f;
-    float move_x = -held.stick_x / stick_max;
-    float move_y = held.stick_y / stick_max;
+    float move_x = -held_inputs.stick_x / stick_max;
+    float move_y = held_inputs.stick_y / stick_max;
     const float move_length = std::sqrt((move_x * move_x) + (move_y * move_y));
     if (move_length > 1.0f) {
         move_x /= move_length;
@@ -107,6 +108,7 @@ PlayerInput ReadPlayerInput() {
     return {
         .move = {move_x, move_y},
         .jump_pressed = pressed.a != 0,
+        .jump_held = held.a != 0,
         .dash_pressed = pressed.b != 0,
     };
 }
@@ -120,9 +122,21 @@ void ResolveIslandCollision(PlayerState& player) {
         player.position.y = kIslandTopY + kPlayerHalfHeight;
         player.velocity.y = 0.0f;
         player.grounded = true;
+        player.wall_left = false;
+        player.wall_right = false;
         return;
     }
     player.grounded = false;
+
+    // Simple wall probes: vertical walls at x = +/- 12
+    constexpr float kWallX = 12.0f;
+    constexpr float kWallHalfHeight = 8.0f;
+    constexpr float kWallZHalf = 4.0f;
+    const bool near_wall_z = std::fabs(player.position.z) <= kWallZHalf;
+    const bool near_wall_y = player.position.y <= kWallHalfHeight && player.position.y >= -kWallHalfHeight;
+
+    player.wall_left = (player.position.x <= -kWallX && player.position.x >= -kWallX - 1.0f && near_wall_z && near_wall_y);
+    player.wall_right = (player.position.x >= kWallX && player.position.x <= kWallX + 1.0f && near_wall_z && near_wall_y);
 }
 
 }  // namespace

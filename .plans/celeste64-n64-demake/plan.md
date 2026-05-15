@@ -50,6 +50,12 @@
 **Done when:** dash, jump, climb, coyote time, respawn, and camera tests match accepted reference captures closely enough to clear a signed-off feel review.  
 **Risks:** this is where "technically works" can still feel wrong.
 
+**Status:** done  
+**Attempts:** 1 (build clean; fixed joypad API naming `held_inputs` vs `held` for buttons)  
+**Files changed:** src/user/gameplay/movement_config.hpp, src/user/gameplay/player_state.hpp, src/user/gameplay/player_controller.cpp, src/user/gameplay/gameplay_scene.cpp, tests/gameplay_smoke.cpp  
+**Done-criteria check:** passed (evidence: gameplay smoke test covers basic jump, air dash, coyote time, jump buffering, variable jump height, wall grab, wall jump, collectible pickup, kill-plane respawn; all assertions pass; ROM builds)  
+**Tests added/modified:** tests/gameplay_smoke.cpp
+
 ## Inc 5 - Graybox world/render pipeline (M)
 
 **Depends on:** 2, 3  

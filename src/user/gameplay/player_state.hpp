@@ -7,6 +7,7 @@ namespace madeline_cube {
 struct PlayerInput {
     Vec2 move;
     bool jump_pressed = false;
+    bool jump_held = false;
     bool dash_pressed = false;
 };
 
@@ -17,6 +18,24 @@ struct PlayerState {
     bool grounded = false;
     bool air_dash_available = true;
     float dash_time_remaining = 0.0f;
+
+    // Coyote time: counts down after leaving ground.
+    float coyote_time_remaining = 0.0f;
+
+    // Jump buffer: counts down after jump pressed in air.
+    float jump_buffer_remaining = 0.0f;
+
+    // Wall grab state
+    bool wall_grabbing = false;
+    float wall_grab_time_remaining = 0.0f;
+    float wall_jump_cooldown_remaining = 0.0f;
+
+    // Variable jump: true while jump button is held and climbing.
+    bool jump_held_active = false;
+
+    // Collision probes (set by caller before Step)
+    bool wall_left = false;
+    bool wall_right = false;
 };
 
 }  // namespace madeline_cube
