@@ -16,6 +16,9 @@ src = \
 	src/user/gameplay/scene_manager.cpp \
 	src/user/gameplay/debug_hud.cpp \
 	src/user/gameplay/gameplay_scene.cpp \
+	src/user/gameplay/world.cpp \
+	src/user/gameplay/room_data.cpp \
+	src/user/gameplay/save_system.cpp \
 	src/user/n64/profiler.cpp
 
 all: madeline_cube_rom.z64

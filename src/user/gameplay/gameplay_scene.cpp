@@ -12,14 +12,14 @@
 #include "debug_hud.hpp"
 #include "player_controller.hpp"
 #include "respawn_system.hpp"
+#include "room_data.hpp"
+#include "world.hpp"
 
 namespace madeline_cube {
 
 namespace {
 
 constexpr float kFixedDeltaSeconds = 1.0f / 60.0f;
-constexpr float kIslandHalfExtent = 10.0f;
-constexpr float kIslandTopY = 0.0f;
 constexpr float kPlayerHalfHeight = 1.0f;
 
 struct RenderObject {
@@ -113,32 +113,6 @@ PlayerInput ReadPlayerInput() {
     };
 }
 
-void ResolveIslandCollision(PlayerState& player) {
-    const bool above_island_x = std::fabs(player.position.x) <= kIslandHalfExtent;
-    const bool above_island_z = std::fabs(player.position.z) <= kIslandHalfExtent;
-    const float player_floor_y = player.position.y - kPlayerHalfHeight;
-
-    if (above_island_x && above_island_z && player_floor_y <= kIslandTopY && player.velocity.y <= 0.0f) {
-        player.position.y = kIslandTopY + kPlayerHalfHeight;
-        player.velocity.y = 0.0f;
-        player.grounded = true;
-        player.wall_left = false;
-        player.wall_right = false;
-        return;
-    }
-    player.grounded = false;
-
-    // Simple wall probes: vertical walls at x = +/- 12
-    constexpr float kWallX = 12.0f;
-    constexpr float kWallHalfHeight = 8.0f;
-    constexpr float kWallZHalf = 4.0f;
-    const bool near_wall_z = std::fabs(player.position.z) <= kWallZHalf;
-    const bool near_wall_y = player.position.y <= kWallHalfHeight && player.position.y >= -kWallHalfHeight;
-
-    player.wall_left = (player.position.x <= -kWallX && player.position.x >= -kWallX - 1.0f && near_wall_z && near_wall_y);
-    player.wall_right = (player.position.x >= kWallX && player.position.x <= kWallX + 1.0f && near_wall_z && near_wall_y);
-}
-
 }  // namespace
 
 struct GameplayScene::Impl {
@@ -147,12 +121,12 @@ struct GameplayScene::Impl {
     uint8_t ambient_light[4] = {70, 70, 70, 0xFF};
     uint8_t directional_light[4] = {0xFF, 0xFF, 0xFF, 0xFF};
 
-    T3DVertPacked* player_vertices = nullptr;
-    T3DVertPacked* island_vertices = nullptr;
+    T3DVertPacked* cube_vertices = nullptr;
     T3DVertPacked* collectible_vertices = nullptr;
 
     RenderObject player_render;
-    RenderObject island_render;
+    RenderObject room_geometry[Room::kMaxGeometry];
+    int room_geometry_count = 0;
     RenderObject collectible_render;
 
     MovementConfig movement_config;
@@ -160,6 +134,7 @@ struct GameplayScene::Impl {
     RespawnSystem respawn_system{movement_config};
     CameraController camera_controller;
 
+    Room room;
     Vec3 checkpoint = {0.0f, 3.0f, 0.0f};
     PlayerState player;
     CollectibleState collectible;
@@ -173,35 +148,43 @@ void GameplayScene::Init() {
 
     t3d_vec3_norm(&impl_->light_direction);
 
-    impl_->player_vertices = static_cast<T3DVertPacked*>(malloc_uncached(sizeof(T3DVertPacked) * 12));
-    impl_->island_vertices = static_cast<T3DVertPacked*>(malloc_uncached(sizeof(T3DVertPacked) * 12));
+    impl_->cube_vertices = static_cast<T3DVertPacked*>(malloc_uncached(sizeof(T3DVertPacked) * 12));
     impl_->collectible_vertices = static_cast<T3DVertPacked*>(malloc_uncached(sizeof(T3DVertPacked) * 12));
-    BuildCubeGeometry(impl_->player_vertices, 0xFF6A8AFF);
-    BuildCubeGeometry(impl_->island_vertices, 0x5AA06AFF);
+    BuildCubeGeometry(impl_->cube_vertices, 0x888888FF);
     BuildCubeGeometry(impl_->collectible_vertices, 0xFF284CFF);
 
     impl_->player_render.matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
-    impl_->island_render.matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
     impl_->collectible_render.matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
 
-    impl_->player.position = impl_->checkpoint;
+    impl_->room = GetForsakenCityStartRoom();
+    impl_->checkpoint = impl_->room.checkpoint;
+    impl_->player.position = impl_->room.player_start;
     impl_->player.grounded = false;
 
-    impl_->collectible.position = {6.0f, 2.0f, 0.0f};
-    impl_->collectible.pickup_radius = 1.5f;
+    // Setup room geometry render objects
+    impl_->room_geometry_count = impl_->room.geometry_count;
+    for (int i = 0; i < impl_->room_geometry_count; ++i) {
+        impl_->room_geometry[i].matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
+        SetTransform(impl_->room_geometry[i], impl_->room.geometry[i].position, impl_->room.geometry[i].scale);
+    }
 
-    SetTransform(impl_->island_render, {0.0f, -1.0f, 0.0f}, {10.0f, 1.0f, 10.0f});
+    // Setup collectible from first spawn
+    if (impl_->room.spawn_count > 0) {
+        impl_->collectible.position = impl_->room.spawns[0].position;
+        impl_->collectible.pickup_radius = 1.5f;
+    }
 }
 
 void GameplayScene::Shutdown() {
     if (impl_ == nullptr) return;
 
-    free(impl_->player_vertices);
-    free(impl_->island_vertices);
+    free(impl_->cube_vertices);
     free(impl_->collectible_vertices);
     free(impl_->player_render.matrix_fp);
-    free(impl_->island_render.matrix_fp);
     free(impl_->collectible_render.matrix_fp);
+    for (int i = 0; i < impl_->room_geometry_count; ++i) {
+        free(impl_->room_geometry[i].matrix_fp);
+    }
 
     delete impl_;
     impl_ = nullptr;
@@ -214,7 +197,7 @@ void GameplayScene::Update(float delta_seconds) {
     const PlayerInput input = ReadPlayerInput();
 
     impl_->player_controller.Step(impl_->player, input, delta_seconds);
-    ResolveIslandCollision(impl_->player);
+    ResolveRoomCollision(impl_->player, impl_->room);
     impl_->respawn_system.Step(impl_->player, impl_->checkpoint);
     TryCollect(impl_->collectible, impl_->player.position);
     impl_->camera_controller.Step(impl_->camera, impl_->player.position, delta_seconds);
@@ -227,8 +210,8 @@ void GameplayScene::Update(float delta_seconds) {
     );
 
     DebugCounters counters;
-    counters.active_scene_id = 0;  // gameplay scene id
-    counters.actor_count = 3;    // player, island, collectible
+    counters.active_scene_id = 0;
+    counters.actor_count = 1 + impl_->room_geometry_count + (impl_->collectible.collected ? 0 : 1);
     impl_->debug_hud.Update(counters);
 }
 
@@ -261,8 +244,12 @@ void GameplayScene::Render() {
     t3d_light_set_count(1);
     t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
 
-    DrawCube(impl_->island_vertices, impl_->island_render.matrix_fp);
-    DrawCube(impl_->player_vertices, impl_->player_render.matrix_fp);
+    // Draw room geometry
+    for (int i = 0; i < impl_->room_geometry_count; ++i) {
+        DrawCube(impl_->cube_vertices, impl_->room_geometry[i].matrix_fp);
+    }
+
+    DrawCube(impl_->cube_vertices, impl_->player_render.matrix_fp);
     if (!impl_->collectible.collected) {
         DrawCube(impl_->collectible_vertices, impl_->collectible_render.matrix_fp);
     }

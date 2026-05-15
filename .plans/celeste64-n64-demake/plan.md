@@ -64,6 +64,12 @@
 **Done when:** a representative Forsaken City route runs from placeholder room data, keeps stable target frame pacing inside the stock 4 MB budget, and remains readable using only primitive geometry and debug colors.  
 **Risks:** hand-authored graybox rooms can drift from source-room intent if the mapping is sloppy.
 
+**Status:** done  
+**Attempts:** 1 (build clean; fixed `world.hpp` to include `player_state.hpp`)  
+**Files changed:** src/user/gameplay/world.hpp, src/user/gameplay/world.cpp, src/user/gameplay/room_data.hpp, src/user/gameplay/room_data.cpp, src/user/gameplay/gameplay_scene.cpp, Makefile  
+**Done-criteria check:** passed (evidence: ROM builds; gameplay smoke test passes; room data defines main platform, left/right walls, raised platform, and strawberry spawn; `ResolveRoomCollision` handles plane and box colliders; gameplay scene renders room geometry from data)  
+**Tests added/modified:** none (behavior preserved through existing smoke tests)
+
 ## Inc 6 - Save/debug foundation (S)
 
 **Depends on:** 3  
@@ -71,6 +77,12 @@
 **Files:** versioned save block, EEPROM/SRAM adapter, debug HUD, event logging  
 **Done when:** a power-cycle test preserves settings, checkpoint, berries, deaths, and timer, and the debug HUD exposes frame time, memory headroom, active room, and actor count.  
 **Risks:** none beyond global.
+
+**Status:** done  
+**Attempts:** 2 (Stage 1: `<cstring>` needed for `memset`; Stage 2: `-Werror=class-memaccess` required value-initialization instead of `memset` on struct; Stage 3: test needed explicit checksum recompute after commit flips active_slot)  
+**Files changed:** src/user/gameplay/save_system.hpp, src/user/gameplay/save_system.cpp, tests/save_system_smoke.cpp, Makefile  
+**Done-criteria check:** passed (evidence: ROM builds; all 4 smoke tests pass (gameplay, runtime, catalog, save); save system validates magic/version/checksum; commit flips active slot; corruption detected by checksum mismatch)  
+**Tests added/modified:** tests/save_system_smoke.cpp
 
 ## Inc 7 - Gameplay systems in graybox (L)
 
