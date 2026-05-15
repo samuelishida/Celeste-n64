@@ -22,6 +22,7 @@ src = \
 	src/user/gameplay/strawberry_actor.cpp \
 	src/user/gameplay/refill_actor.cpp \
 	src/user/gameplay/spring_actor.cpp \
+	src/user/gameplay/bobbing_actor.cpp \
 	src/user/n64/profiler.cpp
 
 all: madeline_cube_rom.z64

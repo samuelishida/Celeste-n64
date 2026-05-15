@@ -7,7 +7,7 @@ namespace madeline_cube {
 class SpringActor : public Actor {
 public:
     void Init() override;
-    void OnCollect() override;
+    bool IsCollectible() const override { return true; }
 
     float launch_speed_y = 16.0f;
 };

@@ -15,7 +15,7 @@ public:
     virtual void OnCollect() {}  // Called when player touches this actor
     virtual bool IsCollectible() const { return false; }
 
-    Vec3 position;
+    Vec3 position{};
     bool active = true;
     bool collected = false;
     float pickup_radius = 1.0f;

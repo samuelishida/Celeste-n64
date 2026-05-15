@@ -7,9 +7,4 @@ void SpringActor::Init() {
     pickup_radius = 1.5f;
 }
 
-void SpringActor::OnCollect() {
-    // Spring doesn't get "collected" in the traditional sense;
-    // it launches the player. The gameplay scene handles this.
-}
-
 }  // namespace madeline_cube

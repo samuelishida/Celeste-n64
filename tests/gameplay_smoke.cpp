@@ -1,8 +1,12 @@
 #include <cassert>
 
+#include "../src/user/gameplay/actor.hpp"
 #include "../src/user/gameplay/collectible.hpp"
 #include "../src/user/gameplay/player_controller.hpp"
+#include "../src/user/gameplay/refill_actor.hpp"
 #include "../src/user/gameplay/respawn_system.hpp"
+#include "../src/user/gameplay/spring_actor.hpp"
+#include "../src/user/gameplay/strawberry_actor.hpp"
 
 using namespace madeline_cube;
 
@@ -148,6 +152,42 @@ int main() {
         assert(player.position.y == checkpoint.y);
         assert(player.velocity.x == 0.0f);
         assert(player.air_dash_available);
+    }
+
+    // --- Actor default-initialization ---
+    {
+        Actor a;
+        assert(a.position.x == 0.0f);
+        assert(a.position.y == 0.0f);
+        assert(a.position.z == 0.0f);
+        assert(a.active == true);
+        assert(a.collected == false);
+    }
+
+    // --- SpringActor collectibility ---
+    {
+        SpringActor s;
+        s.Init();
+        assert(s.IsCollectible() == true);
+    }
+
+    // --- RefillActor uses collected instead of used ---
+    {
+        RefillActor r;
+        r.Init();
+        assert(r.collected == false);
+        r.OnCollect();
+        assert(r.collected == true);
+        assert(r.active == false);
+    }
+
+    // --- StrawberryActor removes redundant active=false in Update ---
+    {
+        StrawberryActor s;
+        s.Init();
+        s.OnCollect();
+        assert(s.collected == true);
+        assert(s.active == false);
     }
 
     return 0;
