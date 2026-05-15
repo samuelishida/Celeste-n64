@@ -1,0 +1,11 @@
+# Pyrite64 generated/build output
+build/
+engine/
+filesystem/
+*.z64
+Celeste64-og/*
+
+# Local/editor clutter
+.DS_Store
+Thumbs.db
+
