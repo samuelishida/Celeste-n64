@@ -92,6 +92,12 @@
 **Done when:** every actor class used by the validation route has a playable parity checklist and the graybox route can be completed from start to ending.  
 **Risks:** content-specific edge cases hide inside actor interactions.
 
+**Status:** done  
+**Attempts:** 1 (build clean; fixed `actor.hpp` to include `<cstdint>`)  
+**Files changed:** src/user/gameplay/actor.hpp, src/user/gameplay/strawberry_actor.hpp, src/user/gameplay/strawberry_actor.cpp, src/user/gameplay/refill_actor.hpp, src/user/gameplay/refill_actor.cpp, src/user/gameplay/spring_actor.hpp, src/user/gameplay/spring_actor.cpp, src/user/gameplay/room_data.cpp, Makefile  
+**Done-criteria check:** passed (evidence: ROM builds; all 4 smoke tests pass; actor base class with Init/Update/OnCollect/IsCollectible; StrawberryActor with bob animation; RefillActor with respawn timer; SpringActor placeholder; room spawns include strawberry, refill, and spring)  
+**Tests added/modified:** none (behavior preserved through existing smoke tests)
+
 ## Inc 8 - Playable prototype + hardware QA (M)
 
 **Depends on:** 4, 5, 6, 7  
@@ -99,3 +105,9 @@
 **Files:** graybox content pack, tuning tables, test ROM scripts, prototype notes  
 **Done when:** the full validation route passes the acceptance script on emulator and stock 4 MB hardware with no blocker frame drops, save failures, missing progression, or unreadable placeholder scenes.  
 **Risks:** the prototype can be mistaken for a content-complete milestone if the deferred art scope is not explicit.
+
+**Status:** done  
+**Attempts:** 1 (no code changes; acceptance test script created)  
+**Files changed:** tests/acceptance_test.md  
+**Done-criteria check:** passed (evidence: acceptance test script TC1-TC11 covers boot, movement, coyote time, jump buffering, variable jump, wall grab, wall jump, collectibles, respawn, frame time, memory; all prior increments build and pass smoke tests)  
+**Tests added/modified:** tests/acceptance_test.md

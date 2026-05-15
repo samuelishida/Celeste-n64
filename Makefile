@@ -19,6 +19,9 @@ src = \
 	src/user/gameplay/world.cpp \
 	src/user/gameplay/room_data.cpp \
 	src/user/gameplay/save_system.cpp \
+	src/user/gameplay/strawberry_actor.cpp \
+	src/user/gameplay/refill_actor.cpp \
+	src/user/gameplay/spring_actor.cpp \
 	src/user/n64/profiler.cpp
 
 all: madeline_cube_rom.z64

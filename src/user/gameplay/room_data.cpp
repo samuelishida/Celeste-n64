@@ -64,6 +64,18 @@ Room BuildStartRoom() {
         .placeholder_id = 2,  // pickup_strawberry
     };
 
+    // Refill gem
+    room.spawns[room.spawn_count++] = {
+        .position = {-6.0f, 2.0f, 0.0f},
+        .placeholder_id = 3,  // pickup_refill
+    };
+
+    // Spring board
+    room.spawns[room.spawn_count++] = {
+        .position = {0.0f, 0.5f, 6.0f},
+        .placeholder_id = 7,  // actor_spring
+    };
+
     return room;
 }
 
