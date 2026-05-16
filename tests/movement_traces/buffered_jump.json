@@ -1,0 +1,1 @@
+{"name":"buffered_jump","source":"og","dt":0.0166667,"tolerance":{"position":0.05,"velocity":0.05,"scalar":0.01},"frames":[{"input":{"jump_pressed":true},"position":[0,1.2,0],"velocity":[0,-3,0],"grounded":false,"tags":["buffered"]},{"input":{},"position":[0,1,0],"velocity":[0,9,0],"grounded":false,"tags":["consumed_once"]}]}
