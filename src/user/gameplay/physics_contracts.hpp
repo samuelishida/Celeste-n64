@@ -5,8 +5,8 @@
 #include <cstring>
 
 #include "math_types.hpp"
-#include "player_state.hpp"
-#include "world.hpp"
+#include "gameplay/player/player_state.hpp"
+#include "gameplay/world/world.hpp"
 
 namespace madeline_cube {
 

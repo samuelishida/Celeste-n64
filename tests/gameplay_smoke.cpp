@@ -1,14 +1,14 @@
 #include <cassert>
 #include <cmath>
 
-#include "../src/user/gameplay/actor.hpp"
-#include "../src/user/gameplay/camera_controller.hpp"
-#include "../src/user/gameplay/collectible.hpp"
-#include "../src/user/gameplay/player_controller.hpp"
-#include "../src/user/gameplay/refill_actor.hpp"
-#include "../src/user/gameplay/respawn_system.hpp"
-#include "../src/user/gameplay/spring_actor.hpp"
-#include "../src/user/gameplay/strawberry_actor.hpp"
+#include "../src/user/gameplay/actor/actor.hpp"
+#include "../src/user/gameplay/player/camera_controller.hpp"
+#include "../src/user/gameplay/world/collectible.hpp"
+#include "../src/user/gameplay/player/player_controller.hpp"
+#include "../src/user/gameplay/actor/refill_actor.hpp"
+#include "../src/user/gameplay/world/respawn_system.hpp"
+#include "../src/user/gameplay/actor/spring_actor.hpp"
+#include "../src/user/gameplay/actor/strawberry_actor.hpp"
 
 using namespace madeline_cube;
 

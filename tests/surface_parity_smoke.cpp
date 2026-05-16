@@ -2,10 +2,10 @@
 #include <cmath>
 
 #include "../src/user/gameplay/physics_contracts.hpp"
-#include "../src/user/gameplay/player_controller.hpp"
-#include "../src/user/gameplay/player_motor.hpp"
-#include "../src/user/gameplay/room_data.hpp"
-#include "../src/user/gameplay/world.hpp"
+#include "../src/user/gameplay/player/player_controller.hpp"
+#include "../src/user/gameplay/player/player_motor.hpp"
+#include "../src/user/gameplay/world/room_data.hpp"
+#include "../src/user/gameplay/world/world.hpp"
 
 using namespace madeline_cube;
 

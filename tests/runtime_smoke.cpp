@@ -2,9 +2,9 @@
 #include <cstdio>
 #include <cstring>
 
-#include "arena.hpp"
-#include "scene.hpp"
-#include "scene_manager.hpp"
+#include "../src/user/gameplay/arena.hpp"
+#include "../src/user/gameplay/scene/scene.hpp"
+#include "../src/user/gameplay/scene/scene_manager.hpp"
 
 using namespace madeline_cube;
 

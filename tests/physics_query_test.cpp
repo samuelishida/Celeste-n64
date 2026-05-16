@@ -1,8 +1,8 @@
 #include <cassert>
 #include <cmath>
 
-#include "room_data.hpp"
-#include "world.hpp"
+#include "../src/user/gameplay/world/room_data.hpp"
+#include "../src/user/gameplay/world/world.hpp"
 
 using namespace madeline_cube;
 

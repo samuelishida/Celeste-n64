@@ -7,23 +7,22 @@ N64_CXXFLAGS += -std=gnu++17 -Os -Isrc/user
 
 src = \
 	src/user/rom_main.cpp \
-	src/user/gameplay/player_controller.cpp \
-	src/user/gameplay/player_motor.cpp \
-	src/user/gameplay/camera_controller.cpp \
-	src/user/gameplay/collectible.cpp \
-	src/user/gameplay/respawn_system.cpp \
+	src/user/gameplay/player/player_controller.cpp \
+	src/user/gameplay/player/player_motor.cpp \
+	src/user/gameplay/player/camera_controller.cpp \
+	src/user/gameplay/world/collectible.cpp \
+	src/user/gameplay/world/respawn_system.cpp \
 	src/user/gameplay/placeholder_catalog.cpp \
 	src/user/gameplay/arena.cpp \
-	src/user/gameplay/scene_manager.cpp \
+	src/user/gameplay/scene/scene_manager.cpp \
 	src/user/gameplay/debug_hud.cpp \
-	src/user/gameplay/gameplay_scene.cpp \
-	src/user/gameplay/world.cpp \
-	src/user/gameplay/room_data.cpp \
+	src/user/gameplay/scene/gameplay_scene.cpp \
+	src/user/gameplay/world/world.cpp \
+	src/user/gameplay/world/room_data.cpp \
 	src/user/gameplay/save_system.cpp \
-	src/user/gameplay/strawberry_actor.cpp \
-	src/user/gameplay/refill_actor.cpp \
-	src/user/gameplay/spring_actor.cpp \
-	src/user/gameplay/bobbing_actor.cpp \
+	src/user/gameplay/actor/strawberry_actor.cpp \
+	src/user/gameplay/actor/refill_actor.cpp \
+	src/user/gameplay/actor/spring_actor.cpp \
 	src/user/gameplay/rom_telemetry.cpp \
 	src/user/n64/profiler.cpp
 

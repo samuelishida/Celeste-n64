@@ -9,3 +9,13 @@ Celeste64-og/*
 .DS_Store
 Thumbs.db
 
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Editor/tool temp files
+.xdp-*
+.raptor/
+!.raptor/MEMORY.md
+!.raptor/profile.md
+

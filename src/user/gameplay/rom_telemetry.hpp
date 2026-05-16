@@ -3,7 +3,7 @@
 #include <cstdint>
 
 #include "math_types.hpp"
-#include "player_state.hpp"
+#include "gameplay/player/player_state.hpp"
 
 namespace madeline_cube {
 

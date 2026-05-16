@@ -45,14 +45,18 @@ Important current behavior:
 ## Repository map
 
 ```txt
-assets/                 future source assets
-Celeste64-og/           original game reference checkout
-data/scenes/            future editor-authored scene data
-docs/                   design notes, budgets, milestone notes
-src/user/gameplay/      engine-light gameplay code
-src/user/rom_main.cpp   current hand-authored N64 demo entrypoint
-tests/                  host-side smoke tests
-Makefile                current libdragon/tiny3d ROM build
+assets/                     future source assets
+Celeste64-og/               original game reference checkout
+data/scenes/                future editor-authored scene data
+docs/                       design notes, budgets, milestone notes
+src/user/gameplay/          engine-light gameplay code (see subdirs below)
+src/user/gameplay/actor/    actor base + spring, refill, strawberry, bobbing
+src/user/gameplay/player/   player controller, motor, camera, state, config
+src/user/gameplay/world/    world, rooms, collectibles, respawn
+src/user/gameplay/scene/    scene graph, manager, gameplay scene
+src/user/rom_main.cpp       current hand-authored N64 demo entrypoint
+tests/                      host-side smoke tests
+Makefile                    current libdragon/tiny3d ROM build
 ```
 
 Key docs:
@@ -69,12 +73,11 @@ The current code intentionally separates gameplay rules from the engine-facing R
 
 Gameplay layer in `src/user/gameplay/`:
 
-- `player_controller.*` - run, jump, dash, gravity, velocity integration
-- `camera_controller.*` - follow camera smoothing
-- `collectible.*` - pickup radius check
-- `respawn_system.*` - kill-plane respawn
-- `movement_config.hpp` - tweakable constants
-- `player_state.hpp` and `math_types.hpp` - small shared data types
+- `actor/` - Actor base, BobbingActor, SpringActor, RefillActor, StrawberryActor
+- `player/` - player_controller, player_motor, camera_controller, player_state, movement_config
+- `world/` - world, room_data, collectible, respawn_system
+- `scene/` - scene, scene_manager, gameplay_scene
+- Root: math_types, physics_contracts, arena, save_system, placeholder_catalog, debug_hud, rom_telemetry
 
 ROM layer in `src/user/rom_main.cpp`:
 

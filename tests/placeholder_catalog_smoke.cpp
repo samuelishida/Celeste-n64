@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <string>
 
-#include "placeholder_catalog.hpp"
+#include "../src/user/gameplay/placeholder_catalog.hpp"
 
 using namespace madeline_cube;
 

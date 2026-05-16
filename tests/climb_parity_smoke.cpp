@@ -1,6 +1,6 @@
 #include <cassert>
 
-#include "../src/user/gameplay/player_controller.hpp"
+#include "../src/user/gameplay/player/player_controller.hpp"
 
 using namespace madeline_cube;
 
