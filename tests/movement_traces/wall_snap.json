@@ -1,0 +1,1 @@
+{"name":"wall_snap","source":"og","dt":0.0166667,"tolerance":{"position":0.05,"velocity":0.05,"scalar":0.01},"frames":[{"input":{"climb_held":true},"position":[0,2,0],"velocity":[0,4,0],"grounded":false,"tags":["approach"]},{"input":{"climb_held":true},"position":[0.5,2.2,0],"velocity":[0,0,0],"grounded":false,"tags":["snapped"]}]}

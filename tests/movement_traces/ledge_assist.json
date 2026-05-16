@@ -1,0 +1,1 @@
+{"name":"ledge_assist","source":"og","dt":0.0166667,"tolerance":{"position":0.05,"velocity":0.05,"scalar":0.01},"frames":[{"input":{"move":[1,0]},"position":[0,1,0],"velocity":[6.4,0,0],"grounded":true,"tags":["supported"]},{"input":{"move":[1,0]},"position":[0.1,1,0],"velocity":[6.4,0,0],"grounded":true,"tags":["edge_corrected"]}]}

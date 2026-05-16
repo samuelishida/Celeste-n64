@@ -1,0 +1,1 @@
+{"name":"moving_platform_jump","source":"og","dt":0.0166667,"tolerance":{"position":0.05,"velocity":0.05,"scalar":0.01},"frames":[{"input":{},"position":[0,3,0],"velocity":[0,0,0],"grounded":true,"tags":["rider"]},{"input":{"jump_pressed":true},"position":[0,3,0],"velocity":[2,12,0],"grounded":false,"tags":["carry_once"]}]}
