@@ -113,6 +113,17 @@ PlayerInput ReadPlayerInput() {
     };
 }
 
+CameraInput ReadCameraInput() {
+    joypad_buttons_t held = joypad_get_buttons_held(JOYPAD_PORT_1);
+
+    CameraInput input;
+    if (held.c_left) input.orbit -= 1.0f;
+    if (held.c_right) input.orbit += 1.0f;
+    if (held.c_down) input.zoom -= 1.0f;
+    if (held.c_up) input.zoom += 1.0f;
+    return input;
+}
+
 }  // namespace
 
 struct GameplayScene::Impl {
@@ -160,6 +171,7 @@ void GameplayScene::Init() {
     impl_->checkpoint = impl_->room.checkpoint;
     impl_->player.position = impl_->room.player_start;
     impl_->player.grounded = false;
+    impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
 
     // Setup room geometry render objects
     impl_->room_geometry_count = impl_->room.geometry_count;
@@ -195,12 +207,29 @@ void GameplayScene::Update(float delta_seconds) {
 
     joypad_poll();
     const PlayerInput input = ReadPlayerInput();
+    const CameraInput camera_input = ReadCameraInput();
+    const Vec3 camera_forward = {
+        impl_->camera.target.x - impl_->camera.position.x,
+        impl_->camera.target.y - impl_->camera.position.y,
+        impl_->camera.target.z - impl_->camera.position.z,
+    };
 
-    impl_->player_controller.Step(impl_->player, input, delta_seconds);
+    impl_->player_controller.Step(
+        impl_->player,
+        input,
+        camera_forward,
+        delta_seconds
+    );
     ResolveRoomCollision(impl_->player, impl_->room);
     impl_->respawn_system.Step(impl_->player, impl_->checkpoint);
     TryCollect(impl_->collectible, impl_->player.position);
-    impl_->camera_controller.Step(impl_->camera, impl_->player.position, delta_seconds);
+    impl_->camera_controller.Step(
+        impl_->camera,
+        impl_->player.position,
+        impl_->player.wall_grabbing,
+        camera_input,
+        delta_seconds
+    );
 
     SetTransform(impl_->player_render, impl_->player.position, {1.0f, 1.0f, 1.0f});
     SetTransform(

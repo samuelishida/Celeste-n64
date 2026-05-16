@@ -1,6 +1,6 @@
 # Movement Spec
 
-Initial placeholder values for Milestone 0. These are deliberately simple and should be tuned by feel once the ROM is running.
+Prototype values now track the Celeste64 controller shape more closely while staying in the smaller graybox unit scale.
 
 ## Coordinate assumptions
 
@@ -10,37 +10,30 @@ Initial placeholder values for Milestone 0. These are deliberately simple and sh
 
 ## Player
 
-| Value | Initial value |
+| Value | Current value |
 | --- | ---: |
-| run speed | `6.0` |
-| ground acceleration | `36.0` |
-| air acceleration | `18.0` |
-| ground friction | `28.0` |
-| gravity | `24.0` |
+| run speed | `6.4` |
+| acceleration | `50.0` |
+| friction | `80.0` |
+| gravity | `60.0` |
 | jump speed | `9.0` |
 | dash speed | `14.0` |
-| dash duration | `0.16s` |
+| dash duration | `0.20s` |
 | respawn fall height | `-20.0` |
 
 ## Inputs
 
-- analog stick controls desired `XZ` move direction
+- analog stick controls desired movement relative to the orbit camera
 - `A` requests jump
 - `B` requests dash
+- C-left / C-right orbit the camera
+- C-up / C-down adjust camera distance
 
-## Milestone 0 behavior
+## Current behavior
 
-- The player can jump only while grounded.
-- The player gets one dash while airborne.
-- Touching ground restores the air dash.
-- Dash uses the current move direction when present; otherwise it uses the last non-zero facing direction.
-- Falling below the kill plane teleports the player to the checkpoint and clears velocity.
-
-## Deferred to Milestone 1
-
-- coyote time
-- jump buffering
-- variable jump height
-- wall grab / wall climb
-- dash refill effects
-
+- analog magnitude scales grounded run speed
+- grounded movement rotates toward the desired direction and enters a skid on hard reversals
+- jump sustain uses the source game's hold window plus half gravity near the apex
+- coyote time, jump buffering, grounded dash, airborne dash lift, dash end slowdown, and simple wall grab are active
+- touching ground restores the dash after the dash-reset cooldown
+- falling below the kill plane teleports the player to the checkpoint and clears transient movement state

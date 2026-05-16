@@ -5,8 +5,32 @@
 namespace madeline_cube {
 namespace {
 
+constexpr float kEpsilon = 0.0001f;
+
+float Clamp(float value, float min_value, float max_value) {
+    if (value < min_value) return min_value;
+    if (value > max_value) return max_value;
+    return value;
+}
+
 float Length(float x, float y) {
     return std::sqrt((x * x) + (y * y));
+}
+
+float LengthXZ(const Vec3& value) {
+    return Length(value.x, value.z);
+}
+
+float DotXZ(const Vec3& a, const Vec3& b) {
+    return (a.x * b.x) + (a.z * b.z);
+}
+
+Vec3 NormalizeXZ(const Vec3& value, const Vec3& fallback = {0.0f, 0.0f, 1.0f}) {
+    const float len = LengthXZ(value);
+    if (len <= kEpsilon) {
+        return fallback;
+    }
+    return {value.x / len, 0.0f, value.z / len};
 }
 
 float MoveToward(float current, float target, float max_delta) {
@@ -18,143 +42,401 @@ float MoveToward(float current, float target, float max_delta) {
     return next < target ? target : next;
 }
 
-Vec3 NormalizedMoveDirection(const Vec2& move, const Vec3& fallback) {
-    const float len = Length(move.x, move.y);
-    if (len <= 0.0001f) {
-        return fallback;
+Vec3 MoveTowardXZ(const Vec3& current, const Vec3& target, float max_delta) {
+    const float dx = target.x - current.x;
+    const float dz = target.z - current.z;
+    const float distance = Length(dx, dz);
+    if (distance <= max_delta || distance <= kEpsilon) {
+        return {target.x, current.y, target.z};
     }
-    return {move.x / len, 0.0f, move.y / len};
+    const float scale = max_delta / distance;
+    return {current.x + (dx * scale), current.y, current.z + (dz * scale)};
+}
+
+float AngleXZ(const Vec3& value) {
+    return std::atan2(value.z, value.x);
+}
+
+Vec3 DirectionFromAngle(float angle) {
+    return {std::cos(angle), 0.0f, std::sin(angle)};
+}
+
+float ApproachAngle(float from, float to, float max_delta) {
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTau = kPi * 2.0f;
+    float diff = std::fmod(to - from + kPi, kTau);
+    if (diff < 0.0f) diff += kTau;
+    diff -= kPi;
+    if (diff > max_delta) diff = max_delta;
+    if (diff < -max_delta) diff = -max_delta;
+    return from + diff;
+}
+
+Vec3 RotateTowardXZ(const Vec3& from, const Vec3& to, float max_delta) {
+    return DirectionFromAngle(ApproachAngle(AngleXZ(from), AngleXZ(to), max_delta));
+}
+
+float AnalogMagnitude(float raw_length) {
+    const float t = Clamp((raw_length - 0.4f) / (0.92f - 0.4f), 0.0f, 1.0f);
+    return 0.3f + ((1.0f - 0.3f) * t);
+}
+
+Vec3 RelativeMoveInput(const Vec2& move, const Vec3& camera_forward, const Vec3& fallback_facing) {
+    const float input_length = Length(move.x, move.y);
+    if (input_length <= kEpsilon) {
+        return {};
+    }
+
+    const Vec3 forward = NormalizeXZ(camera_forward, fallback_facing);
+    const Vec3 right = {forward.z, 0.0f, -forward.x};
+    const float normalized_x = move.x / input_length;
+    const float normalized_y = move.y / input_length;
+    return NormalizeXZ({
+        (right.x * normalized_x) + (forward.x * normalized_y),
+        0.0f,
+        (right.z * normalized_x) + (forward.z * normalized_y),
+    }, fallback_facing);
+}
+
+void SetDashVelocity(PlayerState& state, const MovementConfig& config) {
+    if (state.dashed_on_ground) {
+        state.velocity.x = state.target_facing.x * config.dash_speed;
+        state.velocity.y = 0.0f;
+        state.velocity.z = state.target_facing.z * config.dash_speed;
+        return;
+    }
+
+    const float horizontal = 1.0f;
+    const float vertical = 0.4f;
+    const float norm = std::sqrt((horizontal * horizontal) + (vertical * vertical));
+    state.velocity.x = state.target_facing.x * (horizontal / norm) * config.dash_speed;
+    state.velocity.y = (vertical / norm) * config.dash_speed;
+    state.velocity.z = state.target_facing.z * (horizontal / norm) * config.dash_speed;
+}
+
+void StartJump(PlayerState& state, const MovementConfig& config, const Vec3& move_input) {
+    state.velocity.y = config.jump_speed;
+    state.hold_jump_speed = config.jump_speed;
+    state.hold_jump_time_remaining = config.jump_hold_time;
+    state.coyote_time_remaining = 0.0f;
+    state.auto_jump = false;
+    state.grounded = false;
+
+    if (LengthXZ(move_input) > kEpsilon) {
+        state.target_facing = NormalizeXZ(move_input, state.target_facing);
+        state.last_facing = state.target_facing;
+        state.velocity.x += state.target_facing.x * config.jump_xy_boost;
+        state.velocity.z += state.target_facing.z * config.jump_xy_boost;
+    }
+}
+
+void StartDashJump(PlayerState& state, const MovementConfig& config, const Vec3& move_input) {
+    state.velocity.y = config.dash_jump_speed;
+    state.hold_jump_speed = config.dash_jump_hold_speed;
+    state.hold_jump_time_remaining = config.dash_jump_hold_time;
+    state.coyote_time_remaining = 0.0f;
+    state.auto_jump = false;
+    state.air_dash_available = true;
+
+    if (LengthXZ(move_input) > kEpsilon) {
+        state.target_facing = NormalizeXZ(move_input, state.target_facing);
+        state.last_facing = state.target_facing;
+        state.velocity.x += state.target_facing.x * config.dash_jump_xy_boost;
+        state.velocity.z += state.target_facing.z * config.dash_jump_xy_boost;
+    }
+}
+
+void StartSkidJump(PlayerState& state, const MovementConfig& config) {
+    state.velocity.x = state.target_facing.x * config.skid_jump_xy_speed;
+    state.velocity.y = config.skid_jump_speed;
+    state.velocity.z = state.target_facing.z * config.skid_jump_xy_speed;
+    state.hold_jump_speed = config.skid_jump_speed;
+    state.hold_jump_time_remaining = config.skid_jump_hold_time;
+    state.coyote_time_remaining = 0.0f;
+}
+
+void ApplyJumpAndGravity(
+    PlayerState& state,
+    const PlayerInput& input,
+    const Vec3& move_input,
+    const MovementConfig& config,
+    float delta_seconds
+) {
+    const bool can_jump = state.grounded || state.coyote_time_remaining > 0.0f;
+    if (state.jump_buffer_remaining > 0.0f && can_jump) {
+        state.jump_buffer_remaining = 0.0f;
+        StartJump(state, config, move_input);
+        return;
+    }
+
+    if (state.hold_jump_time_remaining > 0.0f && (state.auto_jump || input.jump_held)) {
+        if (state.velocity.y < state.hold_jump_speed) {
+            state.velocity.y = state.hold_jump_speed;
+        }
+        return;
+    }
+
+    float gravity_multiplier = 1.0f;
+    if ((input.jump_held || state.auto_jump) && std::fabs(state.velocity.y) < config.half_gravity_threshold) {
+        gravity_multiplier = 0.5f;
+    } else {
+        state.auto_jump = false;
+    }
+
+    state.velocity.y = MoveToward(
+        state.velocity.y,
+        config.max_fall_speed,
+        config.gravity * gravity_multiplier * delta_seconds
+    );
+    state.hold_jump_time_remaining = 0.0f;
 }
 
 }  // namespace
 
 PlayerController::PlayerController(MovementConfig config) : config_(config) {}
 
-void PlayerController::Step(PlayerState& state, const PlayerInput& input, float delta_seconds) const {
+void PlayerController::Step(
+    PlayerState& state,
+    const PlayerInput& input,
+    const Vec3& camera_forward,
+    float delta_seconds
+) const {
     if (delta_seconds <= 0.0f) {
         return;
     }
 
-    const float input_length = Length(input.move.x, input.move.y);
-    const bool has_move_input = input_length > 0.0001f;
+    const float raw_input_length = Clamp(Length(input.move.x, input.move.y), 0.0f, 1.0f);
+    const Vec3 move_input = RelativeMoveInput(input.move, camera_forward, state.target_facing);
+    const bool has_move_input = raw_input_length > kEpsilon;
     if (has_move_input) {
-        state.last_facing = NormalizedMoveDirection(input.move, state.last_facing);
+        state.last_facing = move_input;
     }
 
-    // --- Grounding and coyote time ---
     if (state.grounded) {
-        state.air_dash_available = true;
         state.coyote_time_remaining = config_.coyote_time;
         state.wall_grab_time_remaining = config_.wall_grab_time;
-    } else {
-        state.coyote_time_remaining -= delta_seconds;
-        if (state.coyote_time_remaining < 0.0f) {
-            state.coyote_time_remaining = 0.0f;
+        if (state.dash_reset_cooldown_remaining <= 0.0f) {
+            state.air_dash_available = true;
         }
+    } else {
+        state.coyote_time_remaining = MoveToward(state.coyote_time_remaining, 0.0f, delta_seconds);
     }
 
-    // --- Jump buffering ---
     if (input.jump_pressed) {
         state.jump_buffer_remaining = config_.jump_buffer_time;
     } else {
-        state.jump_buffer_remaining -= delta_seconds;
-        if (state.jump_buffer_remaining < 0.0f) {
-            state.jump_buffer_remaining = 0.0f;
-        }
+        state.jump_buffer_remaining = MoveToward(state.jump_buffer_remaining, 0.0f, delta_seconds);
     }
 
-    // --- Wall grab logic ---
-    bool can_wall_grab = !state.grounded && state.velocity.y < 0.0f &&
-                         (state.wall_left || state.wall_right) &&
-                         state.wall_grab_time_remaining > 0.0f &&
-                         state.wall_jump_cooldown_remaining <= 0.0f;
+    state.dash_cooldown_remaining = MoveToward(state.dash_cooldown_remaining, 0.0f, delta_seconds);
+    state.dash_reset_cooldown_remaining = MoveToward(state.dash_reset_cooldown_remaining, 0.0f, delta_seconds);
+    state.no_dash_jump_remaining = MoveToward(state.no_dash_jump_remaining, 0.0f, delta_seconds);
+    state.no_skid_jump_remaining = MoveToward(state.no_skid_jump_remaining, 0.0f, delta_seconds);
+    state.hold_jump_time_remaining = MoveToward(state.hold_jump_time_remaining, 0.0f, delta_seconds);
+    state.wall_jump_cooldown_remaining = MoveToward(state.wall_jump_cooldown_remaining, 0.0f, delta_seconds);
 
+    // The prototype does not yet have the source game's separate climb button,
+    // so keep the existing grab behavior while movement parity catches up.
+    const bool can_wall_grab = !state.grounded && state.velocity.y < 0.0f &&
+                               (state.wall_left || state.wall_right) &&
+                               state.wall_grab_time_remaining > 0.0f &&
+                               state.wall_jump_cooldown_remaining <= 0.0f;
     if (can_wall_grab && input.jump_held) {
         state.wall_grabbing = true;
-    } else if (!input.jump_held) {
+    } else if (!input.jump_held || state.grounded) {
         state.wall_grabbing = false;
     }
 
     if (state.wall_grabbing) {
-        state.wall_grab_time_remaining -= delta_seconds;
+        state.wall_grab_time_remaining = MoveToward(state.wall_grab_time_remaining, 0.0f, delta_seconds);
         state.velocity.y = -config_.wall_slide_speed;
         state.velocity.x = 0.0f;
         state.velocity.z = 0.0f;
-    }
 
-    // --- Jump execution ---
-    bool can_jump = state.grounded || state.coyote_time_remaining > 0.0f || state.wall_grabbing;
-    if (state.jump_buffer_remaining > 0.0f && can_jump) {
-        state.jump_buffer_remaining = 0.0f;
-        state.coyote_time_remaining = 0.0f;
-
-        if (state.wall_grabbing) {
-            // Wall jump
+        if (input.jump_pressed) {
             state.wall_grabbing = false;
             state.wall_jump_cooldown_remaining = config_.wall_jump_cooldown;
             const float dir_x = state.wall_left ? 1.0f : -1.0f;
+            state.target_facing = {dir_x, 0.0f, 0.0f};
+            state.last_facing = state.target_facing;
             state.velocity.x = dir_x * config_.wall_jump_speed_x;
             state.velocity.y = config_.wall_jump_speed_y;
             state.velocity.z = 0.0f;
-            state.last_facing = {dir_x, 0.0f, 0.0f};
-        } else {
-            // Normal jump
-            state.velocity.y = config_.jump_speed;
-            state.grounded = false;
-            state.jump_held_active = true;
+            state.hold_jump_speed = config_.jump_speed;
+            state.hold_jump_time_remaining = config_.jump_hold_time;
         }
     }
 
-    // --- Variable jump height ---
-    if (state.jump_held_active && !input.jump_held && state.velocity.y > 0.0f) {
-        state.velocity.y *= config_.variable_jump_cut;
-        state.jump_held_active = false;
-    }
-    if (state.grounded) {
-        state.jump_held_active = false;
-    }
-
-    // --- Dash ---
-    if (input.dash_pressed && !state.grounded && state.air_dash_available && !state.wall_grabbing) {
-        const Vec3 dash_direction = NormalizedMoveDirection(input.move, state.last_facing);
-        state.velocity.x = dash_direction.x * config_.dash_speed;
-        state.velocity.y = 0.0f;
-        state.velocity.z = dash_direction.z * config_.dash_speed;
-        state.dash_time_remaining = config_.dash_duration;
+    if (!state.wall_grabbing &&
+        input.dash_pressed &&
+        state.air_dash_available &&
+        state.dash_cooldown_remaining <= 0.0f) {
+        if (has_move_input) {
+            state.target_facing = move_input;
+        }
+        state.target_facing = NormalizeXZ(state.target_facing, state.last_facing);
+        state.last_facing = state.target_facing;
+        state.dashed_on_ground = state.grounded;
+        state.movement_state = PlayerMovementState::Dashing;
         state.air_dash_available = false;
+        state.auto_jump = true;
+        state.dash_time_remaining = config_.dash_duration;
+        state.dash_reset_cooldown_remaining = config_.dash_reset_cooldown;
+        state.no_dash_jump_remaining = 0.10f;
         state.wall_grabbing = false;
+        SetDashVelocity(state, config_);
     }
 
-    // --- Cooldowns ---
-    if (state.dash_time_remaining > 0.0f) {
-        state.dash_time_remaining -= delta_seconds;
-    }
-    if (state.wall_jump_cooldown_remaining > 0.0f) {
-        state.wall_jump_cooldown_remaining -= delta_seconds;
+    if (!state.wall_grabbing) {
+        if (state.movement_state == PlayerMovementState::Dashing) {
+            state.dash_time_remaining -= delta_seconds;
+            if (state.dash_time_remaining <= 0.0f) {
+                if (!state.grounded) {
+                    state.velocity.x *= config_.dash_end_speed_multiplier;
+                    state.velocity.y *= config_.dash_end_speed_multiplier;
+                    state.velocity.z *= config_.dash_end_speed_multiplier;
+                }
+                state.movement_state = PlayerMovementState::Normal;
+                state.dash_cooldown_remaining = config_.dash_cooldown;
+            } else {
+                if (has_move_input && DotXZ(move_input, state.target_facing) >= -0.2f) {
+                    state.target_facing = RotateTowardXZ(
+                        state.target_facing,
+                        move_input,
+                        config_.dash_rotate_speed * delta_seconds
+                    );
+                    state.last_facing = state.target_facing;
+                    SetDashVelocity(state, config_);
+                }
+
+                if (state.dashed_on_ground &&
+                    state.coyote_time_remaining > 0.0f &&
+                    state.no_dash_jump_remaining <= 0.0f &&
+                    input.jump_pressed) {
+                    state.movement_state = PlayerMovementState::Normal;
+                    StartDashJump(state, config_, move_input);
+                }
+            }
+        }
+
+        if (state.movement_state == PlayerMovementState::Skidding) {
+            const bool cancel_skid = !state.grounded ||
+                                     !has_move_input ||
+                                     DotXZ(move_input, state.target_facing) < 0.7f;
+            if (cancel_skid) {
+                state.movement_state = PlayerMovementState::Normal;
+            } else if (state.no_skid_jump_remaining <= 0.0f && input.jump_pressed) {
+                state.movement_state = PlayerMovementState::Normal;
+                StartSkidJump(state, config_);
+            } else {
+                const Vec3 horizontal_velocity = {state.velocity.x, 0.0f, state.velocity.z};
+                const Vec3 velocity_direction = NormalizeXZ(horizontal_velocity, state.target_facing);
+                const bool dot_matches = DotXZ(velocity_direction, state.target_facing) >= 0.7f;
+                const float acceleration = dot_matches
+                    ? config_.skidding_acceleration
+                    : config_.skidding_start_acceleration;
+                const Vec3 target_velocity = {
+                    move_input.x * config_.run_speed,
+                    state.velocity.y,
+                    move_input.z * config_.run_speed,
+                };
+                state.velocity = MoveTowardXZ(state.velocity, target_velocity, acceleration * delta_seconds);
+                if (dot_matches && LengthXZ(state.velocity) >= config_.end_skid_speed) {
+                    state.movement_state = PlayerMovementState::Normal;
+                }
+            }
+        }
+
+        if (state.movement_state == PlayerMovementState::Normal) {
+            const Vec3 horizontal_velocity = {state.velocity.x, 0.0f, state.velocity.z};
+            const float horizontal_speed = LengthXZ(horizontal_velocity);
+
+            if (!has_move_input) {
+                float friction = config_.friction;
+                if (!state.grounded) {
+                    friction *= config_.air_friction_mult;
+                }
+                const Vec3 zero = {0.0f, state.velocity.y, 0.0f};
+                state.velocity = MoveTowardXZ(state.velocity, zero, friction * delta_seconds);
+            } else if (state.grounded) {
+                float max_speed = config_.run_speed * AnalogMagnitude(raw_input_length);
+                const float true_max_speed = config_.run_speed;
+                float acceleration = config_.acceleration;
+
+                if (horizontal_speed >= true_max_speed &&
+                    DotXZ(move_input, NormalizeXZ(horizontal_velocity, state.target_facing)) >= 0.7f) {
+                    acceleration = config_.past_max_deceleration;
+                }
+
+                if (horizontal_speed >= config_.rotate_threshold) {
+                    const Vec3 velocity_direction = NormalizeXZ(horizontal_velocity, state.target_facing);
+                    if (DotXZ(move_input, velocity_direction) <= config_.skid_dot_threshold) {
+                        state.facing = move_input;
+                        state.target_facing = move_input;
+                        state.last_facing = move_input;
+                        state.movement_state = PlayerMovementState::Skidding;
+                        state.no_skid_jump_remaining = 0.10f;
+                    } else {
+                        const float rotate_speed = horizontal_speed > true_max_speed
+                            ? config_.rotate_speed_above_max
+                            : config_.rotate_speed;
+                        state.target_facing = RotateTowardXZ(
+                            state.target_facing,
+                            move_input,
+                            rotate_speed * delta_seconds
+                        );
+                        const float next_speed = MoveToward(horizontal_speed, max_speed, acceleration * delta_seconds);
+                        state.velocity.x = state.target_facing.x * next_speed;
+                        state.velocity.z = state.target_facing.z * next_speed;
+                    }
+                } else {
+                    const Vec3 target_velocity = {
+                        move_input.x * max_speed,
+                        state.velocity.y,
+                        move_input.z * max_speed,
+                    };
+                    state.velocity = MoveTowardXZ(state.velocity, target_velocity, acceleration * delta_seconds);
+                    state.target_facing = move_input;
+                }
+            } else {
+                float acceleration = config_.acceleration;
+                if (horizontal_speed >= config_.run_speed) {
+                    const float align = DotXZ(
+                        move_input,
+                        NormalizeXZ(horizontal_velocity, state.target_facing)
+                    );
+                    if (align >= 0.7f) {
+                        const float facing_dot = DotXZ(move_input, state.target_facing);
+                        const float t = Clamp((facing_dot + 1.0f) * 0.5f, 0.0f, 1.0f);
+                        acceleration *= config_.air_accel_mult_max +
+                                        ((config_.air_accel_mult_min - config_.air_accel_mult_max) * t);
+                    }
+                } else {
+                    const float facing_dot = DotXZ(move_input, state.target_facing);
+                    const float t = Clamp((facing_dot + 1.0f) * 0.5f, 0.0f, 1.0f);
+                    acceleration *= config_.air_accel_mult_min +
+                                    ((config_.air_accel_mult_max - config_.air_accel_mult_min) * t);
+                }
+
+                const Vec3 target_velocity = {
+                    move_input.x * config_.run_speed,
+                    state.velocity.y,
+                    move_input.z * config_.run_speed,
+                };
+                state.velocity = MoveTowardXZ(state.velocity, target_velocity, acceleration * delta_seconds);
+            }
+
+            ApplyJumpAndGravity(state, input, move_input, config_, delta_seconds);
+        }
     }
 
-    // --- Horizontal movement (only when not dashing or wall-grabbing) ---
-    if (state.dash_time_remaining <= 0.0f && !state.wall_grabbing) {
-        const float target_x = has_move_input ? state.last_facing.x * config_.run_speed : 0.0f;
-        const float target_z = has_move_input ? state.last_facing.z * config_.run_speed : 0.0f;
-        const float horizontal_accel = state.grounded
-            ? (has_move_input ? config_.ground_acceleration : config_.ground_friction)
-            : config_.air_acceleration;
-
-        state.velocity.x = MoveToward(state.velocity.x, target_x, horizontal_accel * delta_seconds);
-        state.velocity.z = MoveToward(state.velocity.z, target_z, horizontal_accel * delta_seconds);
+    if (!state.wall_grabbing && state.movement_state != PlayerMovementState::Dashing) {
+        state.facing = RotateTowardXZ(state.facing, state.target_facing, 12.566371f * delta_seconds);
     }
 
-    // --- Gravity ---
-    if (!state.grounded && !state.wall_grabbing) {
-        state.velocity.y -= config_.gravity * delta_seconds;
-    }
-
-    // --- Integration ---
     state.position.x += state.velocity.x * delta_seconds;
     state.position.y += state.velocity.y * delta_seconds;
     state.position.z += state.velocity.z * delta_seconds;
 }
 
 }  // namespace madeline_cube
-

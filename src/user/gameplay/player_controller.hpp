@@ -9,11 +9,15 @@ class PlayerController {
 public:
     explicit PlayerController(MovementConfig config = {});
 
-    void Step(PlayerState& state, const PlayerInput& input, float delta_seconds) const;
+    void Step(
+        PlayerState& state,
+        const PlayerInput& input,
+        const Vec3& camera_forward,
+        float delta_seconds
+    ) const;
 
 private:
     MovementConfig config_;
 };
 
 }  // namespace madeline_cube
-
