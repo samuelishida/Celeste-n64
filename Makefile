@@ -8,6 +8,7 @@ N64_CXXFLAGS += -std=gnu++17 -Os -Isrc/user
 src = \
 	src/user/rom_main.cpp \
 	src/user/gameplay/player_controller.cpp \
+	src/user/gameplay/player_motor.cpp \
 	src/user/gameplay/camera_controller.cpp \
 	src/user/gameplay/collectible.cpp \
 	src/user/gameplay/respawn_system.cpp \
@@ -23,6 +24,7 @@ src = \
 	src/user/gameplay/refill_actor.cpp \
 	src/user/gameplay/spring_actor.cpp \
 	src/user/gameplay/bobbing_actor.cpp \
+	src/user/gameplay/rom_telemetry.cpp \
 	src/user/n64/profiler.cpp
 
 all: madeline_cube_rom.z64
@@ -37,4 +39,3 @@ clean:
 -include $(wildcard $(BUILD_DIR)/*.d)
 
 .PHONY: all clean
-

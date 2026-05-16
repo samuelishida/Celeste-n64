@@ -1,0 +1,59 @@
+{
+  "family": "camera",
+  "frames": [
+    {
+      "camera_origin_z": 0.0,
+      "frame": 0,
+      "player_z": 0.0,
+      "state": "Normal"
+    },
+    {
+      "camera_origin_z": 0.0,
+      "frame": 1,
+      "player_z": 4.0,
+      "state": "Normal"
+    },
+    {
+      "camera_origin_z": 0.0,
+      "frame": 2,
+      "player_z": 8.0,
+      "state": "Normal"
+    },
+    {
+      "camera_origin_z": 0.108749,
+      "frame": 3,
+      "player_z": 9.0,
+      "state": "Normal"
+    },
+    {
+      "camera_origin_z": 0.966915,
+      "frame": 4,
+      "player_z": 16.0,
+      "state": "Normal"
+    },
+    {
+      "camera_origin_z": 0.966915,
+      "frame": 5,
+      "player_z": 7.0,
+      "state": "Normal"
+    },
+    {
+      "camera_origin_z": 0.644266,
+      "frame": 6,
+      "player_z": -2.0,
+      "state": "Normal"
+    }
+  ],
+  "reference": {
+    "capture_mode": "source-derived model; C# game not executed",
+    "coordinate_system": "Celeste64 source units; +Z is up",
+    "fixed_dt": 0.016666666666666666,
+    "source_file": "Celeste64-og/Source/Actors/Player.cs",
+    "symbols": [
+      "cameraOriginPos",
+      "ZPad"
+    ]
+  },
+  "scenario_id": "camera_vertical_dead_zone",
+  "schema_version": 1
+}

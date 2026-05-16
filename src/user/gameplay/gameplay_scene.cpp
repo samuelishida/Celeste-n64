@@ -10,9 +10,12 @@
 #include "camera_controller.hpp"
 #include "collectible.hpp"
 #include "debug_hud.hpp"
+#include "physics_contracts.hpp"
 #include "player_controller.hpp"
+#include "player_motor.hpp"
 #include "respawn_system.hpp"
 #include "room_data.hpp"
+#include "rom_telemetry.hpp"
 #include "world.hpp"
 
 namespace madeline_cube {
@@ -110,6 +113,7 @@ PlayerInput ReadPlayerInput() {
         .jump_pressed = pressed.a != 0,
         .jump_held = held.a != 0,
         .dash_pressed = pressed.b != 0,
+        .climb_held = held.z != 0,
     };
 }
 
@@ -142,6 +146,7 @@ struct GameplayScene::Impl {
 
     MovementConfig movement_config;
     PlayerController player_controller{movement_config};
+    PlayerMotor player_motor;
     RespawnSystem respawn_system{movement_config};
     CameraController camera_controller;
 
@@ -152,6 +157,7 @@ struct GameplayScene::Impl {
     CameraState camera;
 
     DebugHUD debug_hud;
+    RomTelemetry telemetry;
 };
 
 void GameplayScene::Init() {
@@ -172,6 +178,7 @@ void GameplayScene::Init() {
     impl_->player.position = impl_->room.player_start;
     impl_->player.grounded = false;
     impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
+    impl_->telemetry.RecordSpawn();
 
     // Setup room geometry render objects
     impl_->room_geometry_count = impl_->room.geometry_count;
@@ -214,22 +221,58 @@ void GameplayScene::Update(float delta_seconds) {
         impl_->camera.target.z - impl_->camera.position.z,
     };
 
-    impl_->player_controller.Step(
+    const PlayerController::StepContext player_step = impl_->player_controller.TimerInputPhase(
         impl_->player,
         input,
         camera_forward,
         delta_seconds
     );
-    ResolveRoomCollision(impl_->player, impl_->room);
-    impl_->respawn_system.Step(impl_->player, impl_->checkpoint);
-    TryCollect(impl_->collectible, impl_->player.position);
+    impl_->player_controller.StatePhase(impl_->player, input, player_step, delta_seconds);
+
+    MotorInput motor_input;
+    motor_input.requested_velocity = impl_->player.velocity;
+    motor_input.wants_ground_snap = impl_->player.contact.was_grounded &&
+                                    impl_->player.movement_state != PlayerMovementState::Dashing;
+    motor_input.wants_coyote_refresh = true;
+    motor_input.wants_dash_refill = impl_->player.dash_reset_cooldown_remaining <= 0.0f;
+    AdvanceMovingSurfaces(impl_->room, delta_seconds);
+    const bool was_grounded_pre_motor = impl_->player.contact.was_grounded;
+    const MotorResult motor_result =
+        impl_->player_motor.Step(impl_->player, impl_->room, motor_input, delta_seconds);
+    impl_->player_controller.LateContactPhase(impl_->player);
+
+    // Respawn delegates contact resolution to the motor so the motor remains
+    // the single owner of grounded/contact fields. Runs after the motor so
+    // kill-plane checks see the post-move position.
+    const bool did_respawn = impl_->respawn_system.Step(
+        impl_->player, impl_->checkpoint, impl_->room, impl_->player_motor);
+
+    impl_->telemetry.BeginFrame();
+    impl_->telemetry.RecordPlayerState(impl_->player);
+    // Inc 7: surface/carry sample counters fed from motor result + room state.
+    impl_->telemetry.RecordSurfaceSample(
+        static_cast<uint32_t>(impl_->room.moving_surface_count),
+        motor_result.grounded,
+        motor_result.ground_normal.y,
+        motor_result.grounded && was_grounded_pre_motor &&
+            impl_->player.contact.ground_snap_cooldown_remaining <= 0.0f);
+    if (did_respawn) {
+        impl_->telemetry.RecordRespawn();
+    }
+
+    // Camera reads the post-motor (and post-respawn) player state.
     impl_->camera_controller.Step(
         impl_->camera,
         impl_->player.position,
         impl_->player.wall_grabbing,
         camera_input,
-        delta_seconds
+        delta_seconds,
+        &impl_->room
     );
+
+    // Actors run after the player + camera so they can read the resolved
+    // player state for pickup checks and other gameplay reactions.
+    TryCollect(impl_->collectible, impl_->player.position);
 
     SetTransform(impl_->player_render, impl_->player.position, {1.0f, 1.0f, 1.0f});
     SetTransform(
@@ -242,6 +285,11 @@ void GameplayScene::Update(float delta_seconds) {
     counters.active_scene_id = 0;
     counters.actor_count = 1 + impl_->room_geometry_count + (impl_->collectible.collected ? 0 : 1);
     impl_->debug_hud.Update(counters);
+
+    // Print telemetry every 60 frames (~1 second) to avoid serial spam
+    if (impl_->telemetry.frame_index % 60 == 0) {
+        impl_->telemetry.PrintLine();
+    }
 }
 
 void GameplayScene::Render() {

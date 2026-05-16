@@ -46,6 +46,11 @@
 2. Press A
 3. **Expected:** Player launches away from wall
 
+### TC7b: Dedicated Climb
+1. Jump toward a wall
+2. Hold Z while touching the wall
+3. **Expected:** Player enters climb state instead of needing A-held wall slide
+
 ### TC8: Collectibles
 1. Move player to red cube (strawberry)
 2. **Expected:** Cube disappears

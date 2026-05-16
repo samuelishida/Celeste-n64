@@ -46,6 +46,9 @@ struct MovementConfig {
     float wall_jump_speed_x = 8.0f;      // horizontal speed off a wall
     float wall_jump_speed_y = 9.0f;      // vertical speed off a wall
     float wall_jump_cooldown = 0.15f;    // seconds before another wall interaction
+    float climb_speed = 4.0f;
+    float climb_hop_up_speed = 8.0f;
+    float climb_hop_forward_speed = 4.0f;
 };
 
 }  // namespace madeline_cube

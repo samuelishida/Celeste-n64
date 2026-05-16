@@ -1,0 +1,146 @@
+{
+  "family": "wall",
+  "frames": [
+    {
+      "frame": 0,
+      "grounded": false,
+      "position": [
+        1.386667,
+        0.0,
+        1.5
+      ],
+      "state": "Normal",
+      "velocity": [
+        83.2,
+        0.0,
+        90.0
+      ],
+      "wall_contact": true
+    },
+    {
+      "frame": 1,
+      "grounded": false,
+      "position": [
+        2.773333,
+        0.0,
+        3.0
+      ],
+      "state": "Normal",
+      "velocity": [
+        83.2,
+        0.0,
+        90.0
+      ],
+      "wall_contact": false
+    },
+    {
+      "frame": 2,
+      "grounded": false,
+      "position": [
+        4.16,
+        0.0,
+        4.5
+      ],
+      "state": "Normal",
+      "velocity": [
+        83.2,
+        0.0,
+        90.0
+      ],
+      "wall_contact": false
+    },
+    {
+      "frame": 3,
+      "grounded": false,
+      "position": [
+        5.546667,
+        0.0,
+        6.0
+      ],
+      "state": "Normal",
+      "velocity": [
+        83.2,
+        0.0,
+        90.0
+      ],
+      "wall_contact": false
+    },
+    {
+      "frame": 4,
+      "grounded": false,
+      "position": [
+        6.933333,
+        0.0,
+        7.5
+      ],
+      "state": "Normal",
+      "velocity": [
+        83.2,
+        0.0,
+        90.0
+      ],
+      "wall_contact": false
+    },
+    {
+      "frame": 5,
+      "grounded": false,
+      "position": [
+        8.32,
+        0.0,
+        9.0
+      ],
+      "state": "Normal",
+      "velocity": [
+        83.2,
+        0.0,
+        90.0
+      ],
+      "wall_contact": false
+    },
+    {
+      "frame": 6,
+      "grounded": false,
+      "position": [
+        9.706667,
+        0.0,
+        10.333333
+      ],
+      "state": "Normal",
+      "velocity": [
+        83.2,
+        0.0,
+        80.0
+      ],
+      "wall_contact": false
+    },
+    {
+      "frame": 7,
+      "grounded": false,
+      "position": [
+        11.093333,
+        0.0,
+        11.5
+      ],
+      "state": "Normal",
+      "velocity": [
+        83.2,
+        0.0,
+        70.0
+      ],
+      "wall_contact": false
+    }
+  ],
+  "reference": {
+    "capture_mode": "source-derived model; C# game not executed",
+    "coordinate_system": "Celeste64 source units; +Z is up",
+    "fixed_dt": 0.016666666666666666,
+    "source_file": "Celeste64-og/Source/Actors/Player.cs",
+    "symbols": [
+      "WallJumpXYSpeed",
+      "JumpSpeed",
+      "JumpHoldTime"
+    ]
+  },
+  "scenario_id": "wall_jump",
+  "schema_version": 1
+}

@@ -11,12 +11,36 @@ struct PlayerInput {
     bool jump_pressed = false;
     bool jump_held = false;
     bool dash_pressed = false;
+    bool climb_held = false;
 };
 
 enum class PlayerMovementState : uint8_t {
     Normal = 0,
     Dashing,
     Skidding,
+    Climbing,
+};
+
+struct ContactState {
+    Vec3 ground_normal = {0.0f, 1.0f, 0.0f};
+    float coyote_height = 0.0f;
+    Vec3 previous_velocity;
+    float ground_snap_cooldown_remaining = 0.0f;
+    bool was_grounded = false;
+};
+
+struct PlatformCarryState {
+    Vec3 stored_velocity;
+    float time_remaining = 0.0f;
+};
+
+struct ClimbState {
+    Vec3 wall_normal;
+    int16_t wall_surface_id = -1;
+    Vec3 corner_from;
+    Vec3 corner_to;
+    float corner_progress = 0.0f;
+    float cooldown_remaining = 0.0f;
 };
 
 struct PlayerState {
@@ -52,6 +76,13 @@ struct PlayerState {
 
     // Skid state.
     float no_skid_jump_remaining = 0.0f;
+    float no_move_time_remaining = 0.0f;
+
+    // Source bookkeeping retained explicitly for the later motor migration.
+    int8_t dash_count = 1;
+    ContactState contact;
+    PlatformCarryState platform_carry;
+    ClimbState climb;
 
     // Collision probes (set by caller before Step)
     bool wall_left = false;

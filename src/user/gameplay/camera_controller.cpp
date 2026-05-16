@@ -1,6 +1,8 @@
 #include "camera_controller.hpp"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 
 namespace madeline_cube {
 namespace {
@@ -29,12 +31,46 @@ float LengthXZ(const Vec3& value) {
     return std::sqrt((value.x * value.x) + (value.z * value.z));
 }
 
+uint32_t FloatBits(float value) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+bool IsFiniteBits(float value) {
+    return (FloatBits(value) & 0x7F800000u) != 0x7F800000u;
+}
+
+float FlushSubnormalBits(float value) {
+    const uint32_t bits = FloatBits(value);
+    const uint32_t exponent = bits & 0x7F800000u;
+    const uint32_t mantissa = bits & 0x007FFFFFu;
+    return exponent == 0u && mantissa != 0u ? 0.0f : value;
+}
+
+float SanitizeCoordinateBits(float value) {
+    return IsFiniteBits(value) ? FlushSubnormalBits(value) : 0.0f;
+}
+
 Vec3 NormalizeXZ(const Vec3& value) {
-    const float len = LengthXZ(value);
-    if (len <= 0.0001f) {
+    if (!IsFiniteBits(value.x) || !IsFiniteBits(value.z)) {
         return {0.0f, 0.0f, 1.0f};
     }
-    return {value.x / len, 0.0f, value.z / len};
+
+    const Vec3 sanitized = {
+        FlushSubnormalBits(value.x),
+        0.0f,
+        FlushSubnormalBits(value.z),
+    };
+    const float len = LengthXZ(sanitized);
+    if (!std::isfinite(len) || len <= 0.0001f) {
+        return {0.0f, 0.0f, 1.0f};
+    }
+    return {
+        FlushSubnormalBits(sanitized.x / len),
+        0.0f,
+        FlushSubnormalBits(sanitized.z / len),
+    };
 }
 
 Vec3 RotateAroundUp(const Vec3& direction, float radians) {
@@ -79,7 +115,11 @@ Vec3 DesiredPosition(const CameraState& camera, const CameraConfig& config) {
 CameraController::CameraController(CameraConfig config) : config_(config) {}
 
 void CameraController::Reset(CameraState& camera, const Vec3& player_position) const {
-    camera.origin = player_position;
+    camera.origin = {
+        SanitizeCoordinateBits(player_position.x),
+        SanitizeCoordinateBits(player_position.y),
+        SanitizeCoordinateBits(player_position.z),
+    };
     camera.target_forward = NormalizeXZ(camera.target_forward);
     camera.target = DesiredLookAt(camera, config_);
     camera.position = DesiredPosition(camera, config_);
@@ -91,7 +131,8 @@ void CameraController::Step(
     const Vec3& player_position,
     bool climbing,
     const CameraInput& input,
-    float delta_seconds
+    float delta_seconds,
+    const Room* room
 ) const {
     if (!camera.initialized) {
         Reset(camera, player_position);
@@ -142,7 +183,33 @@ void CameraController::Step(
     }
 
     const Vec3 desired_look_at = DesiredLookAt(camera, config_);
-    const Vec3 desired_position = DesiredPosition(camera, config_);
+    Vec3 desired_position = DesiredPosition(camera, config_);
+    if (room != nullptr) {
+        constexpr float kCameraSkin = 0.05f;
+        constexpr float kCeilingProbe = 0.5f;
+        const Vec3 diff = {
+            desired_position.x - desired_look_at.x,
+            desired_position.y - desired_look_at.y,
+            desired_position.z - desired_look_at.z,
+        };
+        const float distance = std::sqrt((diff.x * diff.x) + (diff.y * diff.y) + (diff.z * diff.z));
+        if (distance > 0.0001f && std::isfinite(distance)) {
+            const Vec3 direction = {diff.x / distance, diff.y / distance, diff.z / distance};
+            const GroundHit obstruction = RaycastRoomSource(
+                *room, desired_look_at, direction, distance, BackfacePolicy::Ignore);
+            if (obstruction.hit) {
+                desired_position = {
+                    obstruction.point.x + (obstruction.normal.x * kCameraSkin),
+                    obstruction.point.y + (obstruction.normal.y * kCameraSkin),
+                    obstruction.point.z + (obstruction.normal.z * kCameraSkin),
+                };
+            }
+        }
+        const CeilingHit ceiling = QueryCeilingSource(*room, desired_position, kCeilingProbe);
+        if (ceiling.hit) {
+            desired_position.y = ceiling.point.y - kCeilingProbe;
+        }
+    }
     const float alpha = FollowAlpha(config_.camera_follow_decay, delta_seconds);
 
     camera.position.x += (desired_position.x - camera.position.x) * alpha;

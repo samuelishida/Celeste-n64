@@ -1,0 +1,243 @@
+{
+  "family": "dash",
+  "frames": [
+    {
+      "frame": 0,
+      "grounded": false,
+      "position": [
+        2.166446,
+        0.0,
+        0.866578
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 1,
+      "grounded": false,
+      "position": [
+        4.332891,
+        0.0,
+        1.733156
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 2,
+      "grounded": false,
+      "position": [
+        6.499337,
+        0.0,
+        2.599735
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 3,
+      "grounded": false,
+      "position": [
+        8.665782,
+        0.0,
+        3.466313
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 4,
+      "grounded": false,
+      "position": [
+        10.832228,
+        0.0,
+        4.332891
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 5,
+      "grounded": false,
+      "position": [
+        12.998674,
+        0.0,
+        5.199469
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 6,
+      "grounded": false,
+      "position": [
+        15.165119,
+        0.0,
+        6.066048
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 7,
+      "grounded": false,
+      "position": [
+        17.331565,
+        0.0,
+        6.932626
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 8,
+      "grounded": false,
+      "position": [
+        19.498011,
+        0.0,
+        7.799204
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 9,
+      "grounded": false,
+      "position": [
+        21.664456,
+        0.0,
+        8.665782
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 10,
+      "grounded": false,
+      "position": [
+        23.830902,
+        0.0,
+        9.532361
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 11,
+      "grounded": false,
+      "position": [
+        25.997347,
+        0.0,
+        10.398939
+      ],
+      "state": "Dashing",
+      "velocity": [
+        129.986737,
+        0.0,
+        51.994695
+      ]
+    },
+    {
+      "frame": 12,
+      "grounded": false,
+      "position": [
+        27.622182,
+        0.0,
+        11.048873
+      ],
+      "state": "Normal",
+      "velocity": [
+        97.490053,
+        0.0,
+        38.996021
+      ]
+    },
+    {
+      "frame": 13,
+      "grounded": false,
+      "position": [
+        29.247016,
+        0.0,
+        11.698806
+      ],
+      "state": "Normal",
+      "velocity": [
+        97.490053,
+        0.0,
+        38.996021
+      ]
+    },
+    {
+      "frame": 14,
+      "grounded": false,
+      "position": [
+        30.87185,
+        0.0,
+        12.34874
+      ],
+      "state": "Normal",
+      "velocity": [
+        97.490053,
+        0.0,
+        38.996021
+      ]
+    }
+  ],
+  "reference": {
+    "capture_mode": "source-derived model; C# game not executed",
+    "coordinate_system": "Celeste64 source units; +Z is up",
+    "fixed_dt": 0.016666666666666666,
+    "source_file": "Celeste64-og/Source/Actors/Player.cs",
+    "symbols": [
+      "DashSpeed",
+      "DashTime",
+      "DashEndSpeedMult"
+    ]
+  },
+  "scenario_id": "dash_air",
+  "schema_version": 1
+}

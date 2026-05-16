@@ -1,0 +1,144 @@
+{
+  "family": "climb",
+  "frames": [
+    {
+      "climb_held": true,
+      "frame": 0,
+      "grounded": false,
+      "position": [
+        0.0,
+        0.0,
+        0.666667
+      ],
+      "state": "Climbing",
+      "velocity": [
+        0.0,
+        0.0,
+        40.0
+      ]
+    },
+    {
+      "climb_held": true,
+      "frame": 1,
+      "grounded": false,
+      "position": [
+        0.0,
+        0.0,
+        1.333333
+      ],
+      "state": "Climbing",
+      "velocity": [
+        0.0,
+        0.0,
+        40.0
+      ]
+    },
+    {
+      "climb_held": true,
+      "frame": 2,
+      "grounded": false,
+      "position": [
+        0.0,
+        0.0,
+        2.0
+      ],
+      "state": "Climbing",
+      "velocity": [
+        0.0,
+        0.0,
+        40.0
+      ]
+    },
+    {
+      "climb_held": true,
+      "frame": 3,
+      "grounded": false,
+      "position": [
+        0.0,
+        0.0,
+        2.666667
+      ],
+      "state": "Climbing",
+      "velocity": [
+        0.0,
+        0.0,
+        40.0
+      ]
+    },
+    {
+      "climb_held": true,
+      "frame": 4,
+      "grounded": false,
+      "position": [
+        0.0,
+        0.0,
+        3.333333
+      ],
+      "state": "Climbing",
+      "velocity": [
+        0.0,
+        0.0,
+        40.0
+      ]
+    },
+    {
+      "climb_held": true,
+      "frame": 5,
+      "grounded": false,
+      "position": [
+        0.0,
+        0.0,
+        4.0
+      ],
+      "state": "Climbing",
+      "velocity": [
+        0.0,
+        0.0,
+        40.0
+      ]
+    },
+    {
+      "climb_held": true,
+      "frame": 6,
+      "grounded": false,
+      "position": [
+        0.0,
+        0.0,
+        4.666667
+      ],
+      "state": "Climbing",
+      "velocity": [
+        0.0,
+        0.0,
+        40.0
+      ]
+    },
+    {
+      "climb_held": true,
+      "frame": 7,
+      "grounded": false,
+      "position": [
+        0.0,
+        0.0,
+        5.333333
+      ],
+      "state": "Climbing",
+      "velocity": [
+        0.0,
+        0.0,
+        40.0
+      ]
+    }
+  ],
+  "reference": {
+    "capture_mode": "source-derived model; C# game not executed",
+    "coordinate_system": "Celeste64 source units; +Z is up",
+    "fixed_dt": 0.016666666666666666,
+    "source_file": "Celeste64-og/Source/Actors/Player.cs",
+    "symbols": [
+      "ClimbSpeed"
+    ]
+  },
+  "scenario_id": "climb_up",
+  "schema_version": 1
+}

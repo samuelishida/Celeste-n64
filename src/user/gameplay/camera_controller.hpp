@@ -1,6 +1,7 @@
 #pragma once
 
 #include "math_types.hpp"
+#include "world.hpp"
 
 namespace madeline_cube {
 
@@ -38,7 +39,8 @@ public:
         const Vec3& player_position,
         bool climbing,
         const CameraInput& input,
-        float delta_seconds
+        float delta_seconds,
+        const Room* room = nullptr
     ) const;
 
 private:

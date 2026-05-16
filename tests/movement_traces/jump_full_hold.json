@@ -1,0 +1,178 @@
+{
+  "family": "jump",
+  "frames": [
+    {
+      "frame": 0,
+      "grounded": false,
+      "jump_held": true,
+      "position": [
+        0.0,
+        0.0,
+        1.5
+      ],
+      "state": "Normal",
+      "velocity": [
+        0.0,
+        0.0,
+        90.0
+      ]
+    },
+    {
+      "frame": 1,
+      "grounded": false,
+      "jump_held": true,
+      "position": [
+        0.0,
+        0.0,
+        3.0
+      ],
+      "state": "Normal",
+      "velocity": [
+        0.0,
+        0.0,
+        90.0
+      ]
+    },
+    {
+      "frame": 2,
+      "grounded": false,
+      "jump_held": true,
+      "position": [
+        0.0,
+        0.0,
+        4.5
+      ],
+      "state": "Normal",
+      "velocity": [
+        0.0,
+        0.0,
+        90.0
+      ]
+    },
+    {
+      "frame": 3,
+      "grounded": false,
+      "jump_held": true,
+      "position": [
+        0.0,
+        0.0,
+        6.0
+      ],
+      "state": "Normal",
+      "velocity": [
+        0.0,
+        0.0,
+        90.0
+      ]
+    },
+    {
+      "frame": 4,
+      "grounded": false,
+      "jump_held": true,
+      "position": [
+        0.0,
+        0.0,
+        7.5
+      ],
+      "state": "Normal",
+      "velocity": [
+        0.0,
+        0.0,
+        90.0
+      ]
+    },
+    {
+      "frame": 5,
+      "grounded": false,
+      "jump_held": true,
+      "position": [
+        0.0,
+        0.0,
+        9.0
+      ],
+      "state": "Normal",
+      "velocity": [
+        0.0,
+        0.0,
+        90.0
+      ]
+    },
+    {
+      "frame": 6,
+      "grounded": false,
+      "jump_held": false,
+      "position": [
+        0.0,
+        0.0,
+        10.333333
+      ],
+      "state": "Normal",
+      "velocity": [
+        0.0,
+        0.0,
+        80.0
+      ]
+    },
+    {
+      "frame": 7,
+      "grounded": false,
+      "jump_held": false,
+      "position": [
+        0.0,
+        0.0,
+        11.5
+      ],
+      "state": "Normal",
+      "velocity": [
+        0.0,
+        0.0,
+        70.0
+      ]
+    },
+    {
+      "frame": 8,
+      "grounded": false,
+      "jump_held": false,
+      "position": [
+        0.0,
+        0.0,
+        12.5
+      ],
+      "state": "Normal",
+      "velocity": [
+        0.0,
+        0.0,
+        60.0
+      ]
+    },
+    {
+      "frame": 9,
+      "grounded": false,
+      "jump_held": false,
+      "position": [
+        0.0,
+        0.0,
+        13.333333
+      ],
+      "state": "Normal",
+      "velocity": [
+        0.0,
+        0.0,
+        50.0
+      ]
+    }
+  ],
+  "reference": {
+    "capture_mode": "source-derived model; C# game not executed",
+    "coordinate_system": "Celeste64 source units; +Z is up",
+    "fixed_dt": 0.016666666666666666,
+    "source_file": "Celeste64-og/Source/Actors/Player.cs",
+    "symbols": [
+      "JumpSpeed",
+      "JumpHoldTime",
+      "Gravity"
+    ]
+  },
+  "scenario_id": "jump_full_hold",
+  "schema_version": 1
+}

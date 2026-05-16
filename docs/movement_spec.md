@@ -34,6 +34,8 @@ Prototype values now track the Celeste64 controller shape more closely while sta
 - analog magnitude scales grounded run speed
 - grounded movement rotates toward the desired direction and enters a skid on hard reversals
 - jump sustain uses the source game's hold window plus half gravity near the apex
-- coyote time, jump buffering, grounded dash, airborne dash lift, dash end slowdown, and simple wall grab are active
+- coyote time, jump buffering, grounded dash, airborne dash lift, dash end slowdown, independent wall jump probes, and a first dedicated climb state are active
+- movement now resolves through a sweep/popout-style motor with late contact refresh instead of direct integration plus one coarse room pass
+- floor/ceiling/wall ray queries are shared by the player motor and camera obstruction handling
 - touching ground restores the dash after the dash-reset cooldown
 - falling below the kill plane teleports the player to the checkpoint and clears transient movement state

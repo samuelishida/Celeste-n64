@@ -1,0 +1,198 @@
+{
+  "family": "skid",
+  "frames": [
+    {
+      "frame": 0,
+      "grounded": true,
+      "position": [
+        0.983333,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        59.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 1,
+      "grounded": true,
+      "position": [
+        1.883333,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        54.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 2,
+      "grounded": true,
+      "position": [
+        2.7,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        49.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 3,
+      "grounded": true,
+      "position": [
+        3.433333,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        44.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 4,
+      "grounded": true,
+      "position": [
+        4.083333,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        39.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 5,
+      "grounded": true,
+      "position": [
+        4.65,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        34.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 6,
+      "grounded": true,
+      "position": [
+        5.133333,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        29.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 7,
+      "grounded": true,
+      "position": [
+        5.533333,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        24.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 8,
+      "grounded": true,
+      "position": [
+        5.85,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        19.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 9,
+      "grounded": true,
+      "position": [
+        6.083333,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        14.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 10,
+      "grounded": true,
+      "position": [
+        6.233333,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        9.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "frame": 11,
+      "grounded": true,
+      "position": [
+        6.3,
+        0.0,
+        0.0
+      ],
+      "state": "Skidding",
+      "velocity": [
+        4.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "reference": {
+    "capture_mode": "source-derived model; C# game not executed",
+    "coordinate_system": "Celeste64 source units; +Z is up",
+    "fixed_dt": 0.016666666666666666,
+    "source_file": "Celeste64-og/Source/Actors/Player.cs",
+    "symbols": [
+      "MaxSpeed",
+      "SkiddingStartAccel",
+      "SkiddingAccel"
+    ]
+  },
+  "scenario_id": "skid_reverse",
+  "schema_version": 1
+}

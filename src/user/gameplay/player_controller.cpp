@@ -1,6 +1,8 @@
 #include "player_controller.hpp"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 
 namespace madeline_cube {
 namespace {
@@ -25,12 +27,42 @@ float DotXZ(const Vec3& a, const Vec3& b) {
     return (a.x * b.x) + (a.z * b.z);
 }
 
+uint32_t FloatBits(float value) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+bool IsFiniteBits(float value) {
+    return (FloatBits(value) & 0x7F800000u) != 0x7F800000u;
+}
+
+float FlushSubnormalBits(float value) {
+    const uint32_t bits = FloatBits(value);
+    const uint32_t exponent = bits & 0x7F800000u;
+    const uint32_t mantissa = bits & 0x007FFFFFu;
+    return exponent == 0u && mantissa != 0u ? 0.0f : value;
+}
+
 Vec3 NormalizeXZ(const Vec3& value, const Vec3& fallback = {0.0f, 0.0f, 1.0f}) {
-    const float len = LengthXZ(value);
-    if (len <= kEpsilon) {
+    if (!IsFiniteBits(value.x) || !IsFiniteBits(value.z)) {
         return fallback;
     }
-    return {value.x / len, 0.0f, value.z / len};
+
+    const Vec3 sanitized = {
+        FlushSubnormalBits(value.x),
+        0.0f,
+        FlushSubnormalBits(value.z),
+    };
+    const float len = LengthXZ(sanitized);
+    if (!std::isfinite(len) || len <= kEpsilon) {
+        return fallback;
+    }
+    return {
+        FlushSubnormalBits(sanitized.x / len),
+        0.0f,
+        FlushSubnormalBits(sanitized.z / len),
+    };
 }
 
 float MoveToward(float current, float target, float max_delta) {
@@ -121,6 +153,12 @@ void StartJump(PlayerState& state, const MovementConfig& config, const Vec3& mov
     state.coyote_time_remaining = 0.0f;
     state.auto_jump = false;
     state.grounded = false;
+    if (state.platform_carry.time_remaining > 0.0f) {
+        state.velocity.x += state.platform_carry.stored_velocity.x;
+        state.velocity.y += state.platform_carry.stored_velocity.y;
+        state.velocity.z += state.platform_carry.stored_velocity.z;
+        state.platform_carry = {};
+    }
 
     if (LengthXZ(move_input) > kEpsilon) {
         state.target_facing = NormalizeXZ(move_input, state.target_facing);
@@ -205,11 +243,28 @@ void PlayerController::Step(
         return;
     }
 
-    const float raw_input_length = Clamp(Length(input.move.x, input.move.y), 0.0f, 1.0f);
-    const Vec3 move_input = RelativeMoveInput(input.move, camera_forward, state.target_facing);
-    const bool has_move_input = raw_input_length > kEpsilon;
-    if (has_move_input) {
-        state.last_facing = move_input;
+    const StepContext context = TimerInputPhase(state, input, camera_forward, delta_seconds);
+    StatePhase(state, input, context, delta_seconds);
+    LateContactPhase(state);
+}
+
+PlayerController::StepContext PlayerController::TimerInputPhase(
+    PlayerState& state,
+    const PlayerInput& input,
+    const Vec3& camera_forward,
+    float delta_seconds
+) const {
+    StepContext context;
+    if (delta_seconds <= 0.0f) {
+        return context;
+    }
+
+    context.raw_input_length = Clamp(Length(input.move.x, input.move.y), 0.0f, 1.0f);
+    context.move_input = RelativeMoveInput(input.move, camera_forward, state.target_facing);
+    context.has_move_input = context.raw_input_length > kEpsilon;
+    state.contact.previous_velocity = state.velocity;
+    if (context.has_move_input) {
+        state.last_facing = context.move_input;
     }
 
     if (state.grounded) {
@@ -234,9 +289,61 @@ void PlayerController::Step(
     state.no_skid_jump_remaining = MoveToward(state.no_skid_jump_remaining, 0.0f, delta_seconds);
     state.hold_jump_time_remaining = MoveToward(state.hold_jump_time_remaining, 0.0f, delta_seconds);
     state.wall_jump_cooldown_remaining = MoveToward(state.wall_jump_cooldown_remaining, 0.0f, delta_seconds);
+    state.climb.cooldown_remaining = MoveToward(state.climb.cooldown_remaining, 0.0f, delta_seconds);
+    state.no_move_time_remaining = MoveToward(state.no_move_time_remaining, 0.0f, delta_seconds);
+    state.contact.ground_snap_cooldown_remaining = MoveToward(
+        state.contact.ground_snap_cooldown_remaining,
+        0.0f,
+        delta_seconds
+    );
+    state.platform_carry.time_remaining = MoveToward(state.platform_carry.time_remaining, 0.0f, delta_seconds);
 
-    // The prototype does not yet have the source game's separate climb button,
-    // so keep the existing grab behavior while movement parity catches up.
+    return context;
+}
+
+void PlayerController::StatePhase(
+    PlayerState& state,
+    const PlayerInput& input,
+    const StepContext& context,
+    float delta_seconds
+) const {
+    const Vec3& move_input = context.move_input;
+    const bool has_move_input = context.has_move_input;
+    const float raw_input_length = context.raw_input_length;
+    if (delta_seconds <= 0.0f) {
+        return;
+    }
+
+    if (state.movement_state == PlayerMovementState::Climbing) {
+        if (!input.climb_held) {
+            state.movement_state = PlayerMovementState::Normal;
+        } else if (input.jump_pressed) {
+            state.movement_state = PlayerMovementState::Normal;
+            state.target_facing = {-state.target_facing.x, 0.0f, -state.target_facing.z};
+            state.velocity.x = state.target_facing.x * config_.wall_jump_speed_x;
+            state.velocity.y = config_.wall_jump_speed_y;
+            state.velocity.z = state.target_facing.z * config_.wall_jump_speed_x;
+            state.hold_jump_speed = config_.jump_speed;
+            state.hold_jump_time_remaining = config_.jump_hold_time;
+        } else {
+            state.velocity.x = 0.0f;
+            state.velocity.z = 0.0f;
+            state.velocity.y = -input.move.y * config_.climb_speed;
+        }
+        return;
+    }
+
+    if (input.climb_held &&
+        state.climb.cooldown_remaining <= 0.0f &&
+        !state.grounded &&
+        (state.wall_left || state.wall_right)) {
+        state.movement_state = PlayerMovementState::Climbing;
+        state.velocity = {};
+        return;
+    }
+
+    // Wall slide remains as a forgiving fallback when the dedicated climb input
+    // is not held.
     const bool can_wall_grab = !state.grounded && state.velocity.y < 0.0f &&
                                (state.wall_left || state.wall_right) &&
                                state.wall_grab_time_remaining > 0.0f &&
@@ -265,6 +372,21 @@ void PlayerController::Step(
             state.hold_jump_speed = config_.jump_speed;
             state.hold_jump_time_remaining = config_.jump_hold_time;
         }
+    }
+
+    if (!state.wall_grabbing &&
+        !state.grounded &&
+        input.jump_pressed &&
+        (state.wall_left || state.wall_right)) {
+        const float dir_x = state.wall_left ? 1.0f : -1.0f;
+        state.target_facing = {dir_x, 0.0f, 0.0f};
+        state.last_facing = state.target_facing;
+        state.velocity.x = dir_x * config_.wall_jump_speed_x;
+        state.velocity.y = config_.wall_jump_speed_y;
+        state.velocity.z = 0.0f;
+        state.hold_jump_speed = config_.jump_speed;
+        state.hold_jump_time_remaining = config_.jump_hold_time;
+        state.wall_jump_cooldown_remaining = config_.wall_jump_cooldown;
     }
 
     if (!state.wall_grabbing &&
@@ -433,10 +555,10 @@ void PlayerController::Step(
     if (!state.wall_grabbing && state.movement_state != PlayerMovementState::Dashing) {
         state.facing = RotateTowardXZ(state.facing, state.target_facing, 12.566371f * delta_seconds);
     }
+}
 
-    state.position.x += state.velocity.x * delta_seconds;
-    state.position.y += state.velocity.y * delta_seconds;
-    state.position.z += state.velocity.z * delta_seconds;
+void PlayerController::LateContactPhase(PlayerState& state) const {
+    state.contact.was_grounded = state.grounded;
 }
 
 }  // namespace madeline_cube
