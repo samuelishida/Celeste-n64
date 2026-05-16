@@ -2,8 +2,8 @@
 #include <cmath>
 #include <limits>
 
-#include "../src/user/gameplay/player_motor.hpp"
-#include "../src/user/gameplay/room_data.hpp"
+#include "../src/user/gameplay/player/player_motor.hpp"
+#include "../src/user/gameplay/world/room_data.hpp"
 
 using namespace madeline_cube;
 

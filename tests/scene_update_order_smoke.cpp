@@ -15,15 +15,15 @@
 #include <cassert>
 #include <cmath>
 
-#include "../src/user/gameplay/camera_controller.hpp"
-#include "../src/user/gameplay/movement_config.hpp"
+#include "../src/user/gameplay/player/camera_controller.hpp"
+#include "../src/user/gameplay/player/movement_config.hpp"
 #include "../src/user/gameplay/physics_contracts.hpp"
-#include "../src/user/gameplay/player_controller.hpp"
-#include "../src/user/gameplay/player_motor.hpp"
-#include "../src/user/gameplay/player_state.hpp"
-#include "../src/user/gameplay/respawn_system.hpp"
-#include "../src/user/gameplay/room_data.hpp"
-#include "../src/user/gameplay/world.hpp"
+#include "../src/user/gameplay/player/player_controller.hpp"
+#include "../src/user/gameplay/player/player_motor.hpp"
+#include "../src/user/gameplay/player/player_state.hpp"
+#include "../src/user/gameplay/world/respawn_system.hpp"
+#include "../src/user/gameplay/world/room_data.hpp"
+#include "../src/user/gameplay/world/world.hpp"
 
 using namespace madeline_cube;
 

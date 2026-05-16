@@ -1,8 +1,8 @@
 #include <cassert>
 #include <cmath>
 
-#include "../src/user/gameplay/camera_controller.hpp"
-#include "../src/user/gameplay/world.hpp"
+#include "../src/user/gameplay/player/camera_controller.hpp"
+#include "../src/user/gameplay/world/world.hpp"
 
 using namespace madeline_cube;
 

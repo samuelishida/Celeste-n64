@@ -2,7 +2,7 @@
 #include <cmath>
 #include <limits>
 
-#include "../src/user/gameplay/camera_controller.hpp"
+#include "../src/user/gameplay/player/camera_controller.hpp"
 
 using namespace madeline_cube;
 

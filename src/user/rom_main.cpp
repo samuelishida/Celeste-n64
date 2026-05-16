@@ -4,8 +4,8 @@
 #include <libdragon.h>
 #include <t3d/t3d.h>
 
-#include "gameplay/gameplay_scene.hpp"
-#include "gameplay/scene_manager.hpp"
+#include "gameplay/scene/gameplay_scene.hpp"
+#include "gameplay/scene/scene_manager.hpp"
 #include "n64/profiler.hpp"
 
 namespace {
