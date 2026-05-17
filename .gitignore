@@ -4,6 +4,7 @@ engine/
 filesystem/
 *.z64
 Celeste64-og/*
+tiny3d-main/*
 
 # Local/editor clutter
 .DS_Store
