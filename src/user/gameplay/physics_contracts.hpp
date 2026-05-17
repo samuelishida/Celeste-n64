@@ -71,6 +71,11 @@ struct MotorResult {
     Vec3 wall_normal = {0.0f, 0.0f, 0.0f};
 };
 
+struct CameraBasis {
+    Vec3 forward_xz = {0.0f, 0.0f, 1.0f};
+    Vec3 right_xz = {1.0f, 0.0f, 0.0f};
+};
+
 // ---------------------------------------------------------------------------
 // Fixture helpers
 //

@@ -79,21 +79,29 @@ int main() {
     {
         RomTelemetry t;
         PlayerState state;
-        state.movement_state = PlayerMovementState::Normal;
+        state.locomotion_state = LocomotionState::Idle;
         t.RecordPlayerState(state);
         assert(t.last_movement_state == 0);
 
-        state.movement_state = PlayerMovementState::Dashing;
+        state.locomotion_state = LocomotionState::Run;
         t.RecordPlayerState(state);
         assert(t.last_movement_state == 1);
 
-        state.movement_state = PlayerMovementState::Skidding;
+        state.locomotion_state = LocomotionState::Jump;
         t.RecordPlayerState(state);
         assert(t.last_movement_state == 2);
 
-        state.movement_state = PlayerMovementState::Climbing;
+        state.locomotion_state = LocomotionState::Dash;
         t.RecordPlayerState(state);
         assert(t.last_movement_state == 3);
+
+        state.locomotion_state = LocomotionState::Climb;
+        t.RecordPlayerState(state);
+        assert(t.last_movement_state == 4);
+
+        state.locomotion_state = LocomotionState::Fall;
+        t.RecordPlayerState(state);
+        assert(t.last_movement_state == 5);
     }
 
     // --- Landing event detection ---

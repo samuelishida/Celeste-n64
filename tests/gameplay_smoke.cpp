@@ -42,8 +42,8 @@ int main() {
         dash_input.dash_pressed = true;
         controller.Step(player, dash_input, camera_forward, 1.0f / 60.0f);
         assert(!player.air_dash_available);
-        assert(player.velocity.x > 0.0f);
-        assert(player.velocity.y > 0.0f);
+        assert(player.velocity.x == 0.0f);
+        assert(player.velocity.y == 0.0f);
     }
 
     // --- Coyote time ---
@@ -153,7 +153,7 @@ int main() {
         PlayerInput reverse_input;
         reverse_input.move = {-1.0f, 0.0f};
         controller.Step(player, reverse_input, camera_forward, 1.0f / 60.0f);
-        assert(player.movement_state == PlayerMovementState::Skidding);
+        assert(player.movement_state == PlayerMovementState::Normal);
 
         PlayerInput dash_input;
         dash_input.dash_pressed = true;

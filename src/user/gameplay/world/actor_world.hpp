@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include "gameplay/actor/actor.hpp"
+#include "gameplay/world/world.hpp"
 namespace madeline_cube {
 using ActorId = uint16_t;
 template<class T> struct ActorView {
@@ -33,9 +34,10 @@ public:
     }
 private:
     static AABB WorldBounds(const Actor& actor) {
+        const float r = actor.pickup_radius;
         return {
-            {actor.position.x + actor.local_bounds.min.x, actor.position.y + actor.local_bounds.min.y, actor.position.z + actor.local_bounds.min.z},
-            {actor.position.x + actor.local_bounds.max.x, actor.position.y + actor.local_bounds.max.y, actor.position.z + actor.local_bounds.max.z},
+            {actor.position.x - r, actor.position.y - r, actor.position.z - r},
+            {actor.position.x + r, actor.position.y + r, actor.position.z + r},
         };
     }
     Actor* actors_[kMaxActors] = {};

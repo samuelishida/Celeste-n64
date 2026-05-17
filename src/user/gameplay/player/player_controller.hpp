@@ -38,6 +38,7 @@ public:
 
 private:
     MovementConfig config_;
+    MovementProfile profile_;
 };
 
 }  // namespace madeline_cube

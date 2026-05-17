@@ -19,3 +19,6 @@ __pycache__/
 !.raptor/MEMORY.md
 !.raptor/profile.md
 
+# Baked level files
+filesystem/lvl/
+

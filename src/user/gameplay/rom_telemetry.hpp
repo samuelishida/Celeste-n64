@@ -27,8 +27,8 @@ struct RomTelemetry {
     uint32_t invalid_position_count = 0;
     uint32_t invalid_velocity_count = 0;
 
-    // Motor phase state (encoded as small integers for compact logging)
-    // 0=Normal, 1=Dashing, 2=Skidding, 3=Climbing
+    // Spec-first locomotion state (encoded as small integers for compact logging)
+    // 0=Idle, 1=Run, 2=Jump, 3=Dash, 4=Climb, 5=Fall
     uint8_t last_movement_state = 0;
 
     // Named events (incremented once per occurrence)

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "families": {
+    "motor-regression": ["slope", "ledge", "platform", "camera"],
+    "feel-spec": [
+      "run_stop_turn",
+      "jump_short_vs_full",
+      "coyote_window",
+      "jump_buffer",
+      "air_steering",
+      "dash_hitstop",
+      "long_jump",
+      "climb_drain",
+      "climb_exhaustion"
+    ]
+  },
+  "scenarios": {
+    "run_stop_turn": {"max_stop_frames": 3, "max_turn_frames": 3},
+    "jump_short_vs_full": {"short_peak_lt_full_peak": true},
+    "coyote_window": {"accept_seconds": 0.15},
+    "jump_buffer": {"accept_seconds": 0.10, "consume_once": true},
+    "air_steering": {"min_curve_frames": 3, "preserve_nonzero_speed": true},
+    "dash_hitstop": {"freeze_seconds": 0.05},
+    "long_jump": {"dash_jump_farther_than_run_jump": true},
+    "climb_drain": {"distinct_hold_up_jump_costs": true},
+    "climb_exhaustion": {"requires_ground_refill": true}
+  }
+}

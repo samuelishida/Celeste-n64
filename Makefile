@@ -1,9 +1,66 @@
 BUILD_DIR=build
+N64_INST ?= /tmp/n64-toolchain-root/opt/libdragon
+export N64_INST
+
+# Default goal must be set before including n64.mk, which defines its own
+# pattern rules that can shadow our targets.
+.DEFAULT_GOAL := all
+
 include $(N64_INST)/include/n64.mk
 include $(N64_INST)/include/t3d.mk
 
 N64_CFLAGS += -std=gnu2x -Os
 N64_CXXFLAGS += -std=gnu++17 -Os -Isrc/user
+
+# DFS assets for baked level
+DFS_MDL_FILES := \
+    filesystem/mdl/strawberry.t3dm \
+    filesystem/mdl/coin.t3dm \
+    filesystem/mdl/spring_board.t3dm \
+    filesystem/mdl/refill_gem.t3dm \
+    filesystem/mdl/refill_gem_double.t3dm
+
+DFS_TEX_FILES := \
+    filesystem/tex/bubble.sprite \
+    filesystem/tex/rock_1.sprite \
+    filesystem/tex/snow_1.sprite \
+    filesystem/tex/rock_2.sprite \
+    filesystem/tex/metal_floor_1.sprite \
+    filesystem/tex/floor_dirty_concrete.sprite \
+    filesystem/tex/TB_empty.sprite
+
+DFS_FNT_FILES := filesystem/fnt/Renogare.font64
+
+# DFS level files
+DFS_LVL_FILES := \
+    filesystem/lvl/1-1.lvl \
+    filesystem/lvl/1-1.manifest
+
+# Create filesystem directories
+filesystem/mdl filesystem/tex filesystem/fnt filesystem/lvl:
+	mkdir -p $@
+
+# Copy model files
+filesystem/mdl/%.t3dm: assets/og_converted/models/%.t3dm | filesystem/mdl
+	cp $< $@
+
+# Copy texture files
+filesystem/tex/%.sprite: assets/og_converted/textures/%.sprite | filesystem/tex
+	cp $< $@
+
+# Bake level files
+filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest: \
+	assets/og_converted/maps/1-1.map | filesystem/lvl
+	python3 tools/bake_map.py $< \
+		filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest
+
+# Copy font files
+filesystem/fnt/%.font64: assets/og_converted/fonts/%.font64 | filesystem/fnt
+	cp $< $@
+
+# Build DFS file
+madeline_cube_rom.dfs: $(DFS_MDL_FILES) $(DFS_TEX_FILES) $(DFS_FNT_FILES) $(DFS_LVL_FILES)
+	$(N64_INST)/bin/mkdfs $@ filesystem/
 
 src = \
 	src/user/rom_main.cpp \
@@ -23,17 +80,30 @@ src = \
 	src/user/gameplay/actor/strawberry_actor.cpp \
 	src/user/gameplay/actor/refill_actor.cpp \
 	src/user/gameplay/actor/spring_actor.cpp \
+	src/user/gameplay/render/model.cpp \
+	src/user/gameplay/render/texture.cpp \
+	src/user/gameplay/render/material_catalog.cpp \
+	src/user/gameplay/render/level_renderer.cpp \
+	src/user/gameplay/world/level_loader.cpp \
+	src/user/gameplay/world/entity_dispatch.cpp \
+	src/user/gameplay/world/actor_factory.cpp \
+	src/user/gameplay/world/actor_world.cpp \
+	src/user/gameplay/actor/moving_solid_actor.cpp \
 	src/user/gameplay/rom_telemetry.cpp \
 	src/user/n64/profiler.cpp
 
 all: madeline_cube_rom.z64
 
-$(BUILD_DIR)/madeline_cube_rom.elf: $(src:%.cpp=$(BUILD_DIR)/%.o)
+$(BUILD_DIR)/madeline_cube_rom.elf: $(src:%.cpp=$(BUILD_DIR)/%.o) madeline_cube_rom.dfs
 
-madeline_cube_rom.z64: N64_ROM_TITLE="Madeline Cube ROM"
+# The .dfs must be a prerequisite of the .z64 target so that n64tool
+# includes it in the ROM image via $(filter %.dfs,$^).
+madeline_cube_rom.z64: madeline_cube_rom.dfs
+
+N64_ROM_TITLE ?= "Madeline Cube ROM"
 
 clean:
-	rm -rf $(BUILD_DIR) madeline_cube_rom.z64
+	rm -rf $(BUILD_DIR) madeline_cube_rom.z64 madeline_cube_rom.dfs
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 
