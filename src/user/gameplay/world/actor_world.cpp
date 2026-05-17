@@ -7,7 +7,7 @@ ActorId ActorWorld::Add(Actor& actor) {
 void ActorWorld::Destroy(ActorId id) { if (id && id<=kMaxActors && actors_[id-1]) pending_remove_[id-1]=true; }
 void ActorWorld::ResolvePending() {
     for (uint16_t i=0;i<kMaxActors;++i) {
-        if (pending_remove_[i]) { if (active_[i]) { actors_[i]->OnRecycle(); --count_; } actors_[i]=nullptr; active_[i]=false; pending_add_[i]=false; pending_remove_[i]=false; }
+        if (pending_remove_[i]) { if (active_[i]) { --count_; } actors_[i]=nullptr; active_[i]=false; pending_add_[i]=false; pending_remove_[i]=false; }
         else if (pending_add_[i]) { active_[i]=true; pending_add_[i]=false; actors_[i]->Init(); ++count_; }
     }
 }

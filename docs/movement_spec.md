@@ -1,41 +1,35 @@
 # Movement Spec
 
-Prototype values now track the Celeste64 controller shape more closely while staying in the smaller graybox unit scale.
+This controller is spec-first rather than source-parity-first. `+Y` is up; travel is on the XZ plane; all horizontal intent is projected through the active camera basis.
 
-## Coordinate assumptions
-
-- `+Y` is up.
-- Ground movement happens on the `XZ` plane.
-- Units are arbitrary engine units until the first imported level exists.
-
-## Player
+## Tuned profile
 
 | Value | Current value |
 | --- | ---: |
-| run speed | `6.4` |
-| acceleration | `50.0` |
-| friction | `80.0` |
-| gravity | `60.0` |
+| run max speed | `6.4` |
+| ground acceleration / deceleration | `120 / 180` |
+| air acceleration / turn acceleration | `24 / 36` |
 | jump speed | `9.0` |
+| rise / apex / fall gravity | `42 / 84 / 96` |
+| jump cut multiplier | `0.5` |
+| coyote time | `0.15s` |
+| jump buffer | `0.10s` |
 | dash speed | `14.0` |
-| dash duration | `0.20s` |
-| respawn fall height | `-20.0` |
+| dash hitstop / active window | `0.05s / 0.18s` |
+| stamina max | `110` |
 
-## Inputs
+## State model
 
-- analog stick controls desired movement relative to the orbit camera
-- `A` requests jump
-- `B` requests dash
-- C-left / C-right orbit the camera
-- C-up / C-down adjust camera distance
+Physical locomotion uses `IDLE`, `RUN`, `JUMP`, `DASH`, `CLIMB`, and `FALL`.
 
-## Current behavior
+- Grounded release stops almost immediately; ground turning is intentionally short, not Mario-like.
+- Air steering curves velocity instead of deleting momentum.
+- Jump height is variable: early release cuts upward velocity once; rise, apex, and fall use distinct gravity bands.
+- Dash aims freely through camera-relative analog input, freezes movement briefly, then travels gravity-free.
+- Climb consumes stamina at different rates for hold, upward movement, and climb jump; exhaustion blocks re-entry until grounded refill.
 
-- analog magnitude scales grounded run speed
-- grounded movement rotates toward the desired direction and enters a skid on hard reversals
-- jump sustain uses the source game's hold window plus half gravity near the apex
-- coyote time, jump buffering, grounded dash, airborne dash lift, dash end slowdown, independent wall jump probes, and a first dedicated climb state are active
-- movement now resolves through a sweep/popout-style motor with late contact refresh instead of direct integration plus one coarse room pass
-- floor/ceiling/wall ray queries are shared by the player motor and camera obstruction handling
-- touching ground restores the dash after the dash-reset cooldown
-- falling below the kill plane teleports the player to the checkpoint and clears transient movement state
+## Known non-goals
+
+- No 8-way dash quantization while the demake remains analog-first.
+- No physical skid state; skid can return later as animation/VFX.
+- No retuning against OG source traces unless a collision regression is under investigation.

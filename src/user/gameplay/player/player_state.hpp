@@ -17,8 +17,16 @@ struct PlayerInput {
 enum class PlayerMovementState : uint8_t {
     Normal = 0,
     Dashing,
-    Skidding,
     Climbing,
+};
+
+enum class LocomotionState : uint8_t {
+    Idle = 0,
+    Run,
+    Jump,
+    Dash,
+    Climb,
+    Fall,
 };
 
 struct ContactState {
@@ -57,6 +65,12 @@ struct PlayerState {
     float no_dash_jump_remaining = 0.0f;
     bool dashed_on_ground = false;
     PlayerMovementState movement_state = PlayerMovementState::Normal;
+    LocomotionState locomotion_state = LocomotionState::Idle;
+    float stamina = 110.0f;
+    bool climb_exhausted = false;
+    float dash_hitstop_remaining = 0.0f;
+    float dash_active_remaining = 0.0f;
+    bool jump_cut_applied = false;
 
     // Coyote time: counts down after leaving ground.
     float coyote_time_remaining = 0.0f;
@@ -74,8 +88,7 @@ struct PlayerState {
     float hold_jump_speed = 0.0f;
     bool auto_jump = false;
 
-    // Skid state.
-    float no_skid_jump_remaining = 0.0f;
+    // Movement timer.
     float no_move_time_remaining = 0.0f;
 
     // Source bookkeeping retained explicitly for the later motor migration.

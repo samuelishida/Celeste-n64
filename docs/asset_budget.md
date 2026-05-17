@@ -22,6 +22,6 @@ Milestone 0 intentionally uses placeholders only.
 
 - favor vertex color before texture detail
 - keep the first authored room compact
+- condition first-room 3D materials to `32x32 RGBA16` before ROM use
 - avoid custom shaders or dynamic-lighting dependencies
 - add art only after movement is already fun
-

@@ -23,7 +23,8 @@ int main() {
     controller.Step(jump, held_jump, camera_forward, kDt);
     assert(Near(jump.velocity.y, config.jump_speed));
     controller.Step(jump, {.jump_held = true}, camera_forward, kDt);
-    assert(Near(jump.velocity.y, config.jump_speed));
+    assert(jump.velocity.y < config.jump_speed);
+    assert(jump.velocity.y > 0.0f);
 
     PlayerState dash;
     dash.grounded = false;
@@ -32,7 +33,7 @@ int main() {
     air_dash.dash_pressed = true;
     controller.Step(dash, air_dash, camera_forward, kDt);
     assert(dash.movement_state == PlayerMovementState::Dashing);
-    assert(dash.velocity.y > 0.0f);
+    assert(dash.velocity.x == 0.0f);
 
     PlayerState skid;
     skid.grounded = true;
@@ -41,7 +42,8 @@ int main() {
     PlayerInput reverse;
     reverse.move = {-1.0f, 0.0f};
     controller.Step(skid, reverse, camera_forward, kDt);
-    assert(skid.movement_state == PlayerMovementState::Skidding);
+    assert(skid.movement_state == PlayerMovementState::Normal);
+    assert(skid.velocity.x < config.run_speed);
 
     return 0;
 }

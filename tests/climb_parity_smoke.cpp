@@ -15,7 +15,7 @@ int main() {
     controller.Step(climb, grab, camera_forward, 1.0f / 60.0f);
     assert(climb.movement_state == PlayerMovementState::Climbing);
 
-    grab.move = {0.0f, -1.0f};
+    grab.move = {0.0f, 1.0f};
     controller.Step(climb, grab, camera_forward, 1.0f / 60.0f);
     assert(climb.velocity.y > 0.0f);
 

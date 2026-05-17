@@ -2,10 +2,10 @@
 
 #include <cstdint>
 
+struct rdpq_font_s;
+
 namespace madeline_cube {
 
-// Lightweight debug overlay that prints live counters.
-// On N64 this uses rdpq_text; on host it uses printf.
 struct DebugCounters {
     float frame_time_ms = 0.0f;
     uint32_t memory_used = 0;
@@ -16,11 +16,15 @@ struct DebugCounters {
 
 class DebugHUD {
 public:
+    void Init();
+    void Shutdown();
     void Update(const DebugCounters& counters);
     void Render() const;
 
 private:
     DebugCounters counters_;
+    rdpq_font_s* font_ = nullptr;
+    bool font_loaded_ = false;
 };
 
 }  // namespace madeline_cube

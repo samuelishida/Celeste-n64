@@ -105,7 +105,7 @@ struct ActorSpawn {
 // A graybox room composed of static geometry, collision, and spawns.
 struct Room {
     static constexpr int kMaxGeometry = 64;
-    static constexpr int kMaxColliders = 32;
+    static constexpr int kMaxColliders = 512;
     static constexpr int kMaxSpawns = 16;
     static constexpr int kMaxMovingSurfaces = 8;
 

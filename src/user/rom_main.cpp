@@ -25,6 +25,22 @@ int main() {
     rdpq_init();
     t3d_init((T3DInitParams){});
 
+    if (dfs_init(DFS_DEFAULT_LOCATION) == 0) {
+        debugf("dfs_init: OK\n");
+    } else {
+        debugf("dfs_init: FAILED\n");
+    }
+
+    FILE* test_marker = fopen("rom:/test_marker.txt", "r");
+    if (test_marker) {
+        char buffer[32] = {0};
+        fgets(buffer, sizeof(buffer), test_marker);
+        debugf("test_marker contents: %s", buffer);
+        fclose(test_marker);
+    } else {
+        debugf("test_marker: NOT FOUND\n");
+    }
+
     SceneManager scene_mgr;
     GameplayScene gameplay;
     scene_mgr.Register(0, &gameplay);

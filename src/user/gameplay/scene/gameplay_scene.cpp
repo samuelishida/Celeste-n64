@@ -4,8 +4,10 @@
 #include <cstdint>
 
 #include <libdragon.h>
+#include <rdpq.h>
 #include <t3d/t3d.h>
 #include <t3d/t3dmath.h>
+#include <t3d/t3dmodel.h>
 
 #include "gameplay/player/camera_controller.hpp"
 #include "gameplay/world/collectible.hpp"
@@ -13,6 +15,16 @@
 #include "gameplay/physics_contracts.hpp"
 #include "gameplay/player/player_controller.hpp"
 #include "gameplay/player/player_motor.hpp"
+#include "gameplay/render/level_renderer.hpp"
+#include "gameplay/render/material_catalog.hpp"
+#include "gameplay/render/model.hpp"
+#include "gameplay/render/texture.hpp"
+#include "gameplay/world/actor_world.hpp"
+#include "gameplay/world/entity_dispatch.hpp"
+#include "gameplay/actor/strawberry_actor.hpp"
+#include "gameplay/actor/refill_actor.hpp"
+#include "gameplay/actor/spring_actor.hpp"
+#include "gameplay/world/level_loader.hpp"
 #include "gameplay/world/respawn_system.hpp"
 #include "gameplay/world/room_data.hpp"
 #include "gameplay/rom_telemetry.hpp"
@@ -137,12 +149,24 @@ struct GameplayScene::Impl {
     uint8_t directional_light[4] = {0xFF, 0xFF, 0xFF, 0xFF};
 
     T3DVertPacked* cube_vertices = nullptr;
-    T3DVertPacked* collectible_vertices = nullptr;
 
     RenderObject player_render;
     RenderObject room_geometry[Room::kMaxGeometry];
     int room_geometry_count = 0;
     RenderObject collectible_render;
+
+    StaticModel strawberry_model;
+    StaticModel madeline_model;
+    SpriteTexture rock1_texture;
+
+    LevelGeometry level_geometry;
+    MaterialCatalog material_catalog;
+    LevelRenderer level_renderer;
+
+    ActorWorld actor_world;
+    StrawberryActor strawberry_actor;
+    RefillActor refill_actor;
+    SpringActor spring_actor;
 
     MovementConfig movement_config;
     PlayerController player_controller{movement_config};
@@ -158,6 +182,7 @@ struct GameplayScene::Impl {
 
     DebugHUD debug_hud;
     RomTelemetry telemetry;
+    bool baked_level_loaded_ = false;
 };
 
 void GameplayScene::Init() {
@@ -166,29 +191,45 @@ void GameplayScene::Init() {
     t3d_vec3_norm(&impl_->light_direction);
 
     impl_->cube_vertices = static_cast<T3DVertPacked*>(malloc_uncached(sizeof(T3DVertPacked) * 12));
-    impl_->collectible_vertices = static_cast<T3DVertPacked*>(malloc_uncached(sizeof(T3DVertPacked) * 12));
     BuildCubeGeometry(impl_->cube_vertices, 0x888888FF);
-    BuildCubeGeometry(impl_->collectible_vertices, 0xFF284CFF);
 
     impl_->player_render.matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
     impl_->collectible_render.matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
 
-    impl_->room = GetForsakenCityStartRoom();
+    impl_->debug_hud.Init();
+    impl_->strawberry_model.Load("rom:/mdl/strawberry.t3dm");
+    impl_->madeline_model.Load("rom:/mdl/madeline.t3dm");
+
+    impl_->baked_level_loaded_ =
+        LoadLevel("rom:/lvl/1-1.lvl", impl_->room, impl_->level_geometry) &&
+        impl_->level_renderer.Init(impl_->level_geometry);
+    if (impl_->baked_level_loaded_) {
+        impl_->material_catalog.Load("1-1");
+        DispatchLevelEntities(impl_->room, impl_->actor_world,
+                              impl_->strawberry_actor,
+                              impl_->refill_actor,
+                              impl_->spring_actor);
+    } else {
+        impl_->room = GetForsakenCityStartRoom();
+    }
+
     impl_->checkpoint = impl_->room.checkpoint;
     impl_->player.position = impl_->room.player_start;
     impl_->player.grounded = false;
     impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
     impl_->telemetry.RecordSpawn();
 
-    // Setup room geometry render objects
-    impl_->room_geometry_count = impl_->room.geometry_count;
-    for (int i = 0; i < impl_->room_geometry_count; ++i) {
-        impl_->room_geometry[i].matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
-        SetTransform(impl_->room_geometry[i], impl_->room.geometry[i].position, impl_->room.geometry[i].scale);
+    // Graybox room geometry render objects (only when not using baked level)
+    if (!impl_->baked_level_loaded_) {
+        impl_->room_geometry_count = impl_->room.geometry_count;
+        for (int i = 0; i < impl_->room_geometry_count; ++i) {
+            impl_->room_geometry[i].matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
+            SetTransform(impl_->room_geometry[i], impl_->room.geometry[i].position, impl_->room.geometry[i].scale);
+        }
     }
 
-    // Setup collectible from first spawn
-    if (impl_->room.spawn_count > 0) {
+    // Setup collectible from first spawn (graybox path only)
+    if (!impl_->baked_level_loaded_ && impl_->room.spawn_count > 0) {
         impl_->collectible.position = impl_->room.spawns[0].position;
         impl_->collectible.pickup_radius = 1.5f;
     }
@@ -197,12 +238,17 @@ void GameplayScene::Init() {
 void GameplayScene::Shutdown() {
     if (impl_ == nullptr) return;
 
-    free(impl_->cube_vertices);
-    free(impl_->collectible_vertices);
-    free(impl_->player_render.matrix_fp);
-    free(impl_->collectible_render.matrix_fp);
+    impl_->debug_hud.Shutdown();
+    impl_->strawberry_model.Free();
+    impl_->madeline_model.Free();
+    impl_->material_catalog.Unload();
+    impl_->level_renderer.Free();
+
+    free_uncached(impl_->cube_vertices);
+    free_uncached(impl_->player_render.matrix_fp);
+    free_uncached(impl_->collectible_render.matrix_fp);
     for (int i = 0; i < impl_->room_geometry_count; ++i) {
-        free(impl_->room_geometry[i].matrix_fp);
+        free_uncached(impl_->room_geometry[i].matrix_fp);
     }
 
     delete impl_;
@@ -272,18 +318,24 @@ void GameplayScene::Update(float delta_seconds) {
 
     // Actors run after the player + camera so they can read the resolved
     // player state for pickup checks and other gameplay reactions.
-    TryCollect(impl_->collectible, impl_->player.position);
+    if (impl_->baked_level_loaded_) {
+        impl_->actor_world.Update(delta_seconds);
+    } else {
+        TryCollect(impl_->collectible, impl_->player.position);
+    }
 
     SetTransform(impl_->player_render, impl_->player.position, {1.0f, 1.0f, 1.0f});
-    SetTransform(
-        impl_->collectible_render,
-        impl_->collectible.position,
-        impl_->collectible.collected ? Vec3{0.0f, 0.0f, 0.0f} : Vec3{0.75f, 0.75f, 0.75f}
-    );
+    if (!impl_->baked_level_loaded_) {
+        SetTransform(
+            impl_->collectible_render,
+            impl_->collectible.position,
+            impl_->collectible.collected ? Vec3{0.0f, 0.0f, 0.0f} : Vec3{0.75f, 0.75f, 0.75f}
+        );
+    }
 
     DebugCounters counters;
     counters.active_scene_id = 0;
-    counters.actor_count = 1 + impl_->room_geometry_count + (impl_->collectible.collected ? 0 : 1);
+    counters.actor_count = 1 + impl_->room_geometry_count + impl_->actor_world.Count();
     impl_->debug_hud.Update(counters);
 
     // Print telemetry every 60 frames (~1 second) to avoid serial spam
@@ -313,26 +365,58 @@ void GameplayScene::Render() {
     rdpq_attach(display_get(), display_get_zbuf());
     t3d_frame_start();
     t3d_viewport_attach(&impl_->viewport);
-    rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
     t3d_screen_clear_color(RGBA32(88, 163, 221, 0xFF));
     t3d_screen_clear_depth();
     t3d_light_set_ambient(impl_->ambient_light);
     t3d_light_set_directional(0, impl_->directional_light, &impl_->light_direction);
     t3d_light_set_count(1);
-    t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
-
-    // Draw room geometry
-    for (int i = 0; i < impl_->room_geometry_count; ++i) {
-        DrawCube(impl_->cube_vertices, impl_->room_geometry[i].matrix_fp);
+    if (impl_->baked_level_loaded_) {
+        // Baked level: textured geometry + actor models
+        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(
+            T3D_FLAG_SHADED | T3D_FLAG_DEPTH | T3D_FLAG_TEXTURED));
+        rdpq_mode_combiner(RDPQ_COMBINER1((TEX0,0,SHADE,0),(TEX0,0,SHADE,0)));
+        impl_->level_renderer.Draw(impl_->material_catalog);
+        constexpr float kStrawberryScale = 0.005f;
+        if (StrawberryActor* sa = impl_->actor_world.Get<StrawberryActor>()) {
+            impl_->strawberry_model.UpdateMatrix(sa->position, kStrawberryScale, 0.0f);
+            impl_->strawberry_model.Draw();
+        }
+    } else {
+        // Graybox: cube geometry
+        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
+        rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+        for (int i = 0; i < impl_->room_geometry_count; ++i) {
+            DrawCube(impl_->cube_vertices, impl_->room_geometry[i].matrix_fp);
+        }
+        if (!impl_->collectible.collected) {
+            constexpr float kStrawberryScale = 0.005f;
+            impl_->strawberry_model.UpdateMatrix(impl_->collectible.position, kStrawberryScale, 0.0f);
+            impl_->strawberry_model.Draw();
+        }
     }
 
-    DrawCube(impl_->cube_vertices, impl_->player_render.matrix_fp);
-    if (!impl_->collectible.collected) {
-        DrawCube(impl_->collectible_vertices, impl_->collectible_render.matrix_fp);
+    if (impl_->madeline_model.IsLoaded()) {
+        constexpr float kMadelineScale = 0.02f;
+        constexpr float kMadelineYOffset = -1.0f;
+        const Vec3 facing = impl_->player.facing;
+        const float yaw = std::atan2(facing.x, facing.z);
+        const Vec3 draw_pos = {
+            impl_->player.position.x,
+            impl_->player.position.y + kMadelineYOffset,
+            impl_->player.position.z,
+        };
+        impl_->madeline_model.UpdateMatrix(draw_pos, kMadelineScale, yaw);
+        impl_->madeline_model.Draw();
+    } else {
+        DrawCube(impl_->cube_vertices, impl_->player_render.matrix_fp);
     }
+
+    // Switch to 2D for overlays
+    rdpq_set_mode_standard();
+    rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+    impl_->debug_hud.Render();
 
     rdpq_detach_show();
-    impl_->debug_hud.Render();
 }
 
 }  // namespace madeline_cube

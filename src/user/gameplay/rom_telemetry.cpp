@@ -100,19 +100,24 @@ void RomTelemetry::RecordPlayerState(const PlayerState& state) {
         ++invalid_velocity_count;
     }
 
-    // Encode movement state
-    switch (state.movement_state) {
-        case PlayerMovementState::Normal:
+    switch (state.locomotion_state) {
+        case LocomotionState::Idle:
             last_movement_state = 0;
             break;
-        case PlayerMovementState::Dashing:
+        case LocomotionState::Run:
             last_movement_state = 1;
             break;
-        case PlayerMovementState::Skidding:
+        case LocomotionState::Jump:
             last_movement_state = 2;
             break;
-        case PlayerMovementState::Climbing:
+        case LocomotionState::Dash:
             last_movement_state = 3;
+            break;
+        case LocomotionState::Climb:
+            last_movement_state = 4;
+            break;
+        case LocomotionState::Fall:
+            last_movement_state = 5;
             break;
     }
 
