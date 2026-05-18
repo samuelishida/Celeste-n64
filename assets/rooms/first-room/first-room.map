@@ -1,0 +1,117 @@
+// Game: Celeste 64 Demake
+// Format: Standard
+// Room: first-room — project-owned Milestone 2 test room
+//
+// Layout (Quake coords, Z-up, 1 unit = 0.02 port units):
+//   Spawn platform: x=[-400,300]  y=[-200,200]  z=[0,32]
+//   Dash gap:       x=[300,600]   (6 port-units)
+//   Landing:        x=[600,900]   y=[-200,200]  z=[0,32]
+//   Climb wall:     x=[900,932]   y=[-16,16]    z=[32,400]
+//   Kill walkway:   x=[600,900]   y=[200,240]   z=[0,16]
+//   Strawberry:     at (750, -250, 64)
+//
+// Brush face convention (matching OG 1-1):
+//   Left(xmin):  (xmin,ymin,zmin) (xmin,ymax,zmin) (xmin,ymin,zmax) → normal (+1,0,0) → x >= xmin
+//   Right(xmax): (xmax,ymin,zmax) (xmax,ymax,zmax) (xmax,ymin,zmin) → normal (-1,0,0) → x <= xmax
+//   Back(ymin):  (xmax,ymin,zmin) (xmin,ymin,zmin) (xmax,ymin,zmax) → normal (0,+1,0) → y >= ymin
+//   Front(ymax): (xmin,ymax,zmin) (xmax,ymax,zmin) (xmin,ymax,zmax) → normal (0,-1,0) → y <= ymax
+//   Bottom(zmin):(xmin,ymin,zmin) (xmax,ymin,zmin) (xmin,ymax,zmin) → normal (0,0,+1) → z >= zmin
+//   Top(zmax):   (xmin,ymax,zmax) (xmax,ymax,zmax) (xmin,ymin,zmax) → normal (0,0,-1) → z <= zmax
+//
+// entity 0
+{
+"classname" "worldspawn"
+"_tb_textures" "Textures"
+"skybox" "bsides"
+// brush 0 — spawn platform floor: x[-400,300] y[-200,200] z[0,32]
+{
+( -400 -200 0 ) ( -400 200 0 ) ( -400 -200 32 ) rock_1 0 0 0 1 1
+( 300 -200 32 ) ( 300 200 32 ) ( 300 -200 0 ) rock_1 0 0 0 1 1
+( 300 -200 0 ) ( -400 -200 0 ) ( 300 -200 32 ) rock_1 0 0 0 1 1
+( -400 200 0 ) ( 300 200 0 ) ( -400 200 32 ) rock_1 0 0 0 1 1
+( -400 -200 0 ) ( 300 -200 0 ) ( -400 200 0 ) rock_1 0 0 0 1 1
+( -400 200 32 ) ( 300 200 32 ) ( -400 -200 32 ) rock_1 0 0 0 1 1
+}
+// brush 1 — spawn platform back wall: x[-400,300] y[-200,-168] z[0,128]
+{
+( -400 -200 0 ) ( -400 -168 0 ) ( -400 -200 128 ) rock_1 0 0 0 1 1
+( 300 -200 128 ) ( 300 -168 128 ) ( 300 -200 0 ) rock_1 0 0 0 1 1
+( 300 -200 0 ) ( -400 -200 0 ) ( 300 -200 128 ) rock_1 0 0 0 1 1
+( -400 -168 0 ) ( 300 -168 0 ) ( -400 -168 128 ) rock_1 0 0 0 1 1
+( -400 -200 0 ) ( 300 -200 0 ) ( -400 -168 0 ) rock_1 0 0 0 1 1
+( -400 -168 128 ) ( 300 -168 128 ) ( -400 -200 128 ) rock_1 0 0 0 1 1
+}
+// brush 2 — spawn platform front wall: x[-400,300] y[168,200] z[0,128]
+{
+( -400 168 0 ) ( -400 200 0 ) ( -400 168 128 ) rock_1 0 0 0 1 1
+( 300 168 128 ) ( 300 200 128 ) ( 300 168 0 ) rock_1 0 0 0 1 1
+( 300 168 0 ) ( -400 168 0 ) ( 300 168 128 ) rock_1 0 0 0 1 1
+( -400 200 0 ) ( 300 200 0 ) ( -400 200 128 ) rock_1 0 0 0 1 1
+( -400 168 0 ) ( 300 168 0 ) ( -400 200 0 ) rock_1 0 0 0 1 1
+( -400 200 128 ) ( 300 200 128 ) ( -400 168 128 ) rock_1 0 0 0 1 1
+}
+// brush 3 — landing platform floor: x[600,900] y[-200,200] z[0,32]
+{
+( 600 -200 0 ) ( 600 200 0 ) ( 600 -200 32 ) rock_1 0 0 0 1 1
+( 900 -200 32 ) ( 900 200 32 ) ( 900 -200 0 ) rock_1 0 0 0 1 1
+( 900 -200 0 ) ( 600 -200 0 ) ( 900 -200 32 ) rock_1 0 0 0 1 1
+( 600 200 0 ) ( 900 200 0 ) ( 600 200 32 ) rock_1 0 0 0 1 1
+( 600 -200 0 ) ( 900 -200 0 ) ( 600 200 0 ) rock_1 0 0 0 1 1
+( 600 200 32 ) ( 900 200 32 ) ( 600 -200 32 ) rock_1 0 0 0 1 1
+}
+// brush 4 — landing platform back wall: x[600,900] y[-200,-168] z[0,128]
+{
+( 600 -200 0 ) ( 600 -168 0 ) ( 600 -200 128 ) rock_1 0 0 0 1 1
+( 900 -200 128 ) ( 900 -168 128 ) ( 900 -200 0 ) rock_1 0 0 0 1 1
+( 900 -200 0 ) ( 600 -200 0 ) ( 900 -200 128 ) rock_1 0 0 0 1 1
+( 600 -168 0 ) ( 900 -168 0 ) ( 600 -168 128 ) rock_1 0 0 0 1 1
+( 600 -200 0 ) ( 900 -200 0 ) ( 600 -168 0 ) rock_1 0 0 0 1 1
+( 600 -168 128 ) ( 900 -168 128 ) ( 600 -200 128 ) rock_1 0 0 0 1 1
+}
+// brush 5 — landing platform front wall: x[600,900] y[168,200] z[0,128]
+{
+( 600 168 0 ) ( 600 200 0 ) ( 600 168 128 ) rock_1 0 0 0 1 1
+( 900 168 128 ) ( 900 200 128 ) ( 900 168 0 ) rock_1 0 0 0 1 1
+( 900 168 0 ) ( 600 168 0 ) ( 900 168 128 ) rock_1 0 0 0 1 1
+( 600 200 0 ) ( 900 200 0 ) ( 600 200 128 ) rock_1 0 0 0 1 1
+( 600 168 0 ) ( 900 168 0 ) ( 600 200 0 ) rock_1 0 0 0 1 1
+( 600 200 128 ) ( 900 200 128 ) ( 600 168 128 ) rock_1 0 0 0 1 1
+}
+// brush 6 — landing platform left end wall (facing gap): x[600,632] y[-200,200] z[0,128]
+{
+( 600 -200 0 ) ( 600 200 0 ) ( 600 -200 128 ) rock_1 0 0 0 1 1
+( 632 -200 128 ) ( 632 200 128 ) ( 632 -200 0 ) rock_1 0 0 0 1 1
+( 632 -200 0 ) ( 600 -200 0 ) ( 632 -200 128 ) rock_1 0 0 0 1 1
+( 600 200 0 ) ( 632 200 0 ) ( 600 200 128 ) rock_1 0 0 0 1 1
+( 600 -200 0 ) ( 632 -200 0 ) ( 600 200 0 ) rock_1 0 0 0 1 1
+( 600 200 128 ) ( 632 200 128 ) ( 600 -200 128 ) rock_1 0 0 0 1 1
+}
+// brush 7 — climb wall: x[900,932] y[-16,16] z[32,400]
+{
+( 900 -16 32 ) ( 900 16 32 ) ( 900 -16 400 ) rock_1_climbable 0 0 0 1 1
+( 932 -16 400 ) ( 932 16 400 ) ( 932 -16 32 ) rock_1_climbable 0 0 0 1 1
+( 932 -16 32 ) ( 900 -16 32 ) ( 932 -16 400 ) rock_1_climbable 0 0 0 1 1
+( 900 16 32 ) ( 932 16 32 ) ( 900 16 400 ) rock_1_climbable 0 0 0 1 1
+( 900 -16 32 ) ( 932 -16 32 ) ( 900 16 32 ) rock_1_climbable 0 0 0 1 1
+( 900 16 400 ) ( 932 16 400 ) ( 900 -16 400 ) rock_1_climbable 0 0 0 1 1
+}
+// brush 8 — kill-drop walkway: x[600,900] y[200,240] z[0,16]
+{
+( 600 200 0 ) ( 600 240 0 ) ( 600 200 16 ) rock_1 0 0 0 1 1
+( 900 200 16 ) ( 900 240 16 ) ( 900 200 0 ) rock_1 0 0 0 1 1
+( 900 200 0 ) ( 600 200 0 ) ( 900 200 16 ) rock_1 0 0 0 1 1
+( 600 240 0 ) ( 900 240 0 ) ( 600 240 16 ) rock_1 0 0 0 1 1
+( 600 200 0 ) ( 900 200 0 ) ( 600 240 0 ) rock_1 0 0 0 1 1
+( 600 240 16 ) ( 900 240 16 ) ( 600 200 16 ) rock_1 0 0 0 1 1
+}
+}
+// entity 1 — PlayerSpawn at center of spawn platform
+{
+"classname" "PlayerSpawn"
+"origin" "0 0 64"
+}
+// entity 2 — Strawberry off landing platform
+{
+"classname" "Strawberry"
+"origin" "750 -250 64"
+}

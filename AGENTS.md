@@ -98,66 +98,29 @@ The project currently builds against:
 - tiny3d
 - a MIPS64 GCC toolchain compatible with current libdragon
 
-The first successful build used a **temporary** toolchain under `/tmp`:
-
-```txt
-/tmp/n64-toolchain-root/opt/libdragon
-/tmp/libdragon-preview
-/tmp/tiny3d
-```
-
-That setup is reproducible, but not persistent. If `/tmp` is cleaned, `make` will fail because `$(N64_INST)/include/t3d.mk` no longer exists.
-
-Longer term, prefer installing the toolchain in a durable location. Until then, use the bootstrap recipe below.
+The repo lives on an exFAT partition which cannot hold symlinks, so the toolchain is installed to `/tmp/n64-bootstrap` (ext4). This survives reboots on most Linux setups, but can be lost if `/tmp` is cleaned. Re-run `setup.sh` to rebuild.
 
 ## Cold-start bootstrap
 
-Run these commands from a shell with network access:
+Run the setup script from the repo root:
 
 ```sh
-curl -L \
-  https://github.com/DragonMinded/libdragon/releases/download/toolchain-continuous-prerelease/gcc-toolchain-mips64-x86_64.deb \
-  -o /tmp/gcc-toolchain-mips64-x86_64.deb
-
-mkdir -p /tmp/n64-toolchain-root
-dpkg-deb -x /tmp/gcc-toolchain-mips64-x86_64.deb /tmp/n64-toolchain-root
-
-git clone --depth 1 --branch preview \
-  https://github.com/DragonMinded/libdragon.git \
-  /tmp/libdragon-preview
-
-git clone --depth 1 \
-  https://github.com/HailToDodongo/tiny3d.git \
-  /tmp/tiny3d
+./setup.sh
 ```
 
-Build libdragon:
+This downloads the GCC toolchain, clones libdragon (preview) and tiny3d, builds both, and installs everything into `/tmp/n64-bootstrap/opt/libdragon`.
 
-```sh
-cd /tmp/libdragon-preview
-N64_INST=/tmp/n64-toolchain-root/opt/libdragon \
-PATH=/tmp/n64-toolchain-root/opt/libdragon/bin:$PATH \
-./build.sh
-```
-
-Build/install tiny3d into the same toolchain:
-
-```sh
-cd /tmp/tiny3d
-N64_INST=/tmp/n64-toolchain-root/opt/libdragon \
-PATH=/tmp/n64-toolchain-root/opt/libdragon/bin:$PATH \
-./build.sh
-```
+If the toolchain is already present and intact, `setup.sh` exits immediately.
 
 ## Project build
 
 From the repo root:
 
 ```sh
-N64_INST=/tmp/n64-toolchain-root/opt/libdragon \
-PATH=/tmp/n64-toolchain-root/opt/libdragon/bin:$PATH \
-make
+./compile-rom.sh
 ```
+
+This locates the toolchain automatically and runs `make`.
 
 Expected output:
 
@@ -168,9 +131,7 @@ madeline_cube_rom.z64
 Clean build artifacts:
 
 ```sh
-N64_INST=/tmp/n64-toolchain-root/opt/libdragon \
-PATH=/tmp/n64-toolchain-root/opt/libdragon/bin:$PATH \
-make clean
+./compile-rom.sh clean
 ```
 
 ## Local smoke test
@@ -238,9 +199,11 @@ First field issue already found:
 ### Build and tooling
 
 - The current libdragon `preview` flow plus tiny3d builds successfully on this machine.
-- The build environment works, but storing it in `/tmp` is fragile.
+- The repo is on an exFAT partition which cannot hold symlinks, so the toolchain must live on ext4 (`/tmp/n64-bootstrap`).
+- `setup.sh` handles the full cold-start bootstrap; `compile-rom.sh` locates the toolchain automatically.
 - The top-level `Makefile` is intentionally small and only compiles project-owned C++ sources.
 - Building full libdragon/tiny3d from scratch also builds many examples, so a cold bootstrap is slower than normal project iteration.
+- If `/tmp` is cleaned, re-run `./setup.sh` to rebuild the toolchain.
 
 ### Code and gameplay
 

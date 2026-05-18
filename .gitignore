@@ -3,8 +3,13 @@ build/
 engine/
 filesystem/
 *.z64
+*.dfs
+*.pak
 Celeste64-og/*
 tiny3d-main/*
+
+# Local N64 toolchain (bootstrapped to /tmp, but just in case)
+.n64-toolchain/
 
 # Local/editor clutter
 .DS_Store

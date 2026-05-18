@@ -328,7 +328,8 @@ void PlayerController::StatePhase(
         !state.climb_exhausted &&
         state.stamina > 0.0f &&
         !state.grounded &&
-        (state.wall_left || state.wall_right)) {
+        (state.wall_left || state.wall_right) &&
+        state.wall_climbable) {
         state.movement_state = PlayerMovementState::Climbing;
         state.locomotion_state = LocomotionState::Climb;
         state.velocity = {};

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Try known /tmp bootstrap locations in order
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Primary: /tmp/n64-bootstrap (setup.sh installs here — ext4, supports symlinks)
+# Fallback: other /tmp locations from older bootstraps
 CANDIDATES=(
     /tmp/n64-bootstrap/opt/libdragon
     /tmp/n64-toolchain-root/opt/libdragon
@@ -17,12 +20,13 @@ for candidate in "${CANDIDATES[@]}"; do
 done
 
 if [[ -z "$N64_INST" ]]; then
-    echo "ERROR: no libdragon toolchain found. Expected one of:"
+    echo "ERROR: no libdragon toolchain found. Checked:"
     for candidate in "${CANDIDATES[@]}"; do
         echo "  $candidate"
     done
     echo ""
-    echo "Run the cold-start bootstrap from AGENTS.md, then retry."
+    echo "Run the bootstrap script to set up the toolchain:"
+    echo "  ${SCRIPT_DIR}/setup.sh"
     exit 1
 fi
 

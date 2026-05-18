@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "gameplay/physics/coll_mesh.hpp"
+
 #ifdef __mips__
 #include <libdragon.h>
 #define LVL_LOG debugf
@@ -51,17 +53,6 @@ static Vec3 ReadVec3(FILE* f) {
     return v;
 }
 
-static uint8_t ReadU8(FILE* f) {
-    uint8_t b;
-    fread(&b, 1, 1, f);
-    return b;
-}
-
-// LVL format type: 0=Plane, 1=Box — runtime enum: Box=0, Plane=1
-static ColliderType MapColliderType(uint8_t lvl_type) {
-    return (lvl_type == 0) ? ColliderType::Plane : ColliderType::Box;
-}
-
 }  // namespace
 
 bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry) {
@@ -87,11 +78,11 @@ bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry) {
         return false;
     }
 
-    const uint32_t collider_count = ReadU32(f);
+    (void)ReadU32(f);  // collider_count — static colliders no longer loaded
     const uint32_t face_count     = ReadU32(f);
     const uint32_t vertex_count   = ReadU32(f);
     const uint32_t entity_count   = ReadU32(f);
-    const uint32_t string_count   = ReadU32(f);
+    (void)ReadU32(f);  // string_count — unused
 
     // Discard skybox/music/ambience/snow fields (6 uint16 = 12 bytes)
     ReadU16(f); ReadU16(f); ReadU16(f); // skybox, music, ambience
@@ -99,45 +90,17 @@ bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry) {
     ReadS16(f); ReadS16(f); ReadS16(f); // snow_dir
     ReadU16(f);                          // reserved
 
-    const uint32_t off_strings    = ReadU32(f);
-    const uint32_t off_colliders  = ReadU32(f);
+    (void)ReadU32(f);  // off_strings — unused
+    (void)ReadU32(f);  // off_colliders — static collision replaced by .colmesh
     const uint32_t off_faces      = ReadU32(f);
     const uint32_t off_vertices   = ReadU32(f);
     const uint32_t off_entities   = ReadU32(f);
     (void)ReadU32(f); // off_props_blob unused
 
-    // --- Colliders (56 bytes each) ---
-    if (collider_count > static_cast<unsigned>(Room::kMaxColliders)) {
-        LVL_LOG("[lvl] collider_count %lu exceeds kMaxColliders %d\n",
-                collider_count, Room::kMaxColliders);
-        fclose(f);
-        return false;
-    }
-    fseek(f, static_cast<long>(off_colliders), SEEK_SET);
+    // --- Colliders: skipped (static collision now uses .colmesh) ---
+    // collider_count is left at 0; dynamic actors (moving platforms) add
+    // to room.colliders at runtime via SolidActor::SyncToRoom.
     room.collider_count = 0;
-    for (uint32_t i = 0; i < collider_count; ++i) {
-        const uint8_t type      = ReadU8(f);
-        const uint8_t solid     = ReadU8(f);
-        const uint8_t has_orig  = ReadU8(f);
-        ReadU8(f); // reserved
-        const Vec3 bounds_min   = ReadVec3(f);
-        const Vec3 bounds_max   = ReadVec3(f);
-        const Vec3 normal       = ReadVec3(f);
-        const Vec3 plane_origin = ReadVec3(f);
-        const int16_t face_id   = ReadS16(f);
-        const int16_t owner_id  = ReadS16(f);
-
-        Collider& c = room.colliders[room.collider_count++];
-        c.type             = MapColliderType(type);
-        c.solid            = (solid != 0);
-        c.has_plane_origin = (has_orig != 0);
-        c.bounds           = {bounds_min, bounds_max};
-        c.normal           = normal;
-        c.plane_origin     = plane_origin;
-        c.face_id          = face_id;
-        c.owner_id         = owner_id;
-        c.velocity         = {0.0f, 0.0f, 0.0f};
-    }
 
     // --- Faces (24 bytes each) ---
     if (face_count > static_cast<unsigned>(LevelGeometry::kMaxFaces)) {
@@ -204,12 +167,31 @@ bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry) {
 
     fclose(f);
 
-    (void)off_strings;
-    (void)string_count;
-
     LVL_LOG("[lvl] loaded %s: colliders=%d faces=%d vertices=%d entities=%lu\n",
             path, room.collider_count, geometry.face_count,
             geometry.vertex_count, entity_count);
+
+    // Try loading the .colmesh sidecar (same path, .lvl → .colmesh).
+    {
+        char colmesh_path[256];
+        strncpy(colmesh_path, path, sizeof(colmesh_path) - 1);
+        colmesh_path[sizeof(colmesh_path) - 1] = '\0';
+        const size_t len = strlen(colmesh_path);
+        if (len >= 4 && len <= sizeof(colmesh_path) - 9 &&
+            colmesh_path[len-4] == '.' &&
+            colmesh_path[len-3] == 'l' &&
+            colmesh_path[len-2] == 'v' &&
+            colmesh_path[len-1] == 'l') {
+            strcpy(colmesh_path + len - 4, ".colmesh");
+            physics::CollMesh* cm = physics::LoadCollMesh(colmesh_path);
+            if (cm) {
+                room.coll_mesh = cm;
+                LVL_LOG("[lvl] colmesh loaded: %s (%lu tris)\n",
+                        colmesh_path, (unsigned long)cm->header->triangle_count);
+            }
+        }
+    }
+
     return true;
 }
 

@@ -52,8 +52,9 @@ struct ClimbState {
 };
 
 struct PlayerState {
-    Vec3 position;
-    Vec3 velocity;
+    Vec3 position = {};
+    Vec3 prev_position = {};
+    Vec3 velocity = {};
     Vec3 facing = {0.0f, 0.0f, 1.0f};
     Vec3 target_facing = {0.0f, 0.0f, 1.0f};
     Vec3 last_facing = {0.0f, 0.0f, 1.0f};
@@ -100,6 +101,16 @@ struct PlayerState {
     // Collision probes (set by caller before Step)
     bool wall_left = false;
     bool wall_right = false;
+    // True if the nearest wall face permits climbing (legacy: any wall; collmesh: MAT_CLIMBABLE).
+    bool wall_climbable = false;
+
+    Vec3 InterpolatedPosition(float alpha) const {
+        return {
+            prev_position.x + (position.x - prev_position.x) * alpha,
+            prev_position.y + (position.y - prev_position.y) * alpha,
+            prev_position.z + (position.z - prev_position.z) * alpha,
+        };
+    }
 };
 
 }  // namespace madeline_cube

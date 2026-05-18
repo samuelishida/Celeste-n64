@@ -7,6 +7,8 @@
 
 namespace madeline_cube {
 
+namespace physics { struct CollMesh; }  // forward declare; include coll_mesh.hpp in .cpp
+
 // Axis-aligned bounding box for collision and culling.
 struct AABB {
     Vec3 min;
@@ -124,6 +126,10 @@ struct Room {
     Vec3 player_start = {0.0f, 3.0f, 0.0f};
     Vec3 checkpoint = {0.0f, 3.0f, 0.0f};
     float kill_plane_y = -20.0f;
+
+    // Triangle mesh collision for static world geometry. Set by level_loader
+    // when .colmesh sidecar exists. All static queries use this path.
+    physics::CollMesh* coll_mesh = nullptr;
 };
 
 // Source-shaped surface lookup. Returns null when no surface exists for owner_id.
