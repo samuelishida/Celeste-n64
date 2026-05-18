@@ -20,6 +20,17 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lvl_format import LvlFile, Collider, Face, Vertex, Entity
 from entity_ids import ENTITY_IDS, id_of
 
+# Only classes listed here may emit collision geometry (brushes).  Everything
+# else is silently skipped.  Must stay in sync with docs/first-room-brief.md
+# brush-class policy.
+# Classes beyond the brief's list are legacy OG import classes that may be
+# removed when first-room replaces 1-1 entirely (Inc 6).
+COLLISION_CLASSES = {
+    "worldspawn", "func_wall", "func_climbable",    # project-owned
+    "Decoration", "SpikeBlock", "TrafficBlock",     # legacy OG import
+    "DeathBlock", "func_group", "Cassette",         # legacy OG import
+}
+
 # ── Vector math helpers ──────────────────────────────────────────────
 
 Vec3 = Tuple[float, float, float]
@@ -437,11 +448,14 @@ def bake_map(map_file: str, lvl_file: str, manifest_file: str, dump_spawn: bool 
                 if dump_spawn:
                     print(f"PlayerSpawn baked at ({transformed_origin[0]:.3f}, {transformed_origin[1]:.3f}, {transformed_origin[2]:.3f})")
 
-    # Process brush geometry from all entities
+    # Process brush geometry — only from declared collision classes
     all_faces = 0
     all_verts = 0
 
     for entity in entities:
+        classname = entity.get("classname", "")
+        if classname not in COLLISION_CLASSES and classname:
+            continue  # skip brushes from non-collision entities (decorations, props, etc.)
         brushes = entity.get("brushes", [])
         for brush in brushes:
             if len(brush) < 4:

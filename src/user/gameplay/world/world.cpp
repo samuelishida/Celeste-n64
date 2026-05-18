@@ -2,11 +2,18 @@
 
 #include <cmath>
 
+#include "gameplay/physics/coll_mesh.hpp"
+
 namespace madeline_cube {
 
 namespace {
 
 constexpr float kRayEpsilon = 0.0001f;
+// Sentinel: colliders added at runtime (moving platforms) have owner_id >= 0.
+// Static colliders from the legacy path have owner_id == -1 and are skipped
+// when a CollMesh is present (CollMesh handles all static geometry).
+constexpr int kStaticOwner = -1;
+inline bool IsStaticCollider(const Collider& c) { return c.owner_id == kStaticOwner; }
 
 float Abs(float value) {
     return std::fabs(value);
@@ -109,7 +116,85 @@ bool IsCloser(float candidate_dist, int candidate_face_id, const GroundHit& best
     return Abs(candidate_dist - best.distance) <= kRayEpsilon && candidate_face_id < best.face_id;
 }
 
-}  // namespace
+// ---------------------------------------------------------------------------
+// Mesh-backed query helpers (CollMesh path)
+// ---------------------------------------------------------------------------
+
+static GroundHit RaycastRoomMesh(const physics::CollMesh& mesh,
+                                  const Vec3& origin, const Vec3& direction,
+                                  float max_distance, BackfacePolicy backface) {
+    using namespace physics;
+    // Always use Ignore so inverted-winding triangles are found; apply the same
+    // dot-product filter as legacy RaycastRoomSource to respect BackfacePolicy.
+    RayHit h = RaycastMesh(mesh, origin, direction, max_distance, BackfaceCull::Ignore);
+    if (!h.hit) return GroundHit{};
+    if (backface == BackfacePolicy::Ignore) {
+        const float dot = h.normal.x*direction.x + h.normal.y*direction.y + h.normal.z*direction.z;
+        if (dot >= 0.0f) return GroundHit{};
+    }
+    return GroundHit{
+        .hit = true,
+        .point = h.point,
+        .normal = h.normal,
+        .distance = h.t * max_distance,  // h.t is fraction [0,1]; convert to world units
+        .face_id = h.face_id,
+        .owner_id = -1,
+        .owner_velocity = {},
+    };
+}
+
+static int QueryWallsMesh(const physics::CollMesh& mesh,
+                           const Vec3& point, float radius,
+                           WallHit* out_hits, int max_hits) {
+    using namespace physics;
+    physics::AABB q = {
+        { point.x - radius, point.y - radius, point.z - radius },
+        { point.x + radius, point.y + radius, point.z + radius },
+    };
+    int candidates[256];
+    int n = OverlapAabbMesh(mesh, q, candidates, 256);
+
+    int count = 0;
+    for (int i = 0; i < n && count < max_hits; ++i) {
+        int fid = candidates[i];
+        const CollTriangle& ct = mesh.triangles[fid];
+        if (!(ct.material & MAT_SOLID)) continue;
+
+        const Vec3& a = mesh.world_verts[ct.i0];
+        const Vec3& b = mesh.world_verts[ct.i1];
+        const Vec3& c = mesh.world_verts[ct.i2];
+
+        SphereTriHit sh = SphereTriangle(point, radius, a, b, c);
+        if (!sh.hit) continue;
+
+        const float dx = point.x - sh.closest.x;
+        const float dy = point.y - sh.closest.y;
+        const float dz = point.z - sh.closest.z;
+        const float len = std::sqrt(dx*dx + dy*dy + dz*dz);
+        if (len < 1e-7f) continue;
+
+        const Vec3 normal = { dx/len, dy/len, dz/len };
+        if (normal.y >= 0.85f || normal.y <= -0.85f) continue;
+
+        const float pushout = radius - sh.dist;
+        if (pushout <= 0.0f) continue;
+
+        out_hits[count++] = WallHit{
+            .hit = true,
+            .point = sh.closest,
+            .normal = normal,
+            .pushout = pushout,
+            .face_id = fid,
+            .owner_id = -1,
+            .owner_velocity = {},
+        };
+    }
+    return count;
+}
+
+}  // namespace (close anon ns, reopen for AABB methods)
+
+// --- AABB methods ---
 
 bool AABB::Contains(const Vec3& point) const {
     return point.x >= min.x && point.x <= max.x &&
@@ -129,12 +214,19 @@ bool AABB::IntersectsXZ(const Vec3& point) const {
 }
 
 GroundHit RaycastRoomSource(const Room& room, const Vec3& origin, const Vec3& direction, float max_distance, BackfacePolicy backface) {
+    // Static world geometry: always use collmesh.
     GroundHit best;
+    if (room.coll_mesh) {
+        best = RaycastRoomMesh(*room.coll_mesh, origin, direction, max_distance, backface);
+    }
+
+    // Dynamic colliders (moving platforms): raycast against collider array.
     if (max_distance < 0.0f) return best;
 
     for (int i = 0; i < room.collider_count; ++i) {
         const Collider& collider = room.colliders[i];
         if (!collider.solid) continue;
+        if (room.coll_mesh && IsStaticCollider(collider)) continue;
 
         float distance = 0.0f;
         Vec3 normal;
@@ -190,11 +282,20 @@ CeilingHit QueryCeilingSource(const Room& room, const Vec3& origin, float max_di
 
 int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_hits, int max_hits) {
     int count = 0;
+
+    // Static world geometry: always use collmesh.
+    if (room.coll_mesh) {
+        count = QueryWallsMesh(*room.coll_mesh, point, radius, out_hits, max_hits);
+        if (count >= max_hits) return count;
+    }
+
+    // Dynamic colliders (moving platforms): check collider array.
     const float radius_sq = radius * radius;
 
     for (int i = 0; i < room.collider_count && count < max_hits; ++i) {
         const Collider& c = room.colliders[i];
         if (!c.solid) continue;
+        if (room.coll_mesh && c.owner_id == kStaticOwner) continue;
 
         // Skip floor/ceiling planes; for Box colliders the per-face normal is
         // derived from the closest-point direction below, so the per-collider

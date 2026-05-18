@@ -1,0 +1,13 @@
+{
+  "_comment": "Anchor fixture for first-room cross-artifact validation. Gameplay anchors are extracted from .map entity origins. Render anchors are exported from .glb empties. Tolerances per docs/first-room-brief.md.",
+  "room_id": "first-room",
+  "tolerance_unit": 0.5,
+  "anchors": {
+    "spawn":        { "purpose": "player_start",       "gameplay": [0,0,0], "render": [0,0,0], "tolerance": 0.1 },
+    "dash_takeoff": { "purpose": "dash_gap_entry",     "gameplay": [0,0,0], "render": [0,0,0], "tolerance": 0.5 },
+    "dash_landing": { "purpose": "dash_gap_exit",      "gameplay": [0,0,0], "render": [0,0,0], "tolerance": 0.5 },
+    "climb_wall":   { "purpose": "wall_grab_test",     "gameplay": [0,0,0], "render": [0,0,0], "tolerance": 0.5 },
+    "berry_route":  { "purpose": "collectible_route",  "gameplay": [0,0,0], "render": [0,0,0], "tolerance": 0.5 },
+    "kill_drop":    { "purpose": "respawn_challenge",  "gameplay": [0,0,0], "render": [0,0,0], "tolerance": 1.0 }
+  }
+}

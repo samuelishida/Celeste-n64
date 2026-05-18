@@ -6,6 +6,7 @@ RespawnSystem::RespawnSystem(MovementConfig config) : config_(config) {}
 
 void RespawnSystem::ResetState(PlayerState& player, const Vec3& checkpoint) const {
     player.position = checkpoint;
+    player.prev_position = checkpoint;
     player.velocity = {};
     player.grounded = false;
     player.air_dash_available = true;

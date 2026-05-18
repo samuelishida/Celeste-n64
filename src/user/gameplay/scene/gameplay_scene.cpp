@@ -9,6 +9,7 @@
 #include <t3d/t3dmath.h>
 #include <t3d/t3dmodel.h>
 
+#include "gameplay/runtime/timing.hpp"
 #include "gameplay/player/camera_controller.hpp"
 #include "gameplay/world/collectible.hpp"
 #include "gameplay/debug_hud.hpp"
@@ -18,12 +19,14 @@
 #include "gameplay/render/level_renderer.hpp"
 #include "gameplay/render/material_catalog.hpp"
 #include "gameplay/render/model.hpp"
+#include "gameplay/render/static_room_model.hpp"
 #include "gameplay/render/texture.hpp"
 #include "gameplay/world/actor_world.hpp"
 #include "gameplay/world/entity_dispatch.hpp"
 #include "gameplay/actor/strawberry_actor.hpp"
 #include "gameplay/actor/refill_actor.hpp"
 #include "gameplay/actor/spring_actor.hpp"
+#include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/world/level_loader.hpp"
 #include "gameplay/world/respawn_system.hpp"
 #include "gameplay/world/room_data.hpp"
@@ -34,7 +37,6 @@ namespace madeline_cube {
 
 namespace {
 
-constexpr float kFixedDeltaSeconds = 1.0f / 60.0f;
 constexpr float kPlayerHalfHeight = 1.0f;
 
 struct RenderObject {
@@ -157,6 +159,8 @@ struct GameplayScene::Impl {
 
     StaticModel strawberry_model;
     StaticModel madeline_model;
+    StaticModel room_fixture_model;
+    StaticRoomModel static_room_model;
     SpriteTexture rock1_texture;
 
     LevelGeometry level_geometry;
@@ -180,9 +184,13 @@ struct GameplayScene::Impl {
     CollectibleState collectible;
     CameraState camera;
 
+    FixedStepAccumulator fixed_step;
+    float render_alpha = 1.0f;
+
     DebugHUD debug_hud;
     RomTelemetry telemetry;
     bool baked_level_loaded_ = false;
+    bool room_fixture_visible_ = false;
 };
 
 void GameplayScene::Init() {
@@ -199,12 +207,15 @@ void GameplayScene::Init() {
     impl_->debug_hud.Init();
     impl_->strawberry_model.Load("rom:/mdl/strawberry.t3dm");
     impl_->madeline_model.Load("rom:/mdl/madeline.t3dm");
+    impl_->room_fixture_model.Load("rom:/mdl/room_fixture.t3dm");
+    impl_->room_fixture_model.UpdateMatrix({0.0f, 4.0f, -12.0f}, 6.0f, 0.0f);
+    impl_->static_room_model.Load("rom:/lvl/first-room.t3dm");
 
     impl_->baked_level_loaded_ =
-        LoadLevel("rom:/lvl/1-1.lvl", impl_->room, impl_->level_geometry) &&
+        LoadLevel("rom:/lvl/first-room.lvl", impl_->room, impl_->level_geometry) &&
         impl_->level_renderer.Init(impl_->level_geometry);
     if (impl_->baked_level_loaded_) {
-        impl_->material_catalog.Load("1-1");
+        impl_->material_catalog.Load("first-room");
         DispatchLevelEntities(impl_->room, impl_->actor_world,
                               impl_->strawberry_actor,
                               impl_->refill_actor,
@@ -215,6 +226,7 @@ void GameplayScene::Init() {
 
     impl_->checkpoint = impl_->room.checkpoint;
     impl_->player.position = impl_->room.player_start;
+    impl_->player.prev_position = impl_->player.position;
     impl_->player.grounded = false;
     impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
     impl_->telemetry.RecordSpawn();
@@ -241,8 +253,15 @@ void GameplayScene::Shutdown() {
     impl_->debug_hud.Shutdown();
     impl_->strawberry_model.Free();
     impl_->madeline_model.Free();
+    impl_->room_fixture_model.Free();
+    impl_->static_room_model.Free();
     impl_->material_catalog.Unload();
     impl_->level_renderer.Free();
+
+    if (impl_->room.coll_mesh) {
+        physics::FreeCollMesh(impl_->room.coll_mesh);
+        impl_->room.coll_mesh = nullptr;
+    }
 
     free_uncached(impl_->cube_vertices);
     free_uncached(impl_->player_render.matrix_fp);
@@ -259,6 +278,12 @@ void GameplayScene::Update(float delta_seconds) {
     if (impl_ == nullptr) return;
 
     joypad_poll();
+    const joypad_buttons_t pressed_buttons = joypad_get_buttons_pressed(JOYPAD_PORT_1);
+    if (pressed_buttons.start) {
+        impl_->room_fixture_visible_ = !impl_->room_fixture_visible_;
+        debugf("[fixture] room fixture %s\n", impl_->room_fixture_visible_ ? "ON" : "OFF");
+    }
+    // Input sampled once per render frame; same values replayed across all substeps.
     const PlayerInput input = ReadPlayerInput();
     const CameraInput camera_input = ReadCameraInput();
     const Vec3 camera_forward = {
@@ -267,31 +292,37 @@ void GameplayScene::Update(float delta_seconds) {
         impl_->camera.target.z - impl_->camera.position.z,
     };
 
-    const PlayerController::StepContext player_step = impl_->player_controller.TimerInputPhase(
-        impl_->player,
-        input,
-        camera_forward,
-        delta_seconds
-    );
-    impl_->player_controller.StatePhase(impl_->player, input, player_step, delta_seconds);
+    // Fixed-step physics loop.
+    const int n_ticks = impl_->fixed_step.BeginFrame(delta_seconds);
+    impl_->player.prev_position = impl_->player.position;
 
-    MotorInput motor_input;
-    motor_input.requested_velocity = impl_->player.velocity;
-    motor_input.wants_ground_snap = impl_->player.contact.was_grounded &&
-                                    impl_->player.movement_state != PlayerMovementState::Dashing;
-    motor_input.wants_coyote_refresh = true;
-    motor_input.wants_dash_refill = impl_->player.dash_reset_cooldown_remaining <= 0.0f;
-    AdvanceMovingSurfaces(impl_->room, delta_seconds);
-    const bool was_grounded_pre_motor = impl_->player.contact.was_grounded;
-    const MotorResult motor_result =
-        impl_->player_motor.Step(impl_->player, impl_->room, motor_input, delta_seconds);
-    impl_->player_controller.LateContactPhase(impl_->player);
+    MotorResult motor_result = {};
+    bool was_grounded_pre_motor = impl_->player.contact.was_grounded;
+    bool did_respawn = false;
 
-    // Respawn delegates contact resolution to the motor so the motor remains
-    // the single owner of grounded/contact fields. Runs after the motor so
-    // kill-plane checks see the post-move position.
-    const bool did_respawn = impl_->respawn_system.Step(
-        impl_->player, impl_->checkpoint, impl_->room, impl_->player_motor);
+    for (int tick = 0; tick < n_ticks; ++tick) {
+        const PlayerController::StepContext player_step = impl_->player_controller.TimerInputPhase(
+            impl_->player, input, camera_forward, FixedStepAccumulator::kTickDt);
+        impl_->player_controller.StatePhase(impl_->player, input, player_step, FixedStepAccumulator::kTickDt);
+
+        MotorInput motor_input;
+        motor_input.requested_velocity = impl_->player.velocity;
+        motor_input.wants_ground_snap = impl_->player.contact.was_grounded &&
+                                        impl_->player.movement_state != PlayerMovementState::Dashing;
+        motor_input.wants_coyote_refresh = true;
+        motor_input.wants_dash_refill = impl_->player.dash_reset_cooldown_remaining <= 0.0f;
+        AdvanceMovingSurfaces(impl_->room, FixedStepAccumulator::kTickDt);
+        was_grounded_pre_motor = impl_->player.contact.was_grounded;
+        motor_result = impl_->player_motor.Step(impl_->player, impl_->room, motor_input, FixedStepAccumulator::kTickDt);
+        impl_->player_controller.LateContactPhase(impl_->player);
+
+        if (impl_->respawn_system.Step(impl_->player, impl_->checkpoint, impl_->room, impl_->player_motor)) {
+            did_respawn = true;
+            impl_->player.prev_position = impl_->player.position;
+        }
+    }
+
+    impl_->render_alpha = impl_->fixed_step.Alpha();
 
     impl_->telemetry.BeginFrame();
     impl_->telemetry.RecordPlayerState(impl_->player);
@@ -304,6 +335,7 @@ void GameplayScene::Update(float delta_seconds) {
             impl_->player.contact.ground_snap_cooldown_remaining <= 0.0f);
     if (did_respawn) {
         impl_->telemetry.RecordRespawn();
+        impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
     }
 
     // Camera reads the post-motor (and post-respawn) player state.
@@ -324,7 +356,10 @@ void GameplayScene::Update(float delta_seconds) {
         TryCollect(impl_->collectible, impl_->player.position);
     }
 
-    SetTransform(impl_->player_render, impl_->player.position, {1.0f, 1.0f, 1.0f});
+    {
+        const Vec3 interp = impl_->player.InterpolatedPosition(impl_->render_alpha);
+        SetTransform(impl_->player_render, interp, {1.0f, 1.0f, 1.0f});
+    }
     if (!impl_->baked_level_loaded_) {
         SetTransform(
             impl_->collectible_render,
@@ -370,7 +405,13 @@ void GameplayScene::Render() {
     t3d_light_set_ambient(impl_->ambient_light);
     t3d_light_set_directional(0, impl_->directional_light, &impl_->light_direction);
     t3d_light_set_count(1);
-    if (impl_->baked_level_loaded_) {
+    if (impl_->room_fixture_visible_) {
+        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
+        rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+        impl_->room_fixture_model.Draw();
+    } else if (impl_->static_room_model.IsLoaded()) {
+        impl_->static_room_model.Draw();
+    } else if (impl_->baked_level_loaded_) {
         // Baked level: textured geometry + actor models
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(
             T3D_FLAG_SHADED | T3D_FLAG_DEPTH | T3D_FLAG_TEXTURED));
@@ -400,11 +441,8 @@ void GameplayScene::Render() {
         constexpr float kMadelineYOffset = -1.0f;
         const Vec3 facing = impl_->player.facing;
         const float yaw = std::atan2(facing.x, facing.z);
-        const Vec3 draw_pos = {
-            impl_->player.position.x,
-            impl_->player.position.y + kMadelineYOffset,
-            impl_->player.position.z,
-        };
+        Vec3 draw_pos = impl_->player.InterpolatedPosition(impl_->render_alpha);
+        draw_pos.y += kMadelineYOffset;
         impl_->madeline_model.UpdateMatrix(draw_pos, kMadelineScale, yaw);
         impl_->madeline_model.Draw();
     } else {

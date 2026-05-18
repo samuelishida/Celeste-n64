@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include "gameplay/physics/coll_mesh.hpp"
+
 namespace madeline_cube {
 namespace {
 
@@ -33,6 +35,15 @@ void RecordWallContact(PlayerState& state, MotorResult& result, const WallHit& w
     if (wall.normal.x < -0.5f) state.wall_right = true;
 }
 
+// Returns true if the face permits climbing.
+// CollMesh faces require MAT_CLIMBABLE; dynamic colliders are always climbable.
+bool FaceIsClimbable(const Room& room, int face_id) {
+    if (face_id < 0) return true;  // dynamic collider
+    if (!room.coll_mesh) return true;  // no mesh — assume climbable
+    if (face_id >= static_cast<int>(room.coll_mesh->header->triangle_count)) return true;  // crafted OOB — safe fallback
+    return (room.coll_mesh->triangles[face_id].material & physics::MAT_CLIMBABLE) != 0;
+}
+
 GroundHit ProbeFloor(const Room& room, const Vec3& position, float half_height, float probe_distance) {
     const Vec3 feet = {position.x, position.y - half_height, position.z};
     return QueryFloorSource(room, feet, probe_distance);
@@ -61,10 +72,9 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
     state.contact.was_grounded = was_grounded;
     state.wall_left = false;
     state.wall_right = false;
+    state.wall_climbable = false;
 
     MotorResult result;
-    result.position = state.position;
-    result.velocity = state.velocity;
 
     const Vec3 delta = {
         state.velocity.x * delta_seconds,
@@ -120,6 +130,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
             state.position.z += wall.normal.z * wall.pushout;
             RemoveIntoNormal(state.velocity, wall.normal);
             RecordWallContact(state, result, wall);
+            if (FaceIsClimbable(room, wall.face_id)) state.wall_climbable = true;
         }
     }
 
@@ -164,6 +175,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
         const WallHit settled = QueryWallNearest(room, state.position, config_.radius + 0.05f);
         if (settled.hit) {
             RecordWallContact(state, result, settled);
+            if (FaceIsClimbable(room, settled.face_id)) state.wall_climbable = true;
         }
     }
 

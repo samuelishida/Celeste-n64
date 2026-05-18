@@ -74,7 +74,10 @@ PlayerState RunScenePlayerTick(
     controller.LateContactPhase(p);
 
     // 5. respawn (motor-delegated)
-    respawn.Step(p, checkpoint, room, motor);
+    const bool did_respawn = respawn.Step(p, checkpoint, room, motor);
+    if (did_respawn) {
+        camera_ctrl.Reset(camera, p.position);
+    }
 
     // 6. camera reads post-motor player state
     camera_ctrl.Step(camera, p.position, p.wall_grabbing, {}, delta_seconds, &room);
@@ -178,6 +181,43 @@ int main() {
         assert(ApproxEq(after_scene.position.y, checkpoint.y));
         assert(ApproxEq(after_scene.position.z, checkpoint.z));
         assert(after_scene.grounded);  // motor resolved contact at the spawn
+    }
+
+    // --- Respawn also re-anchors the camera. If the old boom was shortened
+    //     by geometry before the fall, the spawn frame must not inherit that
+    //     stale close-up framing at a distant checkpoint. ---
+    {
+        Room obstructed_room = room;
+        obstructed_room.colliders[obstructed_room.collider_count++] = {
+            .type = ColliderType::Box,
+            .bounds = {.min = {-1.0f, 0.0f, -4.0f}, .max = {1.0f, 4.0f, -3.0f}},
+            .solid = true,
+        };
+
+        CameraState camera;
+        camera.target_forward = {0.0f, 0.0f, 1.0f};
+        camera_ctrl.Reset(camera, {0.0f, 1.0f, 0.0f});
+        for (int i = 0; i < 120; ++i) {
+            camera_ctrl.Step(camera, {0.0f, 1.0f, 0.0f}, false, {}, kDt, &obstructed_room);
+        }
+
+        PlayerState start;
+        start.position = {0.0f, config.respawn_fall_height - 1.0f, 0.0f};
+        start.velocity = {0.0f, -50.0f, 0.0f};
+        const Vec3 checkpoint = {0.0f, 1.0f, 20.0f};
+
+        RunScenePlayerTick(
+            start, obstructed_room, controller, motor, respawn, camera_ctrl, camera,
+            {}, checkpoint, kDt);
+
+        CameraState expected;
+        expected.target_forward = camera.target_forward;
+        expected.target_distance = camera.target_distance;
+        camera_ctrl.Reset(expected, checkpoint);
+
+        assert(ApproxEq(camera.position.x, expected.position.x));
+        assert(ApproxEq(camera.position.y, expected.position.y));
+        assert(ApproxEq(camera.position.z, expected.position.z));
     }
 
     return 0;
