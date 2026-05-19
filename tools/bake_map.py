@@ -302,7 +302,7 @@ def sort_vertices_ccw(vertices: List[Vec3], normal: Vec3) -> List[Vec3]:
     return sorted(vertices, key=angle_key)
 
 
-def compute_uv(point: Vec3, face: FaceDef, scale: float = 0.02) -> Tuple[float, float]:
+def compute_uv(point: Vec3, face: FaceDef, scale: float = 0.2) -> Tuple[float, float]:
     """Compute UV coordinates from Quake face parameters.
 
     Quake UVs: project point onto the face's texture axis, apply shift/rotation/scale.
@@ -363,7 +363,7 @@ def compute_uv(point: Vec3, face: FaceDef, scale: float = 0.02) -> Tuple[float, 
     v = (v + shift_v) / scale_v
 
     # Convert to port units (divide by some world-scale factor to get reasonable tiling)
-    # Port scale is 0.02 from Quake units to port units; texel density at ~16 px per port unit
+    # Port scale is 0.2 from Quake units to port units; texel density at ~16 px per port unit
     tex_per_unit = 0.003125  # 1/320: 320 quake units = 1 texture repeat at scale 1.0
     u *= tex_per_unit
     v *= tex_per_unit
@@ -374,9 +374,9 @@ def compute_uv(point: Vec3, face: FaceDef, scale: float = 0.02) -> Tuple[float, 
 # ── Coordinate transform ────────────────────────────────────────────
 
 def transform_point(p: Tuple[float, float, float]) -> Tuple[float, float, float]:
-    """Transform from Quake coords (Z-up) to port coords (Y-up), scale 0.02."""
+    """Transform from Quake coords (Z-up) to port coords (Y-up), scale 0.2."""
     x, y, z = p
-    return (x * 0.02, z * 0.02, -y * 0.02)
+    return (x * 0.2, z * 0.2, -y * 0.2)
 
 def transform_normal(n: Tuple[float, float, float]) -> Tuple[float, float, float]:
     """Transform normal from Quake to port coords (rotation only)."""

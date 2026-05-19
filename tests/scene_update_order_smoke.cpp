@@ -80,7 +80,7 @@ PlayerState RunScenePlayerTick(
     }
 
     // 6. camera reads post-motor player state
-    camera_ctrl.Step(camera, p.position, p.wall_grabbing, {}, delta_seconds, &room);
+    camera_ctrl.Step(camera, p.position, p.wall_grabbing, p.grounded, 0.0f, {}, delta_seconds, &room);
 
     return p;
 }
@@ -198,7 +198,7 @@ int main() {
         camera.target_forward = {0.0f, 0.0f, 1.0f};
         camera_ctrl.Reset(camera, {0.0f, 1.0f, 0.0f});
         for (int i = 0; i < 120; ++i) {
-            camera_ctrl.Step(camera, {0.0f, 1.0f, 0.0f}, false, {}, kDt, &obstructed_room);
+            camera_ctrl.Step(camera, {0.0f, 1.0f, 0.0f}, false, false, 0.0f, {}, kDt, &obstructed_room);
         }
 
         PlayerState start;

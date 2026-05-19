@@ -126,6 +126,7 @@ CollMesh* LoadCollMesh(const char* path) {
     SwapHeader(hdr);
 
     if (hdr->version != 1) { free(buf); return nullptr; }
+    if (!(hdr->quant_scale > 0.f))  { free(buf); return nullptr; }
     // BVH leaf count_or_zero and left_or_first are uint16_t; max usable triangles = 32767.
     if (hdr->triangle_count > 32767) { free(buf); return nullptr; }
 
@@ -158,6 +159,21 @@ CollMesh* LoadCollMesh(const char* path) {
                 tris[i].i2 >= hdr->vertex_count) {
                 free(buf);
                 return nullptr;
+            }
+        }
+    }
+
+    // Validate BVH leaf triangle ranges are in bounds
+    {
+        const CollBvhNode* nodes = reinterpret_cast<const CollBvhNode*>(base + hdr->bvh_offset);
+        for (uint32_t i = 0; i < hdr->bvh_node_count; ++i) {
+            if (nodes[i].count_or_zero > 0) {
+                uint32_t first = nodes[i].left_or_first;
+                uint32_t last  = first + nodes[i].count_or_zero;
+                if (first >= hdr->triangle_count || last > hdr->triangle_count) {
+                    free(buf);
+                    return nullptr;
+                }
             }
         }
     }

@@ -123,9 +123,9 @@ struct Room {
     MovingSurface moving_surfaces[kMaxMovingSurfaces];
     int moving_surface_count = 0;
 
-    Vec3 player_start = {0.0f, 3.0f, 0.0f};
-    Vec3 checkpoint = {0.0f, 3.0f, 0.0f};
-    float kill_plane_y = -20.0f;
+    Vec3 player_start = {0.0f, 30.0f, 0.0f};
+    Vec3 checkpoint = {0.0f, 30.0f, 0.0f};
+    float kill_plane_y = -200.0f;
 
     // Triangle mesh collision for static world geometry. Set by level_loader
     // when .colmesh sidecar exists. All static queries use this path.

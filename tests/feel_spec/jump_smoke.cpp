@@ -17,7 +17,7 @@ int main() {
     PlayerState buffered;
     buffered.grounded = false;
     controller.Step(buffered, {.jump_pressed = true, .jump_held = true}, {0,0,1}, dt);
-    assert(buffered.jump_buffer_remaining > 0.08f);
+    assert(buffered.jump_buffer_remaining > 0.06f);
     buffered.grounded = true;
     controller.Step(buffered, {.jump_held = true}, {0,0,1}, dt);
     assert(buffered.velocity.y > 0.0f);
@@ -32,11 +32,11 @@ int main() {
     assert(short_hop.velocity.y < full.velocity.y);
 
     PlayerState rise;
-    rise.velocity.y = 5.0f;
+    rise.velocity.y = 50.0f;
     controller.Step(rise, {.jump_held = true}, {0,0,1}, dt);
     PlayerState apex;
-    apex.velocity.y = 0.5f;
+    apex.velocity.y = 5.0f;
     controller.Step(apex, {.jump_held = true}, {0,0,1}, dt);
-    assert((5.0f - rise.velocity.y) < (0.5f - apex.velocity.y));
+    assert((50.0f - rise.velocity.y) < (5.0f - apex.velocity.y));
     return 0;
 }

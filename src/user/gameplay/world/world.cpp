@@ -13,6 +13,16 @@ constexpr float kRayEpsilon = 0.0001f;
 // Static colliders from the legacy path have owner_id == -1 and are skipped
 // when a CollMesh is present (CollMesh handles all static geometry).
 constexpr int kStaticOwner = -1;
+
+struct OwnerInfo { int id; Vec3 velocity; };
+
+OwnerInfo ResolveOwner(const physics::CollMesh& mesh, const Room& room, int face_id) {
+    uint16_t owner_raw = physics::SurfaceOwnerOf(mesh, face_id);
+    if (owner_raw == physics::INVALID_OWNER) return {kStaticOwner, {}};
+    int owner_id = static_cast<int>(owner_raw);
+    const MovingSurface* ms = FindMovingSurface(room, owner_id);
+    return {owner_id, ms ? ms->rider_velocity : Vec3{}};
+}
 inline bool IsStaticCollider(const Collider& c) { return c.owner_id == kStaticOwner; }
 
 float Abs(float value) {
@@ -120,7 +130,7 @@ bool IsCloser(float candidate_dist, int candidate_face_id, const GroundHit& best
 // Mesh-backed query helpers (CollMesh path)
 // ---------------------------------------------------------------------------
 
-static GroundHit RaycastRoomMesh(const physics::CollMesh& mesh,
+static GroundHit RaycastRoomMesh(const Room& room, const physics::CollMesh& mesh,
                                   const Vec3& origin, const Vec3& direction,
                                   float max_distance, BackfacePolicy backface) {
     using namespace physics;
@@ -132,18 +142,19 @@ static GroundHit RaycastRoomMesh(const physics::CollMesh& mesh,
         const float dot = h.normal.x*direction.x + h.normal.y*direction.y + h.normal.z*direction.z;
         if (dot >= 0.0f) return GroundHit{};
     }
+    OwnerInfo owner = ResolveOwner(mesh, room, h.face_id);
     return GroundHit{
         .hit = true,
         .point = h.point,
         .normal = h.normal,
         .distance = h.t * max_distance,  // h.t is fraction [0,1]; convert to world units
         .face_id = h.face_id,
-        .owner_id = -1,
-        .owner_velocity = {},
+        .owner_id = owner.id,
+        .owner_velocity = owner.velocity,
     };
 }
 
-static int QueryWallsMesh(const physics::CollMesh& mesh,
+static int QueryWallsMesh(const Room& room, const physics::CollMesh& mesh,
                            const Vec3& point, float radius,
                            WallHit* out_hits, int max_hits) {
     using namespace physics;
@@ -179,14 +190,15 @@ static int QueryWallsMesh(const physics::CollMesh& mesh,
         const float pushout = radius - sh.dist;
         if (pushout <= 0.0f) continue;
 
+        OwnerInfo owner = ResolveOwner(mesh, room, fid);
         out_hits[count++] = WallHit{
             .hit = true,
             .point = sh.closest,
             .normal = normal,
             .pushout = pushout,
             .face_id = fid,
-            .owner_id = -1,
-            .owner_velocity = {},
+            .owner_id = owner.id,
+            .owner_velocity = owner.velocity,
         };
     }
     return count;
@@ -217,7 +229,7 @@ GroundHit RaycastRoomSource(const Room& room, const Vec3& origin, const Vec3& di
     // Static world geometry: always use collmesh.
     GroundHit best;
     if (room.coll_mesh) {
-        best = RaycastRoomMesh(*room.coll_mesh, origin, direction, max_distance, backface);
+        best = RaycastRoomMesh(room, *room.coll_mesh, origin, direction, max_distance, backface);
     }
 
     // Dynamic colliders (moving platforms): raycast against collider array.
@@ -285,7 +297,7 @@ int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_h
 
     // Static world geometry: always use collmesh.
     if (room.coll_mesh) {
-        count = QueryWallsMesh(*room.coll_mesh, point, radius, out_hits, max_hits);
+        count = QueryWallsMesh(room, *room.coll_mesh, point, radius, out_hits, max_hits);
         if (count >= max_hits) return count;
     }
 

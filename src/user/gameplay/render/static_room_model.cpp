@@ -4,7 +4,7 @@ namespace madeline_cube {
 
 bool StaticRoomModel::Load(const char* dfs_path) {
     if (!model_.Load(dfs_path)) return false;
-    model_.UpdateMatrix({0.0f, 0.0f, 0.0f}, 1.0f, 0.0f);
+    model_.UpdateMatrix({0.0f, 0.0f, 0.0f}, 10.0f, 0.0f);
     return true;
 }
 

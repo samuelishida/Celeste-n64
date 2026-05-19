@@ -49,6 +49,7 @@ struct ClimbState {
     Vec3 corner_to;
     float corner_progress = 0.0f;
     float cooldown_remaining = 0.0f;
+    float hop_no_move_remaining = 0.0f;
 };
 
 struct PlayerState {
@@ -67,11 +68,8 @@ struct PlayerState {
     bool dashed_on_ground = false;
     PlayerMovementState movement_state = PlayerMovementState::Normal;
     LocomotionState locomotion_state = LocomotionState::Idle;
-    float stamina = 110.0f;
-    bool climb_exhausted = false;
     float dash_hitstop_remaining = 0.0f;
     float dash_active_remaining = 0.0f;
-    bool jump_cut_applied = false;
 
     // Coyote time: counts down after leaving ground.
     float coyote_time_remaining = 0.0f;
@@ -83,6 +81,11 @@ struct PlayerState {
     bool wall_grabbing = false;
     float wall_grab_time_remaining = 0.0f;
     float wall_jump_cooldown_remaining = 0.0f;
+
+    // Stamina system (OG Celeste64-style)
+    float stamina = 110.0f;
+    float stamina_max = 110.0f;
+    bool climb_exhausted = false;
 
     // Celeste-like jump sustain.
     float hold_jump_time_remaining = 0.0f;
@@ -103,6 +106,8 @@ struct PlayerState {
     bool wall_right = false;
     // True if the nearest wall face permits climbing (legacy: any wall; collmesh: MAT_CLIMBABLE).
     bool wall_climbable = false;
+    // Wall normal from the most recent wall contact (set by motor or test fixture).
+    Vec3 wall_normal = {0.0f, 0.0f, 0.0f};
 
     Vec3 InterpolatedPosition(float alpha) const {
         return {

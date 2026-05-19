@@ -7,11 +7,11 @@
 namespace madeline_cube {
 
 struct PlayerMotorConfig {
-    float half_height = 1.0f;
-    float radius = 0.5f;
-    float sweep_step = 0.5f;
-    float ground_contact_tolerance = 0.05f;
-    float ground_snap_distance = 5.0f;
+    float half_height = 10.0f;
+    float radius = 5.0f;
+    float sweep_step = 5.0f;
+    float ground_contact_tolerance = 0.5f;
+    float ground_snap_distance = 50.0f;
     float platform_carry_storage_time = 0.1f;
 };
 
