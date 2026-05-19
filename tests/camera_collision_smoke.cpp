@@ -11,11 +11,14 @@ int main() {
     //     desired camera position. The camera uses the source-shaped
     //     RaycastRoomSource (with backface-ignore) for this query, so we
     //     also assert the same source query reports the same obstruction. ---
+    //
+    //     With 10x-scaled camera (look_at_height=12, distance=60, height=30),
+    //     the boom from (0,12,0) toward (0,42,-60) passes through this box.
     {
         Room room;
         room.colliders[room.collider_count++] = {
             .type = ColliderType::Box,
-            .bounds = {.min = {-1.0f, 0.0f, -4.0f}, .max = {1.0f, 4.0f, -3.0f}},
+            .bounds = {.min = {-1.0f, 20.0f, -35.0f}, .max = {1.0f, 30.0f, -25.0f}},
             .solid = true,
         };
 
@@ -26,17 +29,20 @@ int main() {
         unobstructed.target_forward = camera.target_forward;
         controller.Reset(camera, {0.0f, 0.0f, 0.0f});
         controller.Reset(unobstructed, {0.0f, 0.0f, 0.0f});
-        controller.Step(camera, {0.0f, 0.0f, 0.0f}, false, {}, 1.0f / 60.0f, &room);
-        controller.Step(unobstructed, {0.0f, 0.0f, 0.0f}, false, {}, 1.0f / 60.0f, nullptr);
+        controller.Step(camera, {0.0f, 0.0f, 0.0f}, false, false, 0.0f, {}, 1.0f / 60.0f, &room);
+        controller.Step(unobstructed, {0.0f, 0.0f, 0.0f}, false, false, 0.0f, {}, 1.0f / 60.0f, nullptr);
         // Obstructed boom must end up closer than the free boom.
         assert(camera.position.z > unobstructed.position.z);
 
         // The camera must share the source-shaped query layer: a probe from
         // the look-at toward the unobstructed desired position must hit the
         // same box.
-        const Vec3 look_at = {0.0f, 1.2f, 0.0f};  // matches DesiredLookAt
-        const Vec3 dir = {0.0f, 0.0f, -1.0f};      // boom points along -Z
-        const GroundHit hit = RaycastRoomSource(room, look_at, dir, 10.0f, BackfacePolicy::Ignore);
+        const Vec3 look_at = {0.0f, 12.0f, 0.0f};  // matches DesiredLookAt
+        // Actual boom direction from look_at toward desired_pos (0,42,-60):
+        const Vec3 dir = {0.0f, 30.0f, -60.0f};    // un-normalized direction
+        const float dir_len = std::sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+        const Vec3 dir_n = {dir.x/dir_len, dir.y/dir_len, dir.z/dir_len};
+        const GroundHit hit = RaycastRoomSource(room, look_at, dir_n, 80.0f, BackfacePolicy::Ignore);
         assert(hit.hit);
         assert(hit.normal.z > 0.5f);  // box face normal points back toward +Z
     }

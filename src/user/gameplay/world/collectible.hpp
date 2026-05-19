@@ -6,7 +6,7 @@ namespace madeline_cube {
 
 struct CollectibleState {
     Vec3 position;
-    float pickup_radius = 1.0f;
+    float pickup_radius = 10.0f;
     bool collected = false;
 };
 

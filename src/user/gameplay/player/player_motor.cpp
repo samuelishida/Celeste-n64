@@ -3,11 +3,12 @@
 #include <cmath>
 
 #include "gameplay/physics/coll_mesh.hpp"
+#include "gameplay/world/world.hpp"
 
 namespace madeline_cube {
 namespace {
 
-constexpr float kGroundSkin = 0.001f;
+constexpr float kGroundSkin = 0.01f;
 
 float Length(const Vec3& v) {
     return std::sqrt((v.x * v.x) + (v.y * v.y) + (v.z * v.z));
@@ -31,8 +32,40 @@ void RecordWallContact(PlayerState& state, MotorResult& result, const WallHit& w
     result.wall_contact = true;
     result.wall_face_id = wall.face_id;
     result.wall_normal = wall.normal;
-    if (wall.normal.x > 0.5f) state.wall_left = true;
-    if (wall.normal.x < -0.5f) state.wall_right = true;
+    state.wall_normal = wall.normal;
+    // Wall contact: detect walls facing any horizontal direction.
+    // Use wall_normal.x as primary, wall_normal.z as secondary.
+    // The controller uses wall_normal + wall_facing_dot for direction-specific logic,
+    // so wall_left/wall_right just gate "there is a wall" entry.
+    const float h = std::fabs(wall.normal.x) + std::fabs(wall.normal.z);
+    if (h > 0.5f && std::fabs(wall.normal.y) < 0.35f) {
+        // Wall is vertical enough (not floor/ceiling) and has horizontal normal component.
+        // Determine left/right relative to player facing direction.
+        // Cross product of facing with wall normal sign determines side.
+        if (wall.normal.x > 0.5f || wall.normal.z > 0.5f) state.wall_left = true;
+        if (wall.normal.x < -0.5f || wall.normal.z < -0.5f) state.wall_right = true;
+    }
+}
+
+GroundHit SweepToGroundHit(const Room& room, const physics::SweepSphereHit& sweep, float max_dist) {
+    using namespace physics;
+    uint16_t owner_raw = SurfaceOwnerOf(*room.coll_mesh, sweep.face_id);
+    int owner_id = -1;
+    Vec3 owner_velocity = {};
+    if (owner_raw != INVALID_OWNER) {
+        owner_id = static_cast<int>(owner_raw);
+        const MovingSurface* ms = FindMovingSurface(room, owner_id);
+        if (ms) owner_velocity = ms->rider_velocity;
+    }
+    return GroundHit{
+        .hit = true,
+        .point = sweep.point,
+        .normal = sweep.normal,
+        .distance = sweep.t * max_dist,
+        .face_id = sweep.face_id,
+        .owner_id = owner_id,
+        .owner_velocity = owner_velocity,
+    };
 }
 
 // Returns true if the face permits climbing.
@@ -44,8 +77,22 @@ bool FaceIsClimbable(const Room& room, int face_id) {
     return (room.coll_mesh->triangles[face_id].material & physics::MAT_CLIMBABLE) != 0;
 }
 
-GroundHit ProbeFloor(const Room& room, const Vec3& position, float half_height, float probe_distance) {
+GroundHit ProbeFloor(const Room& room, const Vec3& position, float half_height, float probe_distance, float radius) {
     const Vec3 feet = {position.x, position.y - half_height, position.z};
+    // Sweep sphere to catch platform edges when player radius overhangs.
+    // Fallback to raycast for reliable stationary ground detection (sweep uses discrete sampling).
+    if (room.coll_mesh) {
+        using namespace physics;
+        const Vec3 probe_origin = {feet.x, feet.y + radius, feet.z};
+        SweepSphereHit sweep = SweepSphereMesh(*room.coll_mesh, probe_origin, {0.0f, -1.0f, 0.0f}, radius, probe_distance);
+        if (sweep.hit) {
+            return SweepToGroundHit(room, sweep, probe_distance);
+        }
+        // Sweep missed; raycast catches flat ground the discrete sampling skipped.
+        GroundHit ray = QueryFloorSource(room, feet, probe_distance);
+        if (ray.hit) return ray;
+        return GroundHit{};
+    }
     return QueryFloorSource(room, feet, probe_distance);
 }
 
@@ -73,6 +120,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
     state.wall_left = false;
     state.wall_right = false;
     state.wall_climbable = false;
+    state.wall_normal = {0.0f, 0.0f, 0.0f};
 
     MotorResult result;
 
@@ -106,7 +154,20 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
         if (step_vec.y < 0.0f) {
             const Vec3 feet_origin = {state.position.x, prev_feet_y, state.position.z};
             const float probe = -step_vec.y + kGroundSkin;
-            const GroundHit floor = QueryFloorSource(room, feet_origin, probe);
+            // Use sphere sweep for floor probe to catch platform edges
+            GroundHit floor;
+            if (room.coll_mesh) {
+                using namespace physics;
+                const Vec3 probe_origin = {feet_origin.x, feet_origin.y + config_.radius, feet_origin.z};
+                SweepSphereHit sweep = SweepSphereMesh(*room.coll_mesh, probe_origin, {0.0f, -1.0f, 0.0f}, config_.radius, probe);
+                if (sweep.hit) {
+                    floor = SweepToGroundHit(room, sweep, probe);
+                } else {
+                    floor = QueryFloorSource(room, feet_origin, probe);
+                }
+            } else {
+                floor = QueryFloorSource(room, feet_origin, probe);
+            }
             if (floor.hit) {
                 ApplyGroundContact(state, result, floor, config_.half_height);
                 step_vec.y = 0.0f;
@@ -139,7 +200,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
     result.ground_normal = {0.0f, 1.0f, 0.0f};
 
     const GroundHit ground = ProbeFloor(room, state.position, config_.half_height,
-                                        config_.ground_contact_tolerance);
+                                        config_.ground_contact_tolerance, config_.radius);
     if (ground.hit) {
         ApplyGroundContact(state, result, ground, config_.half_height);
     } else if (grounded_mid_sweep) {
@@ -148,7 +209,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
         // capture only zeros vertical velocity).  Re-probe with one sweep_step
         // of tolerance so the post-grounding horizontal travel stays pinned.
         const GroundHit follow = ProbeFloor(room, state.position, config_.half_height,
-                                            config_.sweep_step + kGroundSkin);
+                                            config_.sweep_step + kGroundSkin, config_.radius);
         if (follow.hit) {
             ApplyGroundContact(state, result, follow, config_.half_height);
         }
@@ -156,7 +217,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
                was_grounded &&
                state.contact.ground_snap_cooldown_remaining <= 0.0f) {
         const GroundHit snap = ProbeFloor(room, state.position, config_.half_height,
-                                          config_.ground_snap_distance);
+                                          config_.ground_snap_distance, config_.radius);
         if (snap.hit) {
             ApplyGroundContact(state, result, snap, config_.half_height);
         }
@@ -172,7 +233,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
     }
 
     if (!result.wall_contact) {
-        const WallHit settled = QueryWallNearest(room, state.position, config_.radius + 0.05f);
+        const WallHit settled = QueryWallNearest(room, state.position, config_.radius + 0.5f);
         if (settled.hit) {
             RecordWallContact(state, result, settled);
             if (FaceIsClimbable(room, settled.face_id)) state.wall_climbable = true;

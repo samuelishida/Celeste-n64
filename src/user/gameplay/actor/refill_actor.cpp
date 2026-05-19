@@ -6,7 +6,7 @@ namespace madeline_cube {
 
 void RefillActor::Init() {
     InitBobbing();
-    pickup_radius = 1.5f;
+    pickup_radius = 15.0f;
     respawn_time_ = 3.0f;
 }
 

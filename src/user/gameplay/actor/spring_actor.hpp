@@ -9,7 +9,7 @@ public:
     void Init() override;
     bool IsCollectible() const override { return true; }
 
-    float launch_speed_y = 16.0f;
+    float launch_speed_y = 160.0f;
 };
 
 }  // namespace madeline_cube

@@ -6,73 +6,73 @@ namespace {
 
 Room BuildStartRoom() {
     Room room;
-    room.player_start = {0.0f, 3.0f, 0.0f};
-    room.checkpoint = {0.0f, 3.0f, 0.0f};
-    room.kill_plane_y = -20.0f;
+    room.player_start = {0.0f, 30.0f, 0.0f};
+    room.checkpoint = {0.0f, 30.0f, 0.0f};
+    room.kill_plane_y = -200.0f;
 
     // Main platform
     room.geometry[room.geometry_count++] = {
-        .position = {0.0f, -1.0f, 0.0f},
-        .scale = {10.0f, 1.0f, 10.0f},
+        .position = {0.0f, -10.0f, 0.0f},
+        .scale = {100.0f, 10.0f, 100.0f},
         .color = 0x5AA06AFF,
     };
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Plane,
-        .bounds = {.min = {-10.0f, 0.0f, -10.0f}, .max = {10.0f, 0.0f, 10.0f}},
+        .bounds = {.min = {-100.0f, 0.0f, -100.0f}, .max = {100.0f, 0.0f, 100.0f}},
         .solid = true,
     };
 
     // Left wall for wall-grab practice
     room.geometry[room.geometry_count++] = {
-        .position = {-12.0f, 4.0f, 0.0f},
-        .scale = {1.0f, 8.0f, 4.0f},
+        .position = {-120.0f, 40.0f, 0.0f},
+        .scale = {10.0f, 80.0f, 40.0f},
         .color = 0x888888FF,
     };
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Box,
-        .bounds = {.min = {-13.0f, 0.0f, -2.0f}, .max = {-11.0f, 8.0f, 2.0f}},
+        .bounds = {.min = {-130.0f, 0.0f, -20.0f}, .max = {-110.0f, 80.0f, 20.0f}},
         .solid = true,
     };
 
     // Right wall
     room.geometry[room.geometry_count++] = {
-        .position = {12.0f, 4.0f, 0.0f},
-        .scale = {1.0f, 8.0f, 4.0f},
+        .position = {120.0f, 40.0f, 0.0f},
+        .scale = {10.0f, 80.0f, 40.0f},
         .color = 0x888888FF,
     };
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Box,
-        .bounds = {.min = {11.0f, 0.0f, -2.0f}, .max = {13.0f, 8.0f, 2.0f}},
+        .bounds = {.min = {110.0f, 0.0f, -20.0f}, .max = {130.0f, 80.0f, 20.0f}},
         .solid = true,
     };
 
     // Small raised platform
     room.geometry[room.geometry_count++] = {
-        .position = {6.0f, 1.0f, 0.0f},
-        .scale = {3.0f, 1.0f, 3.0f},
+        .position = {60.0f, 10.0f, 0.0f},
+        .scale = {30.0f, 10.0f, 30.0f},
         .color = 0x5AA06AFF,
     };
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Plane,
-        .bounds = {.min = {3.0f, 2.0f, -3.0f}, .max = {9.0f, 2.0f, 3.0f}},
+        .bounds = {.min = {30.0f, 20.0f, -30.0f}, .max = {90.0f, 20.0f, 30.0f}},
         .solid = true,
     };
 
     // Strawberry collectible
     room.spawns[room.spawn_count++] = {
-        .position = {6.0f, 4.0f, 0.0f},
+        .position = {60.0f, 40.0f, 0.0f},
         .placeholder_id = 2,  // pickup_strawberry
     };
 
     // Refill gem
     room.spawns[room.spawn_count++] = {
-        .position = {-6.0f, 2.0f, 0.0f},
+        .position = {-60.0f, 20.0f, 0.0f},
         .placeholder_id = 3,  // pickup_refill
     };
 
     // Spring board
     room.spawns[room.spawn_count++] = {
-        .position = {0.0f, 0.5f, 6.0f},
+        .position = {0.0f, 5.0f, 60.0f},
         .placeholder_id = 7,  // actor_spring
     };
 
@@ -84,28 +84,28 @@ Room BuildPhysicsQueryGrayboxRoom() {
 
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Plane,
-        .bounds = {.min = {-8.0f, 0.0f, -8.0f}, .max = {8.0f, 0.0f, 8.0f}},
+        .bounds = {.min = {-80.0f, 0.0f, -80.0f}, .max = {80.0f, 0.0f, 80.0f}},
         .solid = true,
     };
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Plane,
-        .bounds = {.min = {-8.0f, 6.0f, -8.0f}, .max = {8.0f, 6.0f, 8.0f}},
+        .bounds = {.min = {-80.0f, 60.0f, -80.0f}, .max = {80.0f, 60.0f, 80.0f}},
         .solid = true,
     };
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Box,
-        .bounds = {.min = {-4.0f, 0.0f, -2.0f}, .max = {-3.0f, 6.0f, 2.0f}},
+        .bounds = {.min = {-40.0f, 0.0f, -20.0f}, .max = {-30.0f, 60.0f, 20.0f}},
         .solid = true,
     };
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Box,
-        .bounds = {.min = {3.0f, 0.0f, -2.0f}, .max = {4.0f, 6.0f, 2.0f}},
+        .bounds = {.min = {30.0f, 0.0f, -20.0f}, .max = {40.0f, 60.0f, 20.0f}},
         .solid = true,
     };
     // Intentional duplicate wall: equal-distance ray hits must prefer collider 3.
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Box,
-        .bounds = {.min = {3.0f, 0.0f, -2.0f}, .max = {4.0f, 6.0f, 2.0f}},
+        .bounds = {.min = {30.0f, 0.0f, -20.0f}, .max = {40.0f, 60.0f, 20.0f}},
         .solid = true,
     };
 
@@ -129,25 +129,25 @@ Room BuildSlopeFixtureRoom() {
     Room room;
     constexpr float kSqrtHalf = 0.70710678f;  // sin/cos of 45 degrees
 
-    // Flat floor at y=0 across x in [-15, 15].  Leaves room left of the slope
+    // Flat floor at y=0 across x in [-150, 150].  Leaves room left of the slope
     // for the player to stand on level ground before stepping onto the ramp.
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Plane,
-        .bounds = {.min = {-15.0f, 0.0f, -5.0f}, .max = {15.0f, 0.0f, 5.0f}},
+        .bounds = {.min = {-150.0f, 0.0f, -50.0f}, .max = {150.0f, 0.0f, 50.0f}},
         .solid = true,
         .normal = {0.0f, 1.0f, 0.0f},
         .face_id = 0,
     };
 
-    // 45-degree slope spanning x in [-5, 0], rising from y=0 at x=0 up to
-    // y=5 at x=-5.  Normal faces up and toward +X (downhill toward +X).
+    // 45-degree slope spanning x in [-50, 0], rising from y=0 at x=0 up to
+    // y=50 at x=-50.  Normal faces up and toward +X (downhill toward +X).
     // Plane origin must be an actual on-plane point: pick the high corner.
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Plane,
-        .bounds = {.min = {-5.0f, 0.0f, -5.0f}, .max = {0.0f, 5.0f, 5.0f}},
+        .bounds = {.min = {-50.0f, 0.0f, -50.0f}, .max = {0.0f, 50.0f, 50.0f}},
         .solid = true,
         .normal = {kSqrtHalf, kSqrtHalf, 0.0f},
-        .plane_origin = {-5.0f, 5.0f, 0.0f},
+        .plane_origin = {-50.0f, 50.0f, 0.0f},
         .has_plane_origin = true,
         .face_id = 1,
     };
@@ -158,19 +158,19 @@ Room BuildSlopeFixtureRoom() {
 Room BuildLedgeFixtureRoom() {
     Room room;
 
-    // Upper floor: y=0 for x in [-10, 0].
+    // Upper floor: y=0 for x in [-100, 0].
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Plane,
-        .bounds = {.min = {-10.0f, 0.0f, -5.0f}, .max = {0.0f, 0.0f, 5.0f}},
+        .bounds = {.min = {-100.0f, 0.0f, -50.0f}, .max = {0.0f, 0.0f, 50.0f}},
         .solid = true,
         .normal = {0.0f, 1.0f, 0.0f},
         .face_id = 0,
     };
 
-    // Lower floor: y=-1 for x in [0, 10].
+    // Lower floor: y=-10 for x in [0, 100].
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Plane,
-        .bounds = {.min = {0.0f, -1.0f, -5.0f}, .max = {10.0f, -1.0f, 5.0f}},
+        .bounds = {.min = {0.0f, -10.0f, -50.0f}, .max = {100.0f, -10.0f, 50.0f}},
         .solid = true,
         .normal = {0.0f, 1.0f, 0.0f},
         .face_id = 1,
@@ -186,7 +186,7 @@ Room BuildMovingPlatformFixtureRoom() {
 
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Plane,
-        .bounds = {.min = {-16.0f, 0.0f, -16.0f}, .max = {16.0f, 0.0f, 16.0f}},
+        .bounds = {.min = {-160.0f, 0.0f, -160.0f}, .max = {160.0f, 0.0f, 160.0f}},
         .solid = true,
         .normal = {0.0f, 1.0f, 0.0f},
         .velocity = {0.0f, 0.0f, 0.0f},
@@ -196,7 +196,7 @@ Room BuildMovingPlatformFixtureRoom() {
 
     room.colliders[room.collider_count++] = {
         .type = ColliderType::Plane,
-        .bounds = {.min = {-2.0f, 2.0f, -2.0f}, .max = {2.0f, 2.0f, 2.0f}},
+        .bounds = {.min = {-20.0f, 20.0f, -20.0f}, .max = {20.0f, 20.0f, 20.0f}},
         .solid = true,
         .normal = {0.0f, 1.0f, 0.0f},
         .velocity = {0.0f, 0.0f, 0.0f},
@@ -211,7 +211,7 @@ Room BuildMovingPlatformFixtureRoom() {
 
     MovingSurface& platform = room.moving_surfaces[room.moving_surface_count++];
     platform.id = kPlatformId;
-    platform.position = {0.0f, 2.0f, 0.0f};
+    platform.position = {0.0f, 20.0f, 0.0f};
     platform.last_position = platform.position;
 
     return room;

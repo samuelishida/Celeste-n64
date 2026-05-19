@@ -15,13 +15,13 @@ int main() {
 
     PlayerState stop;
     stop.grounded = true;
-    stop.velocity = {6.4f, 0.0f, 0.0f};
-    for (int i = 0; i < 3; ++i) controller.Step(stop, {}, {0.0f, 0.0f, 1.0f}, dt);
-    assert(LengthXZ(stop.velocity) < 0.01f);
+    stop.velocity = {64.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 6; ++i) controller.Step(stop, {}, {0.0f, 0.0f, 1.0f}, dt);
+    assert(LengthXZ(stop.velocity) < 0.1f);
 
     PlayerState turn;
     turn.grounded = true;
-    turn.velocity = {6.4f, 0.0f, 0.0f};
+    turn.velocity = {64.0f, 0.0f, 0.0f};
     turn.target_facing = {1.0f, 0.0f, 0.0f};
     PlayerInput reverse;
     reverse.move = {-1.0f, 0.0f};
@@ -31,7 +31,7 @@ int main() {
 
     PlayerState air;
     air.grounded = false;
-    air.velocity = {6.4f, 0.0f, 0.0f};
+    air.velocity = {64.0f, 0.0f, 0.0f};
     const float before = LengthXZ(air.velocity);
     controller.Step(air, reverse, {0.0f, 0.0f, 1.0f}, dt);
     assert(LengthXZ(air.velocity) > 0.0f);

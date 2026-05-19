@@ -20,6 +20,9 @@ void RespawnSystem::ResetState(PlayerState& player, const Vec3& checkpoint) cons
     player.auto_jump = false;
     player.contact = {};
     player.platform_carry = {};
+    player.stamina = player.stamina_max;
+    player.climb_exhausted = false;
+    player.climb = {};
 }
 
 bool RespawnSystem::Step(PlayerState& player, const Vec3& checkpoint) const {

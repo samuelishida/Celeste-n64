@@ -15,7 +15,7 @@ public:
     void InitBobbing() { base_position_ = position; }
     void UpdateBobbing(float delta_seconds) {
         bob_time_ += delta_seconds;
-        position.y = base_position_.y + std::sin(bob_time_ * 3.0f) * 0.3f;
+        position.y = base_position_.y + std::sin(bob_time_ * 3.0f) * 3.0f;
     }
 
 protected:

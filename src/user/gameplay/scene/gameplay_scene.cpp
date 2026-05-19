@@ -37,7 +37,6 @@ namespace madeline_cube {
 
 namespace {
 
-constexpr float kPlayerHalfHeight = 1.0f;
 
 struct RenderObject {
     T3DMat4 matrix;
@@ -179,7 +178,7 @@ struct GameplayScene::Impl {
     CameraController camera_controller;
 
     Room room;
-    Vec3 checkpoint = {0.0f, 3.0f, 0.0f};
+    Vec3 checkpoint = {0.0f, 30.0f, 0.0f};
     PlayerState player;
     CollectibleState collectible;
     CameraState camera;
@@ -208,7 +207,7 @@ void GameplayScene::Init() {
     impl_->strawberry_model.Load("rom:/mdl/strawberry.t3dm");
     impl_->madeline_model.Load("rom:/mdl/madeline.t3dm");
     impl_->room_fixture_model.Load("rom:/mdl/room_fixture.t3dm");
-    impl_->room_fixture_model.UpdateMatrix({0.0f, 4.0f, -12.0f}, 6.0f, 0.0f);
+    impl_->room_fixture_model.UpdateMatrix({0.0f, 40.0f, -120.0f}, 60.0f, 0.0f);
     impl_->static_room_model.Load("rom:/lvl/first-room.t3dm");
 
     impl_->baked_level_loaded_ =
@@ -224,8 +223,15 @@ void GameplayScene::Init() {
         impl_->room = GetForsakenCityStartRoom();
     }
 
+    // player_start is the entity origin = feet position (Quake convention).
+    // Add half_height to get the center, plus a small skin so the floor probe
+    // finds the (slightly quantized) colmesh surface on frame 1.
+    constexpr float kSpawnSkin = 0.2f;
+    const float spawn_lift = impl_->player_motor.Config().half_height + kSpawnSkin;
     impl_->checkpoint = impl_->room.checkpoint;
+    impl_->checkpoint.y += spawn_lift;
     impl_->player.position = impl_->room.player_start;
+    impl_->player.position.y += spawn_lift;
     impl_->player.prev_position = impl_->player.position;
     impl_->player.grounded = false;
     impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
@@ -243,7 +249,7 @@ void GameplayScene::Init() {
     // Setup collectible from first spawn (graybox path only)
     if (!impl_->baked_level_loaded_ && impl_->room.spawn_count > 0) {
         impl_->collectible.position = impl_->room.spawns[0].position;
-        impl_->collectible.pickup_radius = 1.5f;
+        impl_->collectible.pickup_radius = 15.0f;
     }
 }
 
@@ -301,10 +307,7 @@ void GameplayScene::Update(float delta_seconds) {
     bool did_respawn = false;
 
     for (int tick = 0; tick < n_ticks; ++tick) {
-        const PlayerController::StepContext player_step = impl_->player_controller.TimerInputPhase(
-            impl_->player, input, camera_forward, FixedStepAccumulator::kTickDt);
-        impl_->player_controller.StatePhase(impl_->player, input, player_step, FixedStepAccumulator::kTickDt);
-
+        // Motor first: resolves position/velocity and sets state.grounded
         MotorInput motor_input;
         motor_input.requested_velocity = impl_->player.velocity;
         motor_input.wants_ground_snap = impl_->player.contact.was_grounded &&
@@ -314,6 +317,11 @@ void GameplayScene::Update(float delta_seconds) {
         AdvanceMovingSurfaces(impl_->room, FixedStepAccumulator::kTickDt);
         was_grounded_pre_motor = impl_->player.contact.was_grounded;
         motor_result = impl_->player_motor.Step(impl_->player, impl_->room, motor_input, FixedStepAccumulator::kTickDt);
+
+        // Controller reads post-motor grounded state for FSM transitions
+        PlayerController::StepContext player_step = impl_->player_controller.TimerInputPhase(
+            impl_->player, input, camera_forward, FixedStepAccumulator::kTickDt);
+        impl_->player_controller.StatePhase(impl_->player, input, player_step, FixedStepAccumulator::kTickDt);
         impl_->player_controller.LateContactPhase(impl_->player);
 
         if (impl_->respawn_system.Step(impl_->player, impl_->checkpoint, impl_->room, impl_->player_motor)) {
@@ -339,10 +347,15 @@ void GameplayScene::Update(float delta_seconds) {
     }
 
     // Camera reads the post-motor (and post-respawn) player state.
+    const float horiz_speed = std::sqrt(
+        (impl_->player.velocity.x * impl_->player.velocity.x) +
+        (impl_->player.velocity.z * impl_->player.velocity.z));
     impl_->camera_controller.Step(
         impl_->camera,
         impl_->player.position,
         impl_->player.wall_grabbing,
+        impl_->player.grounded,
+        horiz_speed,
         camera_input,
         delta_seconds,
         &impl_->room
@@ -358,13 +371,13 @@ void GameplayScene::Update(float delta_seconds) {
 
     {
         const Vec3 interp = impl_->player.InterpolatedPosition(impl_->render_alpha);
-        SetTransform(impl_->player_render, interp, {1.0f, 1.0f, 1.0f});
+        SetTransform(impl_->player_render, interp, {5.0f, 10.0f, 5.0f});
     }
     if (!impl_->baked_level_loaded_) {
         SetTransform(
             impl_->collectible_render,
             impl_->collectible.position,
-            impl_->collectible.collected ? Vec3{0.0f, 0.0f, 0.0f} : Vec3{0.75f, 0.75f, 0.75f}
+            impl_->collectible.collected ? Vec3{0.0f, 0.0f, 0.0f} : Vec3{7.5f, 7.5f, 7.5f}
         );
     }
 
@@ -394,7 +407,10 @@ void GameplayScene::Render() {
         impl_->camera.target.z
     }};
 
-    t3d_viewport_set_projection(&impl_->viewport, T3D_DEG_TO_RAD(70.0f), 4.0f, 120.0f);
+    // Dynamic FOV: base 45 degrees scaled by fov_multiplier (1.0 at rest,
+    // up to 1.2 at high horizontal speed).
+    const float fov_deg = 45.0f * impl_->camera.fov_multiplier;
+    t3d_viewport_set_projection(&impl_->viewport, T3D_DEG_TO_RAD(fov_deg), 20.0f, 800.0f);
     t3d_viewport_look_at(&impl_->viewport, &camera_position, &camera_target, &camera_up);
 
     rdpq_attach(display_get(), display_get_zbuf());
@@ -417,7 +433,7 @@ void GameplayScene::Render() {
             T3D_FLAG_SHADED | T3D_FLAG_DEPTH | T3D_FLAG_TEXTURED));
         rdpq_mode_combiner(RDPQ_COMBINER1((TEX0,0,SHADE,0),(TEX0,0,SHADE,0)));
         impl_->level_renderer.Draw(impl_->material_catalog);
-        constexpr float kStrawberryScale = 0.005f;
+        constexpr float kStrawberryScale = 0.05f;
         if (StrawberryActor* sa = impl_->actor_world.Get<StrawberryActor>()) {
             impl_->strawberry_model.UpdateMatrix(sa->position, kStrawberryScale, 0.0f);
             impl_->strawberry_model.Draw();
@@ -430,15 +446,15 @@ void GameplayScene::Render() {
             DrawCube(impl_->cube_vertices, impl_->room_geometry[i].matrix_fp);
         }
         if (!impl_->collectible.collected) {
-            constexpr float kStrawberryScale = 0.005f;
+            constexpr float kStrawberryScale = 0.05f;
             impl_->strawberry_model.UpdateMatrix(impl_->collectible.position, kStrawberryScale, 0.0f);
             impl_->strawberry_model.Draw();
         }
     }
 
     if (impl_->madeline_model.IsLoaded()) {
-        constexpr float kMadelineScale = 0.02f;
-        constexpr float kMadelineYOffset = -1.0f;
+        constexpr float kMadelineScale = 0.2f;
+        constexpr float kMadelineYOffset = -10.0f;
         const Vec3 facing = impl_->player.facing;
         const float yaw = std::atan2(facing.x, facing.z);
         Vec3 draw_pos = impl_->player.InterpolatedPosition(impl_->render_alpha);
