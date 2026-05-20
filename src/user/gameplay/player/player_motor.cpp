@@ -172,7 +172,6 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
         const WallHit wall = QueryWallNearest(room, state.position, config_.radius);
         if (wall.hit && wall.pushout > 0.0f) {
             state.position.x += wall.normal.x * wall.pushout;
-            state.position.y += wall.normal.y * wall.pushout;
             state.position.z += wall.normal.z * wall.pushout;
             RemoveIntoNormal(state.velocity, wall.normal);
             RecordWallContact(state, result, wall);
