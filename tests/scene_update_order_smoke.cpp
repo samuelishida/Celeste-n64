@@ -55,7 +55,7 @@ PlayerState RunScenePlayerTick(
     };
 
     // 1. timers/input
-    const PlayerController::StepContext step = controller.TimerInputPhase(p, input, camera_forward, delta_seconds);
+    PlayerController::StepContext step = controller.TimerInputPhase(p, input, camera_forward, delta_seconds);
 
     // 2. state phase
     controller.StatePhase(p, input, step, delta_seconds);
@@ -122,7 +122,7 @@ int main() {
 
         // Reference: run controller + motor in isolation against the same start.
         PlayerState ref = start;
-        const PlayerController::StepContext step =
+        PlayerController::StepContext step =
             controller.TimerInputPhase(ref, {}, {0.0f, 0.0f, 1.0f}, kDt);
         controller.StatePhase(ref, {}, step, kDt);
         MotorInput in;

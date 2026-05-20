@@ -1,0 +1,3 @@
+case_id: climb_snap
+goal: wall alignment should stay stable when the probe is lifted slightly above the base.
+diagnostic: used to guard the climb-entry wall normal.

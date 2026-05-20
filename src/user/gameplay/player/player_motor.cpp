@@ -78,22 +78,7 @@ bool FaceIsClimbable(const Room& room, int face_id) {
 }
 
 GroundHit ProbeFloor(const Room& room, const Vec3& position, float half_height, float probe_distance, float radius) {
-    const Vec3 feet = {position.x, position.y - half_height, position.z};
-    // Sweep sphere to catch platform edges when player radius overhangs.
-    // Fallback to raycast for reliable stationary ground detection (sweep uses discrete sampling).
-    if (room.coll_mesh) {
-        using namespace physics;
-        const Vec3 probe_origin = {feet.x, feet.y + radius, feet.z};
-        SweepSphereHit sweep = SweepSphereMesh(*room.coll_mesh, probe_origin, {0.0f, -1.0f, 0.0f}, radius, probe_distance);
-        if (sweep.hit) {
-            return SweepToGroundHit(room, sweep, probe_distance);
-        }
-        // Sweep missed; raycast catches flat ground the discrete sampling skipped.
-        GroundHit ray = QueryFloorSource(room, feet, probe_distance);
-        if (ray.hit) return ray;
-        return GroundHit{};
-    }
-    return QueryFloorSource(room, feet, probe_distance);
+    return ProbeFloorDebug(room, position, half_height, probe_distance, radius);
 }
 
 void ApplyGroundContact(PlayerState& state, MotorResult& result, const GroundHit& hit, float half_height) {
@@ -229,14 +214,6 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
         if (ceiling.hit) {
             state.position.y = ceiling.point.y - config_.half_height;
             state.velocity.y = 0.0f;
-        }
-    }
-
-    if (!result.wall_contact) {
-        const WallHit settled = QueryWallNearest(room, state.position, config_.radius + 0.5f);
-        if (settled.hit) {
-            RecordWallContact(state, result, settled);
-            if (FaceIsClimbable(room, settled.face_id)) state.wall_climbable = true;
         }
     }
 

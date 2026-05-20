@@ -1,0 +1,3 @@
+case_id: floor_overhang
+goal: support should survive when the player's footprint overlaps a ledge but the center does not.
+diagnostic: expected to fail on the current query substrate.

@@ -1,0 +1,3 @@
+case_id: thin_wall
+goal: wall candidate generation should see a narrow vertical wall before depenetration.
+diagnostic: used to separate candidate-generation misses from response misses.
