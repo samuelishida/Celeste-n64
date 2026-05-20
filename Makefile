@@ -118,6 +118,9 @@ N64_ROM_TITLE ?= "Madeline Cube ROM"
 clean:
 	rm -rf $(BUILD_DIR) madeline_cube_rom.z64 madeline_cube_rom.dfs
 
+filesystem/lvl/%.colmesh: filesystem/lvl/%.lvl
+	python3 tools/colmesh_bake.py $< $@
+
 # Bake collision mesh for a single level.
 # Usage: make bake-colmesh LEVEL=1-1
 #   Reads  filesystem/lvl/$(LEVEL).lvl

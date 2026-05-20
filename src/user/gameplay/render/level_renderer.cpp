@@ -15,8 +15,9 @@ namespace {
 
 // Pack a position (game-units) into int16 by scaling to fixed-point.
 // T3D uses a coordinate space where vertices are in roughly [-32768, 32767].
-// Game units are typically in [-20, 20] range; scale by 512 for good precision.
-static constexpr float kPosFp = 512.0f;
+// Game units after 10x scale reach ~186 (x-axis, far end of climb wall).
+// 128 gives max ±256 units in int16 (32767/128), comfortably covering all rooms.
+static constexpr float kPosFp = 128.0f;
 
 // UV scale: baker outputs UVs already in texture-repeat units (0-1 = one tile).
 // No additional scaling needed.
