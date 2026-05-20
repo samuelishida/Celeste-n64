@@ -10,6 +10,7 @@ the Quake face texture parameters (shift, rotation, scale).
 import sys
 import math
 import re
+from collections import Counter
 from typing import List, Tuple, Dict, Set, Optional
 from pathlib import Path
 import argparse
@@ -20,15 +21,22 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lvl_format import LvlFile, Collider, Face, Vertex, Entity
 from entity_ids import ENTITY_IDS, id_of
 
-# Only classes listed here may emit collision geometry (brushes).  Everything
-# else is silently skipped.  Must stay in sync with docs/first-room-brief.md
-# brush-class policy.
-# Classes beyond the brief's list are legacy OG import classes that may be
-# removed when first-room replaces 1-1 entirely (Inc 6).
-COLLISION_CLASSES = {
-    "worldspawn", "func_wall", "func_climbable",    # project-owned
-    "Decoration", "SpikeBlock", "TrafficBlock",     # legacy OG import
-    "DeathBlock", "func_group", "Cassette",         # legacy OG import
+# Only these classes may emit the authoritative static shell for 1-1.  All
+# other brush-bearing OG classes are logged and skipped so they cannot leak into
+# traversal or inflate the manifest with non-shell materials.
+STATIC_SHELL_CLASSES = {
+    "worldspawn",
+    "func_wall",
+    "func_climbable",
+}
+
+UNSUPPORTED_BRUSH_CLASSES = {
+    "Decoration",
+    "SpikeBlock",
+    "TrafficBlock",
+    "DeathBlock",
+    "func_group",
+    "Cassette",
 }
 
 # ── Vector math helpers ──────────────────────────────────────────────
@@ -299,7 +307,34 @@ def sort_vertices_ccw(vertices: List[Vec3], normal: Vec3) -> List[Vec3]:
         d = vsub(v, center)
         return math.atan2(vdot(d, forward), vdot(d, right))
 
-    return sorted(vertices, key=angle_key)
+    # The local basis above yields the opposite winding for our transformed
+    # face normals, so flip the sorted order before the polygon is fanned into
+    # render triangles.
+    return list(reversed(sorted(vertices, key=angle_key)))
+
+
+def dedupe_polygon_vertices(vertices: List[Vec3], eps: float = 1e-4) -> List[Vec3]:
+    """Drop consecutive duplicate vertices introduced by plane clipping."""
+    if len(vertices) < 2:
+        return vertices
+
+    out: List[Vec3] = []
+    eps2 = eps * eps
+
+    def is_same(a: Vec3, b: Vec3) -> bool:
+        dx = a[0] - b[0]
+        dy = a[1] - b[1]
+        dz = a[2] - b[2]
+        return (dx * dx) + (dy * dy) + (dz * dz) <= eps2
+
+    for v in vertices:
+        if not out or not is_same(v, out[-1]):
+            out.append(v)
+
+    if len(out) > 1 and is_same(out[0], out[-1]):
+        out.pop()
+
+    return out
 
 
 def compute_uv(point: Vec3, face: FaceDef, scale: float = 0.2) -> Tuple[float, float]:
@@ -394,6 +429,7 @@ def bake_map(map_file: str, lvl_file: str, manifest_file: str, dump_spawn: bool 
 
     materials_used: Set[str] = set()
     spawn_coords = None
+    skipped_brush_classes: Counter[str] = Counter()
 
     # String intern table
     string_to_id: Dict[str, int] = {}
@@ -454,9 +490,16 @@ def bake_map(map_file: str, lvl_file: str, manifest_file: str, dump_spawn: bool 
 
     for entity in entities:
         classname = entity.get("classname", "")
-        if classname not in COLLISION_CLASSES and classname:
-            continue  # skip brushes from non-collision entities (decorations, props, etc.)
         brushes = entity.get("brushes", [])
+        if classname and brushes:
+            if classname not in STATIC_SHELL_CLASSES:
+                if classname in UNSUPPORTED_BRUSH_CLASSES:
+                    skipped_brush_classes[classname] += len(brushes)
+                else:
+                    skipped_brush_classes[classname] += len(brushes)
+                continue
+        if classname not in STATIC_SHELL_CLASSES and classname:
+            continue
         for brush in brushes:
             if len(brush) < 4:
                 continue
@@ -472,6 +515,7 @@ def bake_map(map_file: str, lvl_file: str, manifest_file: str, dump_spawn: bool 
 
                 # Sort vertices CCW around face normal
                 polygon = sort_vertices_ccw(polygon, face_def["normal"])
+                polygon = dedupe_polygon_vertices(polygon)
                 if len(polygon) < 3:
                     continue
 
@@ -510,6 +554,12 @@ def bake_map(map_file: str, lvl_file: str, manifest_file: str, dump_spawn: bool 
 
                 all_faces += 1
                 all_verts += len(polygon)
+
+    if skipped_brush_classes:
+        skipped_summary = ", ".join(
+            f"{name}:{count}" for name, count in sorted(skipped_brush_classes.items())
+        )
+        print(f"[bake] skipped unsupported brush classes: {skipped_summary}")
 
     # Build material remap: string-table indices -> sequential material catalog slots
     # MaterialCatalog loads sprites at slots 0..N in manifest order, so we remap

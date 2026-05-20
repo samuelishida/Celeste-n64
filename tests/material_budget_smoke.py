@@ -5,7 +5,7 @@ from pathlib import Path
 import struct
 
 
-MANIFEST = Path("filesystem/lvl/1-1.manifest")
+MANIFEST = Path("filesystem/lvl/first-room.manifest")
 TEXTURES = Path("assets/og_converted/textures")
 BYTES_PER_RGBA16_PIXEL = 2
 TMEM_BYTES = 4096

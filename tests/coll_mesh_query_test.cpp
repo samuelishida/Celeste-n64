@@ -56,12 +56,12 @@ static RayHit BruteForceRay(const CollMesh& mesh,
 
 int main(int argc, char* argv[]) {
     // Default path for host test (baked during Inc 2)
-    const char* path = "filesystem/lvl/1-1.colmesh";
+    const char* path = "filesystem/lvl/first-room.colmesh";
     if (argc > 1) path = argv[1];
 
     printf("[coll_mesh_query_test] loading %s\n", path);
     CollMesh* mesh = LoadCollMesh(path);
-    assert(mesh && "LoadCollMesh failed — run 'make bake-colmesh LEVEL=1-1' first");
+    assert(mesh && "LoadCollMesh failed — run 'make bake-colmesh LEVEL=first-room' first");
 
     printf("[coll_mesh_query_test] %u tris  %u verts  %u BVH nodes\n",
            mesh->header->triangle_count,

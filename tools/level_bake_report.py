@@ -37,6 +37,15 @@ def _newell(points: list[tuple[float, float, float]]):
     return nx, ny, nz
 
 
+def _read_materials(lvl_path: Path, lvl) -> list[str]:
+    """Read material list from manifest sidecar; fall back to strings[3:] for legacy files."""
+    manifest = lvl_path.with_suffix(".manifest")
+    if manifest.exists():
+        return [line.strip() for line in manifest.read_text().splitlines() if line.strip()]
+    reserved = {lvl.skybox_str_id, lvl.music_str_id, lvl.ambience_str_id}
+    return [s for i, s in enumerate(lvl.strings) if i not in reserved]
+
+
 def summarize(map_path: Path, lvl_path: Path) -> list[str]:
     entities = parse_map_file(str(map_path))
     lvl = LvlFile.read(str(lvl_path))
@@ -71,7 +80,7 @@ def summarize(map_path: Path, lvl_path: Path) -> list[str]:
         f"duplicate_vertex_faces={duplicate_vertex_faces}",
         f"first_fan_degenerate_faces={first_fan_degenerate_faces}",
         f"reversed_winding_faces={reversed_winding_faces}",
-        f"materials={lvl.strings[3:]}",
+        f"materials={_read_materials(lvl_path, lvl)}",
     ]
     return lines
 

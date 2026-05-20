@@ -26,21 +26,13 @@ DFS_MDL_FILES := \
     filesystem/mdl/first-room.t3dm
 
 DFS_TEX_FILES := \
-    filesystem/tex/bubble.sprite \
     filesystem/tex/rock_1.sprite \
-    filesystem/tex/snow_1.sprite \
-    filesystem/tex/rock_2.sprite \
-    filesystem/tex/metal_floor_1.sprite \
-    filesystem/tex/floor_dirty_concrete.sprite \
-    filesystem/tex/TB_empty.sprite
+    filesystem/tex/rock_1_climbable.sprite
 
 DFS_FNT_FILES := filesystem/fnt/Renogare.font64
 
 # DFS level files
 DFS_LVL_FILES := \
-    filesystem/lvl/1-1.lvl \
-    filesystem/lvl/1-1.manifest \
-    filesystem/lvl/1-1.colmesh \
     filesystem/lvl/first-room.lvl \
     filesystem/lvl/first-room.manifest \
     filesystem/lvl/first-room.colmesh
@@ -67,10 +59,9 @@ filesystem/tex/%.sprite: assets/og_converted/textures/%.sprite | filesystem/tex
 	cp $< $@
 
 # Bake level files
-filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest: \
-	assets/og_converted/maps/1-1.map | filesystem/lvl
-	python3 tools/bake_map.py $< \
-		filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest
+filesystem/lvl/first-room.lvl filesystem/lvl/first-room.manifest: \
+	assets/rooms/first-room/first-room.map | filesystem/lvl
+	python3 tools/bake_map.py $< filesystem/lvl/first-room.lvl filesystem/lvl/first-room.manifest
 
 # Copy font files
 filesystem/fnt/%.font64: assets/og_converted/fonts/%.font64 | filesystem/fnt

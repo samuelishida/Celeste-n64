@@ -425,8 +425,6 @@ void GameplayScene::Render() {
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
         rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
         impl_->room_fixture_model.Draw();
-    } else if (impl_->static_room_model.IsLoaded()) {
-        impl_->static_room_model.Draw();
     } else if (impl_->baked_level_loaded_) {
         // Baked level: textured geometry + actor models
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(
@@ -438,6 +436,8 @@ void GameplayScene::Render() {
             impl_->strawberry_model.UpdateMatrix(sa->position, kStrawberryScale, 0.0f);
             impl_->strawberry_model.Draw();
         }
+    } else if (impl_->static_room_model.IsLoaded()) {
+        impl_->static_room_model.Draw();
     } else {
         // Graybox: cube geometry
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));

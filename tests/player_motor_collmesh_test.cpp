@@ -128,7 +128,7 @@ static void RunTrace(
 
 // ---------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
-    const char* lvl_path   = "filesystem/lvl/1-1.lvl";
+    const char* lvl_path   = "filesystem/lvl/first-room.lvl";
     const char* trace_path = "tests/fixtures/motor_input_trace_v1.bin";
     const char* base_path  = "tests/fixtures/motor_baseline_trace_v1.bin";
     if (argc > 1) lvl_path = argv[1];
@@ -144,7 +144,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     if (!room.coll_mesh) {
-        printf("colmesh not loaded — run 'make bake-colmesh LEVEL=1-1' first\n");
+        printf("colmesh not loaded — run 'make bake-colmesh LEVEL=first-room' first\n");
         delete geom_ptr;
         delete room_ptr;
         return 1;

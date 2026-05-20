@@ -163,7 +163,12 @@ CollMesh* LoadCollMesh(const char* path) {
         }
     }
 
-    // Validate BVH leaf triangle ranges are in bounds
+    SwapBvhNodes(  reinterpret_cast<CollBvhNode*> (base + hdr->bvh_offset),       hdr->bvh_node_count);
+    SwapSurfaceLinks(reinterpret_cast<CollSurfaceLink*>(base + hdr->surface_link_offset),
+                     hdr->surface_link_count);
+
+    // Validate BVH leaf triangle ranges after byte-swapping so the host loader
+    // sees the same values the runtime will query.
     {
         const CollBvhNode* nodes = reinterpret_cast<const CollBvhNode*>(base + hdr->bvh_offset);
         for (uint32_t i = 0; i < hdr->bvh_node_count; ++i) {
@@ -177,10 +182,6 @@ CollMesh* LoadCollMesh(const char* path) {
             }
         }
     }
-
-    SwapBvhNodes(  reinterpret_cast<CollBvhNode*> (base + hdr->bvh_offset),       hdr->bvh_node_count);
-    SwapSurfaceLinks(reinterpret_cast<CollSurfaceLink*>(base + hdr->surface_link_offset),
-                     hdr->surface_link_count);
 
     CollMesh* mesh = new CollMesh();
     mesh->header       = hdr;

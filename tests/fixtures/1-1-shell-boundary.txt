@@ -1,0 +1,6 @@
+# 1-1 shell audit fixtures.
+# The test prints these lines before it attempts the current bundle load.
+west_outer_wall_gap expect=hit note="wall should seal the west shell edge"
+east_floor_overrun expect=miss note="floor should not continue beyond the east shell"
+north_outer_wall_gap expect=hit note="wall should seal the north shell edge"
+south_floor_overrun expect=miss note="floor should not continue beyond the south shell"
