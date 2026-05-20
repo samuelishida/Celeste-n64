@@ -292,12 +292,69 @@ CeilingHit QueryCeilingSource(const Room& room, const Vec3& origin, float max_di
     };
 }
 
-int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_hits, int max_hits) {
+GroundHit ProbeFloorDebug(const Room& room, const Vec3& position, float half_height,
+                          float probe_distance, float radius,
+                          CollisionQueryDiagnostics* diagnostics) {
+    const Vec3 feet = {position.x, position.y - half_height, position.z};
+    const float s = radius * 0.70710678f;
+    const Vec3 offsets[9] = {
+        {0.0f, 0.0f, 0.0f},
+        { radius, 0.0f, 0.0f},
+        {-radius, 0.0f, 0.0f},
+        {0.0f, 0.0f,  radius},
+        {0.0f, 0.0f, -radius},
+        { s, 0.0f,  s},
+        {-s, 0.0f,  s},
+        { s, 0.0f, -s},
+        {-s, 0.0f, -s},
+    };
+
+    GroundHit best;
+    for (const Vec3& offset : offsets) {
+        if (diagnostics) ++diagnostics->floor_sweep_hits;
+        const Vec3 origin = {feet.x + offset.x, feet.y, feet.z + offset.z};
+        GroundHit hit = QueryFloorSource(room, origin, probe_distance);
+        if (!hit.hit) continue;
+        if (diagnostics) ++diagnostics->floor_raycast_hits;
+        if (!best.hit ||
+            hit.distance < best.distance - kRayEpsilon ||
+            (std::fabs(hit.distance - best.distance) <= kRayEpsilon && hit.face_id < best.face_id)) {
+            best = hit;
+        }
+    }
+
+    return best;
+}
+
+int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_hits, int max_hits,
+               CollisionQueryDiagnostics* diagnostics) {
     int count = 0;
 
     // Static world geometry: always use collmesh.
     if (room.coll_mesh) {
-        count = QueryWallsMesh(room, *room.coll_mesh, point, radius, out_hits, max_hits);
+        const float slice_offsets[3] = {
+            -radius * 0.5f,
+            0.0f,
+            radius * 0.5f,
+        };
+        for (float slice_offset : slice_offsets) {
+            WallHit slice_hits[kMaxWallHits];
+            const int slice_count = QueryWallsMesh(room, *room.coll_mesh,
+                                                   {point.x, point.y + slice_offset, point.z},
+                                                   radius, slice_hits, kMaxWallHits);
+            for (int i = 0; i < slice_count && count < max_hits; ++i) {
+                bool duplicate = false;
+                for (int j = 0; j < count; ++j) {
+                    if (out_hits[j].face_id == slice_hits[i].face_id) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) continue;
+                out_hits[count++] = slice_hits[i];
+                if (diagnostics) ++diagnostics->wall_candidate_hits;
+            }
+        }
         if (count >= max_hits) return count;
     }
 
@@ -355,6 +412,7 @@ int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_h
                 hit.owner_id = c.owner_id;
                 hit.owner_velocity = owner_velocity;
                 out_hits[count++] = hit;
+                if (diagnostics) ++diagnostics->wall_candidate_hits;
                 continue;
             }
 
@@ -386,6 +444,7 @@ int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_h
             hit.owner_id = c.owner_id;
             hit.owner_velocity = owner_velocity;
             out_hits[count++] = hit;
+            if (diagnostics) ++diagnostics->wall_candidate_hits;
         }
     }
 

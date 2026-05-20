@@ -85,6 +85,13 @@ struct CeilingHit {
     Vec3 owner_velocity;
 };
 
+// Diagnostic counters for collision-query regression fixtures.
+struct CollisionQueryDiagnostics {
+    int floor_sweep_hits = 0;
+    int floor_raycast_hits = 0;
+    int wall_candidate_hits = 0;
+};
+
 // Backface policy for raycasts: ignore faces whose normal points away from the ray.
 enum class BackfacePolicy : uint8_t {
     Ignore = 0,
@@ -148,10 +155,16 @@ GroundHit RaycastRoomSource(const Room& room, const Vec3& origin, const Vec3& di
 GroundHit QueryFloorSource(const Room& room, const Vec3& origin, float max_distance);
 CeilingHit QueryCeilingSource(const Room& room, const Vec3& origin, float max_distance);
 
+// Diagnostic floor-support probe used by regression fixtures.
+GroundHit ProbeFloorDebug(const Room& room, const Vec3& position, float half_height,
+                          float probe_distance, float radius,
+                          CollisionQueryDiagnostics* diagnostics = nullptr);
+
 // Source-shaped wall queries.
 // Returns all wall hits within radius (up to a small fixed capacity).
 static constexpr int kMaxWallHits = 8;
-int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_hits, int max_hits);
+int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_hits, int max_hits,
+               CollisionQueryDiagnostics* diagnostics = nullptr);
 
 // Nearest wall: the one with the largest pushout (most overlap).
 WallHit QueryWallNearest(const Room& room, const Vec3& point, float radius);

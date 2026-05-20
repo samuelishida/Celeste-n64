@@ -38,7 +38,11 @@ MotorInput MovingInput(const Vec3& velocity) {
 }  // namespace
 
 int main() {
-    PlayerMotor motor;
+    PlayerMotorConfig motor_config;
+    motor_config.half_height = 1.0f;
+    motor_config.radius = 0.5f;
+    motor_config.sweep_step = 0.5f;
+    PlayerMotor motor(motor_config);
     const Room basic = BuildBasicRoom();
 
     // --- Slow fall to floor: lands exactly on floor, velocity zeroes. ---
@@ -99,14 +103,14 @@ int main() {
     {
         Room room = basic;
         PlayerState p;
-        p.position = {0.0f, 1.2f, 0.0f};
+        p.position = {0.0f, 2.0f, 0.0f};
         p.grounded = false;
         MotorInput in;
         in.requested_velocity = {0.0f, 0.0f, 0.0f};
         in.wants_ground_snap = true;
         MotorResult r = motor.RefreshContacts(p, room, in);
         assert(!r.grounded);
-        assert(ApproxEq(p.position.y, 1.2f));
+        assert(ApproxEq(p.position.y, 2.0f));
     }
 
     // --- NaN/subnormal flushed in position and velocity. ---
@@ -156,10 +160,10 @@ int main() {
         AdvanceMovingSurfaces(room, 1.0f / 60.0f);
 
         PlayerState p;
-        p.position = {0.5f, 3.0f, 0.0f};
+        p.position = {0.5f, 21.0f, 0.0f};
         MotorResult r = motor.Step(p, room, MovingInput({0.0f, -2.0f, 0.0f}), 1.0f / 60.0f);
         assert(r.grounded);
-        assert(ApproxEq(p.position.y, 3.0f));
+        assert(ApproxEq(p.position.y, 21.0f));
         assert(p.platform_carry.time_remaining > 0.0f);
         assert(ApproxEq(p.platform_carry.stored_velocity.x, 0.5f * 60.0f));
     }
