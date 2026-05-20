@@ -25,6 +25,14 @@ bool MaterialCatalog::Load(const char* level_name) {
             line[--len] = '\0';
         }
         if (len == 0) continue;
+        if (count_ >= kMaxMaterials) break;
+
+        if (strcmp(line, "TB_empty") == 0) {
+            sprites_[count_] = nullptr;
+            debugf("[matcat] material[%d]=%s NULL\n", count_, line);
+            ++count_;
+            continue;
+        }
 
         char sprite_path[80];
         snprintf(sprite_path, sizeof(sprite_path), "rom:/tex/%s.sprite", line);
@@ -32,22 +40,22 @@ bool MaterialCatalog::Load(const char* level_name) {
         // Pre-check: sprite_load asserts on missing files, so probe first
         FILE* probe = fopen(sprite_path, "rb");
         if (!probe) {
-            debugf("[matcat] material=%s MISSING (skipped)\n", line);
+            sprites_[count_] = nullptr;
+            debugf("[matcat] material[%d]=%s MISSING (reserved)\n", count_, line);
+            ++count_;
             continue;
         }
         fclose(probe);
 
         sprite_t* s = sprite_load(sprite_path);
         if (s) {
-            if (count_ >= kMaxMaterials) {
-                sprite_free(s);
-                break;
-            }
             sprites_[count_] = s;
             debugf("[matcat] material[%d]=%s OK\n", count_, line);
             ++count_;
         } else {
-            debugf("[matcat] material=%s MISSING (skipped)\n", line);
+            sprites_[count_] = nullptr;
+            debugf("[matcat] material[%d]=%s MISSING (reserved)\n", count_, line);
+            ++count_;
         }
     }
 

@@ -5,6 +5,7 @@ ENTITY_IDS = {
     "Strawberry": 1,
     "Refill": 2,
     "Spring": 3,
+    "Cassette": 9,
 }
 
 def id_of(classname):

@@ -58,7 +58,7 @@ def material_flags(tex_name: str) -> int:
 # ---------------------------------------------------------------------------
 
 def triangulate_lvl(lvl, manifest_path: str = None) -> tuple:
-    """Return (positions, triangles) where:
+    """Return (positions, triangles, visual_only_skipped) where:
        positions: list of (x,y,z) float tuples
        triangles: list of (i0,i1,i2, material_uint16, face_id_uint16) tuples
     """
@@ -86,8 +86,13 @@ def triangulate_lvl(lvl, manifest_path: str = None) -> tuple:
         return pos_index[key]
 
     face_id = 0
+    visual_only_skipped = 0
     for face in lvl.faces:
         if face.vertex_count < 3:
+            face_id += 1
+            continue
+        if face.flags & 0x02:
+            visual_only_skipped += 1
             face_id += 1
             continue
         tex_name = strings[face.material_id] if face.material_id < len(strings) else ""
@@ -103,7 +108,7 @@ def triangulate_lvl(lvl, manifest_path: str = None) -> tuple:
             triangles.append((i0, i1, i2, mat, tri_face_id))
         face_id += 1
 
-    return positions, triangles
+    return positions, triangles, visual_only_skipped
 
 # ---------------------------------------------------------------------------
 # Quantization
@@ -345,7 +350,8 @@ def main():
     print(f"[colmesh_bake] {len(lvl.faces)} faces, {len(lvl.vertices)} vertices")
 
     manifest_path = Path(out_path).with_suffix('.manifest')
-    positions, triangles = triangulate_lvl(lvl, str(manifest_path))
+    positions, triangles, visual_only_skipped = triangulate_lvl(lvl, str(manifest_path))
+    print(f"[colmesh_bake] solid_faces={len(lvl.faces) - visual_only_skipped} visual_only_skipped={visual_only_skipped}")
     print(f"[colmesh_bake] triangulated → {len(triangles)} tris, {len(positions)} unique verts")
 
     if not triangles:

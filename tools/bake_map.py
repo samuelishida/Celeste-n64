@@ -30,8 +30,11 @@ STATIC_SHELL_CLASSES = {
     "func_climbable",
 }
 
-UNSUPPORTED_BRUSH_CLASSES = {
+VISUAL_ONLY_BRUSH_CLASSES = {
     "Decoration",
+}
+
+UNSUPPORTED_BRUSH_CLASSES = {
     "SpikeBlock",
     "TrafficBlock",
     "DeathBlock",
@@ -488,72 +491,75 @@ def bake_map(map_file: str, lvl_file: str, manifest_file: str, dump_spawn: bool 
     all_faces = 0
     all_verts = 0
 
+    def emit_brush_faces(target_classes: Set[str], face_flags: int, emit_colliders: bool) -> None:
+        nonlocal all_faces, all_verts
+
+        for entity in entities:
+            classname = entity.get("classname", "")
+            if classname not in target_classes:
+                continue
+
+            brushes = entity.get("brushes", [])
+            for brush in brushes:
+                if len(brush) < 4:
+                    continue
+
+                for face_idx in range(len(brush)):
+                    face_def = brush[face_idx]
+
+                    polygon = compute_face_polygon(brush, face_idx)
+                    if len(polygon) < 3:
+                        continue
+
+                    polygon = sort_vertices_ccw(polygon, face_def["normal"])
+                    polygon = dedupe_polygon_vertices(polygon)
+                    if len(polygon) < 3:
+                        continue
+
+                    transformed_verts = [transform_point(v) for v in polygon]
+                    transformed_normal = transform_normal(face_def["normal"])
+
+                    raw_material_id = intern_string(face_def["texture"])
+                    materials_used.add(face_def["texture"])
+
+                    vertex_start = len(lvl.vertices)
+                    for i, v in enumerate(polygon):
+                        uv = compute_uv(v, face_def)
+                        lvl.vertices.append(Vertex(transformed_verts[i], uv))
+
+                    lvl.faces.append(
+                        Face(vertex_start, len(polygon), raw_material_id, transformed_normal, face_flags)
+                    )
+
+                    if emit_colliders:
+                        bounds_min = tuple(min(v[i] for v in transformed_verts) - 0.01 for i in range(3))
+                        bounds_max = tuple(max(v[i] for v in transformed_verts) + 0.01 for i in range(3))
+                        collider = Collider(
+                            type_=0,
+                            solid=1,
+                            has_plane_origin=1,
+                            bounds_min=bounds_min,
+                            bounds_max=bounds_max,
+                            normal=transformed_normal,
+                            plane_origin=transformed_verts[0],
+                            face_id=len(lvl.faces) - 1,
+                        )
+                        lvl.colliders.append(collider)
+
+                    all_faces += 1
+                    all_verts += len(polygon)
+
     for entity in entities:
         classname = entity.get("classname", "")
         brushes = entity.get("brushes", [])
-        if classname and brushes:
-            if classname not in STATIC_SHELL_CLASSES:
-                if classname in UNSUPPORTED_BRUSH_CLASSES:
-                    skipped_brush_classes[classname] += len(brushes)
-                else:
-                    skipped_brush_classes[classname] += len(brushes)
-                continue
-        if classname not in STATIC_SHELL_CLASSES and classname:
+        if not classname or not brushes:
             continue
-        for brush in brushes:
-            if len(brush) < 4:
-                continue
+        if classname in STATIC_SHELL_CLASSES or classname in VISUAL_ONLY_BRUSH_CLASSES:
+            continue
+        skipped_brush_classes[classname] += len(brushes)
 
-            # Compute convex polygon for each face of the brush
-            for face_idx in range(len(brush)):
-                face_def = brush[face_idx]
-
-                # Get the polygon for this face by clipping all other planes
-                polygon = compute_face_polygon(brush, face_idx)
-                if len(polygon) < 3:
-                    continue
-
-                # Sort vertices CCW around face normal
-                polygon = sort_vertices_ccw(polygon, face_def["normal"])
-                polygon = dedupe_polygon_vertices(polygon)
-                if len(polygon) < 3:
-                    continue
-
-                # Transform to port coordinates
-                transformed_verts = [transform_point(v) for v in polygon]
-                transformed_normal = transform_normal(face_def["normal"])
-
-                # Compute UVs for each vertex
-                raw_material_id = intern_string(face_def["texture"])
-                materials_used.add(face_def["texture"])
-
-                # Emit vertices with UVs
-                vertex_start = len(lvl.vertices)
-                for i, v in enumerate(polygon):
-                    uv = compute_uv(v, face_def)
-                    lvl.vertices.append(Vertex(transformed_verts[i], uv))
-
-                # Emit face with raw material_id (will be remapped later)
-                lvl.faces.append(Face(vertex_start, len(polygon), raw_material_id, transformed_normal))
-
-                # Emit collider (AABB of the face polygon with skin thickness for raycast)
-                # Add ±0.01 padding to give zero-thickness faces volume for AABB intersection
-                bounds_min = tuple(min(v[i] for v in transformed_verts) - 0.01 for i in range(3))
-                bounds_max = tuple(max(v[i] for v in transformed_verts) + 0.01 for i in range(3))
-                collider = Collider(
-                    type_=0,
-                    solid=1,
-                    has_plane_origin=1,
-                    bounds_min=bounds_min,
-                    bounds_max=bounds_max,
-                    normal=transformed_normal,
-                    plane_origin=transformed_verts[0],
-                    face_id=len(lvl.faces) - 1,
-                )
-                lvl.colliders.append(collider)
-
-                all_faces += 1
-                all_verts += len(polygon)
+    emit_brush_faces(STATIC_SHELL_CLASSES, 0x01, True)
+    emit_brush_faces(VISUAL_ONLY_BRUSH_CLASSES, 0x02, False)
 
     if skipped_brush_classes:
         skipped_summary = ", ".join(
@@ -583,7 +589,7 @@ def bake_map(map_file: str, lvl_file: str, manifest_file: str, dump_spawn: bool 
 
     print(f"face_count={len(lvl.faces)} vertex_count={len(lvl.vertices)} "
           f"collider_count={len(lvl.colliders)} entity_count={len(lvl.entities)}")
-    print(f"materials: {', '.join(sorted(materials_used))}")
+    print(f"materials: {', '.join(materials_in_order)}")
     print(f"wrote {lvl_file} ({len(open(lvl_file, 'rb').read())} bytes)")
     print(f"wrote {manifest_file}")
 

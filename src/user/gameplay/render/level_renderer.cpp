@@ -15,9 +15,9 @@ namespace {
 
 // Pack a position (game-units) into int16 by scaling to fixed-point.
 // T3D uses a coordinate space where vertices are in roughly [-32768, 32767].
-// Game units after 10x scale reach ~186 (x-axis, far end of climb wall).
-// 128 gives max ±256 units in int16 (32767/128), comfortably covering all rooms.
-static constexpr float kPosFp = 128.0f;
+// OG 1-1 reaches about x=[-192, 76.8], y=[48, 115.2], z=[-908.8, 27.6] after
+// the Quake->game transform, so 32 gives a safe ceiling of roughly +/-1024.
+static constexpr float kPosFp = 32.0f;
 
 // UV scale: baker outputs UVs already in texture-repeat units (0-1 = one tile).
 // No additional scaling needed.
@@ -133,7 +133,9 @@ void LevelRenderer::Draw(const MaterialCatalog& catalog) const {
         if (batch.tri_count == 0) continue;
 
         sprite_t* material = catalog.MaterialFor(batch.material_id);
-        if (batch.material_id != current_material_id && material != nullptr) {
+        if (material == nullptr) continue;
+
+        if (batch.material_id != current_material_id) {
             rdpq_texparms_t parms = {};
             parms.s.repeats = REPEAT_INFINITE;
             parms.t.repeats = REPEAT_INFINITE;

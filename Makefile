@@ -19,6 +19,7 @@ N64_CXXFLAGS += -std=gnu++17 -Os -Isrc/user
 DFS_MDL_FILES := \
     filesystem/mdl/room_fixture.t3dm \
     filesystem/mdl/strawberry.t3dm \
+    filesystem/mdl/tape_1.t3dm \
     filesystem/mdl/coin.t3dm \
     filesystem/mdl/spring_board.t3dm \
     filesystem/mdl/refill_gem.t3dm \
@@ -27,15 +28,23 @@ DFS_MDL_FILES := \
 
 DFS_TEX_FILES := \
     filesystem/tex/rock_1.sprite \
-    filesystem/tex/rock_1_climbable.sprite
+    filesystem/tex/rock_1_climbable.sprite \
+    filesystem/tex/snow_1.sprite \
+    filesystem/tex/rock_2.sprite \
+    filesystem/tex/metal_floor_1.sprite \
+    filesystem/tex/floor_dirty_concrete.sprite \
+    filesystem/tex/TB_empty.sprite
 
 DFS_FNT_FILES := filesystem/fnt/Renogare.font64
 
 # DFS level files
 DFS_LVL_FILES := \
-    filesystem/lvl/first-room.lvl \
-    filesystem/lvl/first-room.manifest \
-    filesystem/lvl/first-room.colmesh
+	filesystem/lvl/first-room.lvl \
+	filesystem/lvl/first-room.manifest \
+	filesystem/lvl/first-room.colmesh \
+	filesystem/lvl/1-1.lvl \
+	filesystem/lvl/1-1.manifest \
+	filesystem/lvl/1-1.colmesh
 
 # Create filesystem directories
 filesystem/mdl filesystem/tex filesystem/fnt filesystem/lvl:
@@ -60,8 +69,18 @@ filesystem/tex/%.sprite: assets/og_converted/textures/%.sprite | filesystem/tex
 
 # Bake level files
 filesystem/lvl/first-room.lvl filesystem/lvl/first-room.manifest: \
-	assets/rooms/first-room/first-room.map | filesystem/lvl
+	assets/rooms/first-room/first-room.map \
+	tools/bake_map.py \
+	tools/lvl_format.py \
+	tools/entity_ids.py | filesystem/lvl
 	python3 tools/bake_map.py $< filesystem/lvl/first-room.lvl filesystem/lvl/first-room.manifest
+
+filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest: \
+	assets/og_converted/maps/1-1.map \
+	tools/bake_map.py \
+	tools/lvl_format.py \
+	tools/entity_ids.py | filesystem/lvl
+	python3 tools/bake_map.py $< filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest
 
 # Copy font files
 filesystem/fnt/%.font64: assets/og_converted/fonts/%.font64 | filesystem/fnt
@@ -90,6 +109,7 @@ src = \
 	src/user/gameplay/world/room_data.cpp \
 	src/user/gameplay/save_system.cpp \
 	src/user/gameplay/actor/strawberry_actor.cpp \
+	src/user/gameplay/actor/cassette_actor.cpp \
 	src/user/gameplay/actor/refill_actor.cpp \
 	src/user/gameplay/actor/spring_actor.cpp \
 	src/user/gameplay/render/model.cpp \
@@ -118,7 +138,7 @@ N64_ROM_TITLE ?= "Madeline Cube ROM"
 clean:
 	rm -rf $(BUILD_DIR) madeline_cube_rom.z64 madeline_cube_rom.dfs
 
-filesystem/lvl/%.colmesh: filesystem/lvl/%.lvl
+filesystem/lvl/%.colmesh: filesystem/lvl/%.lvl tools/colmesh_bake.py tools/lvl_format.py
 	python3 tools/colmesh_bake.py $< $@
 
 # Bake collision mesh for a single level.
