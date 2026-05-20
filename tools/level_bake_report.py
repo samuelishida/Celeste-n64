@@ -49,6 +49,9 @@ def _read_materials(lvl_path: Path, lvl) -> list[str]:
 def summarize(map_path: Path, lvl_path: Path) -> list[str]:
     entities = parse_map_file(str(map_path))
     lvl = LvlFile.read(str(lvl_path))
+    with lvl_path.open("rb") as f:
+        magic = f.read(4).decode("ascii")
+        version = int.from_bytes(f.read(4), "big")
 
     brushes_by_class = Counter()
     source_faces_by_class = Counter()
@@ -72,6 +75,7 @@ def summarize(map_path: Path, lvl_path: Path) -> list[str]:
             reversed_winding_faces += 1
 
     lines = [
+        f"lvl_header=magic:{magic} version:{version}",
         f"map_sha256={hashlib.sha256(map_path.read_bytes()).hexdigest()}",
         f"lvl_sha256={hashlib.sha256(lvl_path.read_bytes()).hexdigest()}",
         f"brushes_by_class={dict(sorted(brushes_by_class.items()))}",

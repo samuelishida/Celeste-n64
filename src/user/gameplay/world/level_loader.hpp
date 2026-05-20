@@ -11,6 +11,7 @@ struct LevelFace {
     uint32_t vertex_start;
     uint32_t vertex_count;
     uint16_t material_id;
+    uint16_t flags;  // bit 0 = solid, bit 1 = visual_only
     Vec3 normal;
 };
 
@@ -20,8 +21,8 @@ struct LevelVertex {
 };
 
 struct LevelGeometry {
-    static constexpr int kMaxFaces = 512;
-    static constexpr int kMaxVertices = 4096;
+    static constexpr int kMaxFaces = 1024;
+    static constexpr int kMaxVertices = 8192;
 
     LevelFace faces[kMaxFaces];
     int face_count = 0;

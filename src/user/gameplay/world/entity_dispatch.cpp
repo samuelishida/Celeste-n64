@@ -1,5 +1,6 @@
 #include "gameplay/world/entity_dispatch.hpp"
 #include "gameplay/world/actor_factory.hpp"
+#include "gameplay/world/entity_ids.hpp"
 
 #include <libdragon.h>
 
@@ -14,9 +15,9 @@ namespace {
 static constexpr uint16_t kUnknown = 0;
 static uint16_t ClassnameToPlaceholder(uint16_t classname_id) {
     switch (classname_id) {
-        case 1: return 2;
-        case 2: return 3;
-        case 3: return 7;
+        case kEntStrawberry: return 2;
+        case kEntRefill: return 3;
+        case kEntSpring: return 7;
         default: return kUnknown;
     }
 }

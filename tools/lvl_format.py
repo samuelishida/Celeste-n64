@@ -1,8 +1,8 @@
-"""LVL binary format (V1) serialization and deserialization.
+"""LVL binary format (V2) serialization and deserialization.
 
-V1 format layout (big-endian):
-+0x00  magic            char[4]   = "LVL1"
-+0x04  version          uint32    = 1
+V2 format layout (big-endian):
++0x00  magic            char[4]   = "LVL2"
++0x04  version          uint32    = 2
 +0x08  collider_count   uint32
 +0x0C  face_count       uint32
 +0x10  vertex_count     uint32
@@ -22,6 +22,11 @@ V1 format layout (big-endian):
 +0x38  off_vertices     uint32
 +0x3C  off_entities     uint32
 +0x40  off_props_blob   uint32
+
+Face.flags (uint16):
+  bit 0 = solid
+  bit 1 = visual_only
+  bits 2-15 = reserved
 """
 
 import struct
@@ -44,11 +49,12 @@ class Collider:
         self.owner_id = owner_id
 
 class Face:
-    def __init__(self, vertex_start=0, vertex_count=0, material_id=0, normal=(0, 0, 1)):
+    def __init__(self, vertex_start=0, vertex_count=0, material_id=0, normal=(0, 0, 1), flags=0):
         self.vertex_start = vertex_start
         self.vertex_count = vertex_count
         self.material_id = material_id
         self.normal = normal
+        self.flags = flags
 
 class Vertex:
     def __init__(self, pos=(0, 0, 0), uv=(0, 0)):
@@ -101,8 +107,8 @@ class LvlFile:
         off_props_blob = off_entities + len(self.entities) * 24
         
         # Write header
-        f.write(b"LVL1")
-        f.write(struct.pack(">I", 1))  # version
+        f.write(b"LVL2")
+        f.write(struct.pack(">I", 2))  # version
         f.write(struct.pack(">I", len(self.colliders)))
         f.write(struct.pack(">I", len(self.faces)))
         f.write(struct.pack(">I", len(self.vertices)))
@@ -133,8 +139,8 @@ class LvlFile:
         
         # Write faces (24 bytes each)
         for face in self.faces:
-            f.write(struct.pack(">IIHh", face.vertex_start, face.vertex_count,
-                               face.material_id, 0))
+            f.write(struct.pack(">IIHH", face.vertex_start, face.vertex_count,
+                               face.material_id, face.flags))
             f.write(struct.pack(">fff", *face.normal))
         
         # Write vertices (20 bytes each)
@@ -164,11 +170,11 @@ class LvlFile:
         
         # Read header
         magic = f.read(4)
-        if magic != b"LVL1":
+        if magic != b"LVL2":
             raise ValueError(f"Invalid magic: {magic}")
-        
+
         version = struct.unpack(">I", f.read(4))[0]
-        if version != 1:
+        if version != 2:
             raise ValueError(f"Unsupported version: {version}")
         
         collider_count = struct.unpack(">I", f.read(4))[0]
@@ -214,9 +220,9 @@ class LvlFile:
         # Read faces (24 bytes each)
         f.seek(off_faces)
         for _ in range(face_count):
-            vs, vc, material_id, _ = struct.unpack(">IIHh", f.read(12))
+            vs, vc, material_id, flags = struct.unpack(">IIHH", f.read(12))
             normal = struct.unpack(">fff", f.read(12))
-            face = Face(vs, vc, material_id, normal)
+            face = Face(vs, vc, material_id, normal, flags)
             lvl.faces.append(face)
         
         # Read vertices (20 bytes each)

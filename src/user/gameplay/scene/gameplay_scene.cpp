@@ -19,10 +19,10 @@
 #include "gameplay/render/level_renderer.hpp"
 #include "gameplay/render/material_catalog.hpp"
 #include "gameplay/render/model.hpp"
-#include "gameplay/render/static_room_model.hpp"
 #include "gameplay/render/texture.hpp"
 #include "gameplay/world/actor_world.hpp"
 #include "gameplay/world/entity_dispatch.hpp"
+#include "gameplay/actor/cassette_actor.hpp"
 #include "gameplay/actor/strawberry_actor.hpp"
 #include "gameplay/actor/refill_actor.hpp"
 #include "gameplay/actor/spring_actor.hpp"
@@ -37,6 +37,11 @@ namespace madeline_cube {
 
 namespace {
 
+constexpr const char* kMadelineModelPath = "rom:/mdl/player.t3dm";
+constexpr const char* kCassetteModelPath = "rom:/mdl/tape_1.t3dm";
+constexpr const char* kBakedLevelPath = "rom:/lvl/1-1.lvl";
+constexpr const char* kBakedLevelName = "1-1";
+constexpr float kFadeReloadSeconds = 0.5f;
 
 struct RenderObject {
     T3DMat4 matrix;
@@ -157,9 +162,9 @@ struct GameplayScene::Impl {
     RenderObject collectible_render;
 
     StaticModel strawberry_model;
+    StaticModel cassette_model;
     StaticModel madeline_model;
     StaticModel room_fixture_model;
-    StaticRoomModel static_room_model;
     SpriteTexture rock1_texture;
 
     LevelGeometry level_geometry;
@@ -167,6 +172,7 @@ struct GameplayScene::Impl {
     LevelRenderer level_renderer;
 
     ActorWorld actor_world;
+    CassetteActor cassette_actor;
     StrawberryActor strawberry_actor;
     RefillActor refill_actor;
     SpringActor spring_actor;
@@ -190,7 +196,64 @@ struct GameplayScene::Impl {
     RomTelemetry telemetry;
     bool baked_level_loaded_ = false;
     bool room_fixture_visible_ = false;
+    bool cassette_reload_active_ = false;
+    float cassette_reload_timer_ = 0.0f;
+
+    void ResetPlayerToRoomStart();
+    void ReloadBakedLevel();
 };
+
+void GameplayScene::Impl::ResetPlayerToRoomStart() {
+    constexpr float kSpawnSkin = 0.2f;
+    const float spawn_lift = player_motor.Config().half_height + kSpawnSkin;
+    checkpoint = room.checkpoint;
+    checkpoint.y += spawn_lift;
+    player = {};
+    player.position = room.player_start;
+    player.position.y += spawn_lift;
+    player.prev_position = player.position;
+    player.grounded = false;
+    camera_controller.Reset(camera, player.position);
+    telemetry.RecordSpawn();
+    fixed_step.accumulator = 0.0f;
+    render_alpha = 1.0f;
+}
+
+void GameplayScene::Impl::ReloadBakedLevel() {
+    level_renderer.Free();
+    material_catalog.Unload();
+    if (room.coll_mesh) {
+        physics::FreeCollMesh(room.coll_mesh);
+        room.coll_mesh = nullptr;
+    }
+
+    level_geometry = {};
+    room = Room{};
+    actor_world = ActorWorld{};
+    baked_level_loaded_ =
+        LoadLevel(kBakedLevelPath, room, level_geometry) &&
+        level_renderer.Init(level_geometry);
+    if (baked_level_loaded_) {
+        material_catalog.Load(kBakedLevelName);
+        DispatchLevelEntities(room, actor_world,
+                              strawberry_actor,
+                              refill_actor,
+                              spring_actor);
+        actor_world.ResolvePending();
+    } else {
+        room = GetForsakenCityStartRoom();
+    }
+
+    if (room.has_cassette) {
+        cassette_actor.InitAt(room.cassette);
+    } else {
+        cassette_actor = {};
+    }
+
+    ResetPlayerToRoomStart();
+    cassette_reload_active_ = false;
+    cassette_reload_timer_ = 0.0f;
+}
 
 void GameplayScene::Init() {
     impl_ = new Impl();
@@ -205,37 +268,12 @@ void GameplayScene::Init() {
 
     impl_->debug_hud.Init();
     impl_->strawberry_model.Load("rom:/mdl/strawberry.t3dm");
-    impl_->madeline_model.Load("rom:/mdl/madeline.t3dm");
+    impl_->cassette_model.Load(kCassetteModelPath);
+    impl_->madeline_model.Load(kMadelineModelPath);
     impl_->room_fixture_model.Load("rom:/mdl/room_fixture.t3dm");
     impl_->room_fixture_model.UpdateMatrix({0.0f, 40.0f, -120.0f}, 60.0f, 0.0f);
-    impl_->static_room_model.Load("rom:/lvl/first-room.t3dm");
 
-    impl_->baked_level_loaded_ =
-        LoadLevel("rom:/lvl/first-room.lvl", impl_->room, impl_->level_geometry) &&
-        impl_->level_renderer.Init(impl_->level_geometry);
-    if (impl_->baked_level_loaded_) {
-        impl_->material_catalog.Load("first-room");
-        DispatchLevelEntities(impl_->room, impl_->actor_world,
-                              impl_->strawberry_actor,
-                              impl_->refill_actor,
-                              impl_->spring_actor);
-    } else {
-        impl_->room = GetForsakenCityStartRoom();
-    }
-
-    // player_start is the entity origin = feet position (Quake convention).
-    // Add half_height to get the center, plus a small skin so the floor probe
-    // finds the (slightly quantized) colmesh surface on frame 1.
-    constexpr float kSpawnSkin = 0.2f;
-    const float spawn_lift = impl_->player_motor.Config().half_height + kSpawnSkin;
-    impl_->checkpoint = impl_->room.checkpoint;
-    impl_->checkpoint.y += spawn_lift;
-    impl_->player.position = impl_->room.player_start;
-    impl_->player.position.y += spawn_lift;
-    impl_->player.prev_position = impl_->player.position;
-    impl_->player.grounded = false;
-    impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
-    impl_->telemetry.RecordSpawn();
+    impl_->ReloadBakedLevel();
 
     // Graybox room geometry render objects (only when not using baked level)
     if (!impl_->baked_level_loaded_) {
@@ -258,9 +296,9 @@ void GameplayScene::Shutdown() {
 
     impl_->debug_hud.Shutdown();
     impl_->strawberry_model.Free();
+    impl_->cassette_model.Free();
     impl_->madeline_model.Free();
     impl_->room_fixture_model.Free();
-    impl_->static_room_model.Free();
     impl_->material_catalog.Unload();
     impl_->level_renderer.Free();
 
@@ -364,9 +402,23 @@ void GameplayScene::Update(float delta_seconds) {
     // Actors run after the player + camera so they can read the resolved
     // player state for pickup checks and other gameplay reactions.
     if (impl_->baked_level_loaded_) {
+        if (impl_->room.has_cassette && !impl_->cassette_reload_active_) {
+            if (impl_->cassette_actor.Step(delta_seconds, impl_->player.position)) {
+                impl_->cassette_reload_active_ = true;
+                impl_->cassette_reload_timer_ = 0.0f;
+            }
+        }
         impl_->actor_world.Update(delta_seconds);
     } else {
         TryCollect(impl_->collectible, impl_->player.position);
+    }
+
+    if (impl_->cassette_reload_active_) {
+        impl_->cassette_reload_timer_ += delta_seconds;
+        if (impl_->cassette_reload_timer_ >= kFadeReloadSeconds) {
+            impl_->ReloadBakedLevel();
+            return;
+        }
     }
 
     {
@@ -383,7 +435,9 @@ void GameplayScene::Update(float delta_seconds) {
 
     DebugCounters counters;
     counters.active_scene_id = 0;
-    counters.actor_count = 1 + impl_->room_geometry_count + impl_->actor_world.Count();
+    counters.actor_count =
+        1 + impl_->room_geometry_count + impl_->actor_world.Count() +
+        ((impl_->room.has_cassette && !impl_->cassette_actor.collected) ? 1 : 0);
     impl_->debug_hud.Update(counters);
 
     // Print telemetry every 60 frames (~1 second) to avoid serial spam
@@ -431,13 +485,19 @@ void GameplayScene::Render() {
             T3D_FLAG_SHADED | T3D_FLAG_DEPTH | T3D_FLAG_TEXTURED));
         rdpq_mode_combiner(RDPQ_COMBINER1((TEX0,0,SHADE,0),(TEX0,0,SHADE,0)));
         impl_->level_renderer.Draw(impl_->material_catalog);
+        if (impl_->room.has_cassette && !impl_->cassette_actor.collected && impl_->cassette_model.IsLoaded()) {
+            constexpr float kCassetteScale = 0.18f;
+            impl_->cassette_model.UpdateMatrix(
+                impl_->cassette_actor.position,
+                kCassetteScale,
+                impl_->cassette_actor.SpinYawRadians());
+            impl_->cassette_model.Draw();
+        }
         constexpr float kStrawberryScale = 0.05f;
         if (StrawberryActor* sa = impl_->actor_world.Get<StrawberryActor>()) {
             impl_->strawberry_model.UpdateMatrix(sa->position, kStrawberryScale, 0.0f);
             impl_->strawberry_model.Draw();
         }
-    } else if (impl_->static_room_model.IsLoaded()) {
-        impl_->static_room_model.Draw();
     } else {
         // Graybox: cube geometry
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
@@ -468,6 +528,12 @@ void GameplayScene::Render() {
     // Switch to 2D for overlays
     rdpq_set_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+    if (impl_->cassette_reload_active_) {
+        const float fade_alpha = impl_->cassette_reload_timer_ / kFadeReloadSeconds;
+        const uint8_t alpha = static_cast<uint8_t>(fade_alpha >= 1.0f ? 255.0f : fade_alpha * 255.0f);
+        rdpq_set_prim_color(RGBA32(0, 0, 0, alpha));
+        rdpq_fill_rectangle(0, 0, display_get_width(), display_get_height());
+    }
     impl_->debug_hud.Render();
 
     rdpq_detach_show();

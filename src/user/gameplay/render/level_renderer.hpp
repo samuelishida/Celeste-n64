@@ -23,8 +23,8 @@ private:
         uint32_t tri_count;
     };
 
-    static constexpr int kMaxBatches = 512;
-    static constexpr int kMaxVerts = 4096;
+    static constexpr int kMaxBatches = 1024;
+    static constexpr int kMaxVerts = 4096;  // unused — see Init()
 
     T3DVertPacked* verts_ = nullptr;
     DrawBatch batches_[kMaxBatches];

@@ -115,7 +115,7 @@ struct ActorSpawn {
 struct Room {
     static constexpr int kMaxGeometry = 64;
     static constexpr int kMaxColliders = 512;
-    static constexpr int kMaxSpawns = 16;
+    static constexpr int kMaxSpawns = 64;
     static constexpr int kMaxMovingSurfaces = 8;
 
     StaticGeometry geometry[kMaxGeometry];
@@ -129,6 +129,14 @@ struct Room {
 
     MovingSurface moving_surfaces[kMaxMovingSurfaces];
     int moving_surface_count = 0;
+
+    char skybox[16] = {};
+    char music[24] = {};
+    char ambience[16] = {};
+    float snow_amount = 0.0f;
+    Vec3 snow_dir = {0.0f, 0.0f, 0.0f};
+    Vec3 cassette = {0.0f, 0.0f, 0.0f};
+    bool has_cassette = false;
 
     Vec3 player_start = {0.0f, 30.0f, 0.0f};
     Vec3 checkpoint = {0.0f, 30.0f, 0.0f};
