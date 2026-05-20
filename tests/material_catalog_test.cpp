@@ -6,10 +6,10 @@
 
 int main() {
     // Validate fixture format: 3 materials in order.
-    FILE* f = fopen("tests/fixtures/1-1.manifest", "r");
-    assert(f && "tests/fixtures/1-1.manifest missing");
+    FILE* f = fopen("tests/fixtures/first-room.manifest", "r");
+    assert(f && "tests/fixtures/first-room.manifest missing");
 
-    const char* expected[] = {"rock_1", "snow_1", "girder"};
+    const char* expected[] = {"rock_1", "rock_1_climbable"};
     int count = 0;
     char line[64];
     while (fgets(line, sizeof(line), f)) {
@@ -18,11 +18,11 @@ int main() {
             line[--len] = '\0';
         }
         if (len == 0) continue;
-        assert(count < 3 && "too many materials in fixture");
+        assert(count < 2 && "too many materials in fixture");
         assert(strcmp(line, expected[count]) == 0 && "unexpected material name");
         ++count;
     }
     fclose(f);
-    assert(count == 3 && "fixture must have exactly 3 materials");
+    assert(count == 2 && "fixture must have exactly 2 materials");
     return 0;
 }

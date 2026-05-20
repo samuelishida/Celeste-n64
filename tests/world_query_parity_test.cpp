@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include "../src/user/gameplay/physics/coll_mesh.hpp"
 #include "../src/user/gameplay/world/level_loader.hpp"
@@ -8,12 +9,30 @@
 
 using namespace madeline_cube;
 
-static float Dot(const Vec3& a, const Vec3& b) {
-    return a.x*b.x + a.y*b.y + a.z*b.z;
+static void PrintShellAuditFixture(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        printf("[queries] shell audit fixture missing: %s\n", path);
+        return;
+    }
+
+    printf("[queries] shell audit fixture: %s\n", path);
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        int len = static_cast<int>(strlen(line));
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+        if (len == 0 || line[0] == '#') continue;
+        printf("[queries] probe %s\n", line);
+    }
+    fclose(f);
 }
 
 int main(int argc, char* argv[]) {
-    const char* lvl_path = "filesystem/lvl/1-1.lvl";
+    PrintShellAuditFixture("tests/fixtures/1-1-shell-boundary.txt");
+
+    const char* lvl_path = "filesystem/lvl/first-room.lvl";
     if (argc > 1) lvl_path = argv[1];
 
     Room* room_ptr = new Room;
@@ -21,7 +40,7 @@ int main(int argc, char* argv[]) {
     Room& room = *room_ptr;
     LevelGeometry& geom = *geom_ptr;
     if (!LoadLevel(lvl_path, room, geom)) { printf("LoadLevel failed\n"); return 1; }
-    if (!room.coll_mesh) { printf("colmesh not loaded — run 'make bake-colmesh LEVEL=1-1' first\n"); return 1; }
+    if (!room.coll_mesh) { printf("colmesh not loaded — run 'make bake-colmesh LEVEL=first-room' first\n"); return 1; }
 
     printf("[queries] loaded: %u colmesh tris, %d dynamic colliders\n",
            room.coll_mesh->header->triangle_count, room.collider_count);
@@ -34,37 +53,41 @@ int main(int argc, char* argv[]) {
     float wmin[3] = { ox + room.coll_mesh->header->aabb_min[0]*qs,
                       oy + room.coll_mesh->header->aabb_min[1]*qs,
                       oz + room.coll_mesh->header->aabb_min[2]*qs };
-    float wmax[3] = { ox + room.coll_mesh->header->aabb_max[0]*qs,
+    float wmx[3]  = { ox + room.coll_mesh->header->aabb_max[0]*qs,
                       oy + room.coll_mesh->header->aabb_max[1]*qs,
                       oz + room.coll_mesh->header->aabb_max[2]*qs };
 
     constexpr float kRayDist = 20.0f;
 
-    // Sanity: 1000 floor queries from grid — must find floor below level center
+    // Sanity: 1000 floor queries from the baked spawn location — must hit the
+    // floor directly below the room's canonical PlayerSpawn.
     int floor_hit = 0;
-    const float cx = (wmin[0] + wmax[0]) * 0.5f;
-    const float cz = (wmin[2] + wmax[2]) * 0.5f;
-    const float cy = wmax[1] - 1.0f;
+    const Vec3 floor_origin = {room.player_start.x, room.player_start.y + 5.0f, room.player_start.z};
     for (int i = 0; i < 1000; ++i) {
-        Vec3 origin = {cx, cy, cz};
-        GroundHit gh = QueryFloorSource(room, origin, kRayDist);
+        GroundHit gh = QueryFloorSource(room, floor_origin, kRayDist);
         if (gh.hit) floor_hit++;
     }
-    printf("[queries] floor hits from center: %d/1000\n", floor_hit);
-    assert(floor_hit == 1000 && "floor query must hit from above center");
+    printf("[queries] floor hits from spawn: %d/1000\n", floor_hit);
+    assert(floor_hit == 1000 && "floor query must hit from above spawn");
 
-    // Sanity: ceiling above center
+    // Sanity: wall probe just inside the back boundary at player height must hit.
     {
-        Vec3 origin = {cx, wmin[1] + 1.0f, cz};
-        CeilingHit ch = QueryCeilingSource(room, origin, kRayDist);
-        printf("[queries] ceiling from below: hit=%d\n", (int)ch.hit);
+        const Vec3 wall_origin = {
+            room.player_start.x,
+            room.player_start.y,
+            wmx[2] - 1.0f,
+        };
+        WallHit hits[kMaxWallHits];
+        int n = QueryWalls(room, wall_origin, 2.0f, hits, kMaxWallHits);
+        printf("[queries] wall hits near back boundary: %d\n", n);
+        assert(n > 0 && "wall query must hit the back boundary");
     }
 
-    // Sanity: walls near level center
+    // Sanity: ceiling above the spawn still reports a hit somewhere in the room.
     {
-        WallHit hits[kMaxWallHits];
-        int n = QueryWalls(room, {cx, cy, cz}, 0.5f, hits, kMaxWallHits);
-        printf("[queries] walls near center: %d\n", n);
+        Vec3 origin = {room.player_start.x, room.player_start.y - 5.0f, room.player_start.z};
+        CeilingHit ch = QueryCeilingSource(room, origin, kRayDist);
+        printf("[queries] ceiling from below: hit=%d\n", (int)ch.hit);
     }
 
     // Verify SurfaceOwnerOf returns INVALID_OWNER for all triangles (static level)

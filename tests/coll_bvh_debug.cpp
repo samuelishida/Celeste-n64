@@ -23,7 +23,7 @@ static RayHit Brute(const CollMesh& m,const Vec3& o,const Vec3& d,float mt){
 }
 
 int main(){
-    CollMesh* m=LoadCollMesh("filesystem/lvl/1-1.colmesh");
+    CollMesh* m=LoadCollMesh("filesystem/lvl/first-room.colmesh");
     if(!m){fprintf(stderr,"load fail\n");return 1;}
     float s=m->header->quant_scale;
     float wmn[3]={m->header->quant_origin[0]+m->header->aabb_min[0]*s,m->header->quant_origin[1]+m->header->aabb_min[1]*s,m->header->quant_origin[2]+m->header->aabb_min[2]*s};
