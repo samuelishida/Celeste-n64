@@ -5,6 +5,13 @@
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/world/world.hpp"
 
+#ifdef __mips__
+#include <libdragon.h>
+#define PM_LOG debugf
+#else
+#define PM_LOG printf
+#endif
+
 namespace madeline_cube {
 namespace {
 
@@ -141,6 +148,8 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
             const float probe = -step_vec.y + kGroundSkin;
             // Use sphere sweep for floor probe to catch platform edges
             GroundHit floor;
+            PM_LOG("[pm] room=%p coll=%p &coll=%p\n",
+                   (void*)&room, (void*)room.coll_mesh, (void*)&room.coll_mesh);
             if (room.coll_mesh) {
                 using namespace physics;
                 const Vec3 probe_origin = {feet_origin.x, feet_origin.y + config_.radius, feet_origin.z};

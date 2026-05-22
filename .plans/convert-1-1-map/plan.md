@@ -26,7 +26,7 @@ This plan converts OG 1-1 into a playable, visually-faithful demake level. The s
 - **Current bake skips brush-bearing non-shell classes**: Decoration, SpikeBlock, TrafficBlock, DeathBlock, func_group, Cassette get logged-and-dropped. Source: `tools/bake_map.py:27-40`. This plan changes that.
 - **Current runtime entity ids are hardcoded** in `src/user/gameplay/world/level_loader.cpp` and `src/user/gameplay/world/entity_dispatch.cpp`; there is no shared C++ mirror yet. Inc 2 creates it before later increments add new ids.
 - **MaterialCatalog reads from `.manifest` line-by-line**, with missing sprites skipped. Source: `src/user/gameplay/render/material_catalog.cpp:33-37`. Adding sprite files to DFS is sufficient for new textures.
-- **Capacity constants** (verified): `LevelGeometry::kMaxFaces=512`, `LevelGeometry::kMaxVertices=4096` (`src/user/gameplay/world/level_loader.hpp:23-24`); `Room::kMaxSpawns=16` (`src/user/gameplay/world/world.hpp:118`); `LevelRenderer::kMaxBatches=512` and `LevelRenderer::kMaxVerts=4096` (`src/user/gameplay/render/level_renderer.hpp:26-27`). **Note:** `LevelRenderer::kMaxVerts` is declared but *unused* — the verts buffer is dynamically allocated from `geometry.vertex_count` (`level_renderer.cpp:37`). No renderer-side vertex cap needs bumping; only `LevelGeometry::kMaxVertices` matters.
+- **Capacity constants** (current, after Inc 2 deployed): `LevelGeometry::kMaxFaces=1024`, `LevelGeometry::kMaxVertices=8192` (`src/user/gameplay/world/level_loader.hpp:24-25`); `Room::kMaxSpawns=64` (`src/user/gameplay/world/world.hpp:118`); `LevelRenderer::kMaxBatches=1024` (`src/user/gameplay/render/level_renderer.hpp:26`). `LevelRenderer::kMaxVerts=4096` is declared but *unused* — the verts buffer is dynamically allocated from `geometry.vertex_count` at `level_renderer.cpp:37-38` (one `T3DVertPacked` per pair). No renderer-side vertex cap needs bumping.
 - **OG 1-1 bounding box** (verified by re-parsing 1-1.map): excluding the DeathBlock kill-volume marker (Quake y up to 4864), the playable shell spans:
   - Quake x ∈ [-960, 384] → game x ∈ [-192.0, 76.8]
   - Quake z ∈ [240, 576] → game y ∈ [48.0, 115.2]
@@ -42,13 +42,26 @@ This plan converts OG 1-1 into a playable, visually-faithful demake level. The s
 
 ## Risks accepted
 
-- **`LevelGeometry::kMaxFaces=512` may not fit decorations.** The current shell-only 1-1 bake is 102 faces / 440 vertices / 2 entities. Decoration brushes are added later and may push the level beyond the old first-room-oriented caps, so Inc 2 bumps `LevelGeometry::kMaxFaces` to 1024 unconditionally and `LevelRenderer::kMaxBatches` to 1024 to match (one batch per face today).
+- **`LevelGeometry::kMaxFaces=512` may not fit decorations.** The current shell-only 1-1 bake is 102 faces / 440 vertices / 2 entities. Decoration brushes are added later and may push the level beyond the old first-room-oriented caps, so Inc 2 bumps `LevelGeometry::kMaxFaces` to 1024 unconditionally and `LevelRenderer::kMaxBatches` to 1024 to match (one batch per face today). **These bumps are already deployed in the current codebase** (kMaxFaces=1024, kMaxVertices=8192, kMaxBatches=1024, kPosFp=32).
 - **Static struct growth on the heap.** Doubling `LevelGeometry::kMaxFaces` adds ~25 KB; doubling `LevelGeometry::kMaxVertices` adds ~80 KB; bumping `LevelRenderer::kMaxBatches` to 1024 adds ~6 KB. Total ~110 KB inside `GameplayScene::Impl` (heap-allocated). N64 RDRAM is 4–8 MB; acceptable but tracked.
+- **`Room` struct grows as later increments add hazards, traffic, and nodes.** Incs 6–8 add `HazardVolume hazards[16]` (~2KB), `NodeSpawn nodes[8]` (~0.4KB), `TrafficSpawn traffic_blocks[8]` (~0.5KB) to `Room`, which lives inside the heap-allocated `Impl`. Total `Room` size after all increments is ~47KB. Confirm RDRAM headroom with a `sizeof(Impl)` print after Inc 2 deploys. See CONSIDER in Open Questions.
 - **PropRenderer model loads may be slow.** Each `t3d_model_load` is a DFS read; 11 props means 11 file opens. Mitigation: dedupe by model name and load each `.t3dm` once at level init.
 - **`Node` targets can be unresolved** (missing targetname). Mitigation: baker logs and emits TrafficBlock with empty node list; actor stays still rather than crashing.
 - **Slope collision may interact poorly with player motor.** The motor was tuned on axis-aligned faces of `first-room`. Mitigation: Inc 2 includes a "walk the level on a stick" smoke check; if the player falls off slopes or warps, file a follow-up bug. Don't block plan completion on it.
 - **DFS size growth.** Adding 5 textures + 4 models adds ~150 KB. Mitigation: accept; N64 cart has room.
 - **Skybox/music are stubbed.** Atmospheric mismatch (silent, no sky). Mitigation: accept; tracked in Open Questions.
+
+## Stability prerequisite (2026-05-21)
+
+Before proceeding with unimplemented increments, confirm the ROM boots and runs
+without crashing. The level-load path (LoadLevel + colmesh sidecar + ReloadBakedLevel)
+has been audited and all null-pointer guards are in place. A diagnostic has been added
+to `level_loader.cpp` to log a `[lvl] colmesh FAILED` message if the colmesh sidecar
+fails to load. Verify this message is absent in the emulator console before proceeding.
+
+If the ROM crashes on boot with 1-1, switch temporarily to first-room (revert
+`kBakedLevelPath` in `gameplay_scene.cpp`) to confirm first-room works — that isolates
+whether the crash is data-specific to 1-1 or a runtime bug.
 
 ## Increment DAG
 
@@ -208,7 +221,10 @@ Baker, MaterialCatalog, and renderer must agree on the meaning of "null slot." B
 #### Verification
 - Run: `./compile-rom.sh > /tmp/hawk-implement-plan-check-inc2.log 2>&1` then `rg -n 'error|warning|fail|FAIL' /tmp/hawk-implement-plan-check-inc2.log | head -50`.
 - Boot ROM, observe console: `[lvl] loaded rom:/lvl/1-1.lvl: faces=N vertices=M entities=K`. Confirm N ≤ 1024, M ≤ 8192, K ≤ 64.
+- Also confirm: `[lvl] colmesh loaded: rom:/lvl/1-1.colmesh (T tris)` — if this line is absent or shows `colmesh FAILED`, stop and diagnose before proceeding. Collision queries fall back to an empty collider set without a colmesh.
 - Walk the spawn platform: player should not fall through, walls should push back. Slope walk is a stretch goal (do not block on perfect slope feel).
+- Host colmesh smoke test: after baking, run `tools/colmesh_dump.py filesystem/lvl/1-1.colmesh | head -40` and verify triangle count is plausible and normals look correct. A host-side unit test using `tests/coll_mesh_query_test.cpp` pointed at `filesystem/lvl/1-1.colmesh` should pass before proceeding to later increments.
+- Capture before/after vertex/face counts; print `sizeof(GameplayScene::Impl)` once (add a temporary `debugf("[impl] size=%zu\n", sizeof(Impl));` in Init, remove after) to confirm total RDRAM usage is reasonable.
 - Capture before/after vertex/face counts; document in commit body.
 
 ---
@@ -792,11 +808,13 @@ Document the playthrough in a follow-up note (`docs/1-1-playthrough.md`) if the 
 
 ## Open questions (CONSIDER from review)
 
-- **Total `GameplayScene::Impl` struct size after capacity bumps.** Inc 2 grows `LevelGeometry` by ~110 KB and adds ~50 KB more from Inc 5/6/8 Room fields. Worth a sanity print of `sizeof(Impl)` after Inc 2 to confirm RDRAM headroom.
+- **Total `GameplayScene::Impl` struct size after capacity bumps.** Inc 2 grows `LevelGeometry` by ~110 KB and adds ~50 KB more from Inc 5/6/8 Room fields. Worth a sanity print of `sizeof(Impl)` after Inc 2 to confirm RDRAM headroom. A temporary `debugf("[impl] size=%zu\n", sizeof(Impl));` in `GameplayScene::Init()` (removed before commit) gives the exact number.
+- **`Room` struct total size after all increments.** After Inc 2–8: LevelGeometry (~188KB) + Room (~47KB) + actors/renderers (~20KB) ≈ 255KB total Impl. Track this if N64 heap pressure increases.
 - **`tests/world_query_parity_test.cpp` loads `first-room.lvl` (line 35).** After the level swap this test still runs against first-room, which is arguably the right regression coverage — but worth a decision: keep as first-room regression, or migrate to 1-1.
+- **1-1 colmesh host test** — no host-side unit test exercises the 1-1 colmesh query path. A test pointing `tests/coll_mesh_query_test.cpp` at `filesystem/lvl/1-1.colmesh` and asserting at least one floor hit at the authored spawn position would catch colmesh regressions cheaply.
 - **Node `target` strings are numeric** ("000"–"004"). Bake-time string-id compare is exact-equality; document this so a future baker change (leading-zero stripping, integer normalization) doesn't silently break path resolution.
-- **`tape_1.t3dm` provenance** — assumed to come from `assets/og_converted/models/tape_1.t3dm` (the standard pattern). Confirm presence before Inc 9.
-- **Tests for hazard/traffic/prop bakes**. The plan covers shell smoke tests but not entity-table content tests. A bake-side asserttion that `hazard_count == 7` after baking 1-1 would catch a baker regression cheaply.
+- **`tape_1.t3dm` provenance** — present at `assets/og_converted/models/tape_1.t3dm` (confirmed by `ls`). No action needed before Inc 9.
+- **Tests for hazard/traffic/prop bakes**. The plan covers shell smoke tests but not entity-table content tests. A bake-side assertion that `hazard_count == 7` after baking 1-1 would catch a baker regression cheaply.
 
 ## Out of scope
 
