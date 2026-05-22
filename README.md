@@ -23,59 +23,67 @@ Pyrite64 should create and manage its generated project/runtime files later. The
 
 The small smoke test in `tests/gameplay_smoke.cpp` exercises the first gameplay rules without requiring the N64 toolchain yet.
 
-## Current milestone
+## Current status
 
-Milestone 0: `Madeline cube ROM`
+Milestone 1: Baked level pipeline + first playable room
 
-Definition of done:
+Completed:
+- ROM boots, runs, and loads baked levels (TrenchBroom → `.map` → `.lvl` + `.colmesh`)
+- Player moves/jumps/dashes on collision mesh
+- Multiple rooms supported (first-room stable; 1-1 WIP)
+- Fall respawn to checkpoint
+- Strawberry collection
+- Material catalog with textured geometry
 
-1. ROM boots.
-2. Player moves on a simple platform.
-3. `A` jumps.
-4. `B` dashes once in air.
-5. Falling below the kill plane respawns the player.
-6. Touching one strawberry cube marks it collected.
+In progress:
+- Stabilizing 1-1 map load (diagnostics in place for pointer corruption tracking)
+- Verifying collision mesh queries under 1-1 geometry
+
+See [`.agents/map-creation.md`](.agents/map-creation.md) for the full end-to-end pipeline (author → bake → load).
 
 ## Next build step
 
-1. Create a new Pyrite64 project in this folder.
-2. Recreate the scene from [`docs/milestones.md`](docs/milestones.md).
-3. Bind Pyrite64 object scripts to the gameplay modules in `src/user/gameplay/`.
-4. Replace placeholders only after the movement loop feels good.
+1. Fix remaining crash on 1-1 (diagnostics added; awaiting ROM run to isolate root cause).
+2. Add more entity types (hazards, traffic blocks, moving platforms).
+3. Extend room graph / level transitions.
+4. Introduce scene scripting (Pyrite64 planned, hand-authored for now).
 
-## Local smoke test
+## Host-side unit tests
 
-Until Pyrite64 is wired in, the engine-light gameplay layer can be checked with:
+Core physics and collision query logic can be tested on host without the N64 toolchain:
 
 ```sh
-g++ -std=c++17 -Isrc/user/gameplay \
-  tests/gameplay_smoke.cpp \
-  src/user/gameplay/player_controller.cpp \
-  src/user/gameplay/collectible.cpp \
-  src/user/gameplay/respawn_system.cpp \
-  -o /tmp/madeline_cube_smoke
-/tmp/madeline_cube_smoke
+g++ -std=c++17 -Isrc/user \
+  tests/level_loader_test.cpp \
+  src/user/gameplay/world/level_loader.cpp \
+  -o /tmp/level_loader_test && /tmp/level_loader_test
+
+g++ -std=c++17 -Isrc/user \
+  tests/coll_mesh_query_test.cpp \
+  src/user/gameplay/physics/coll_mesh.cpp \
+  -o /tmp/coll_mesh_query_test && /tmp/coll_mesh_query_test
 ```
+
+Note: `tests/gameplay_smoke.cpp` depends on `<libdragon.h>` via entity dispatch and cannot compile on host. Verify the full gameplay loop on ROM instead.
 
 ## ROM build
 
-After installing the current libdragon preview toolchain and Tiny3D:
+After installing the libdragon N64 toolchain and Tiny3D:
 
 ```sh
-make
+./compile-rom.sh
 ```
 
-This builds `madeline_cube_rom.z64`, a hand-authored `libdragon + tiny3d` version of Milestone 0:
+Builds `madeline_cube_rom.z64` (libdragon + tiny3d):
 
-- blue cube player
-- green floating island
-- red collectible cube
-- analog movement
-- `A` jump
-- `B` air dash
-- fall respawn
+- Player spawns on the active room (set by `kBakedLevelPath` in `gameplay_scene.cpp`)
+- Baked level geometry from TrenchBroom `.map` files
+- Textured faces from material catalog
+- Collision mesh queries for floor/wall detection
+- Analog movement, `A` jump, `B` air dash, fall respawn
+- Strawberry collectibles
 
-This first ROM is intentionally below the Pyrite64 editor layer. Pyrite64 is still the planned project path once we start authoring scenes and imported assets instead of placeholder geometry in code.
+To author a new room, see [`.agents/map-creation.md`](.agents/map-creation.md) for the full pipeline (TrenchBroom → bake_map.py → runtime load).
 
 ## Reference stack
 
