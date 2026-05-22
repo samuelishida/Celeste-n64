@@ -278,8 +278,11 @@ bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry) {
             physics::CollMesh* cm = physics::LoadCollMesh(colmesh_path);
             if (cm) {
                 room.coll_mesh = cm;
-                LVL_LOG("[lvl] colmesh loaded: %s (%lu tris)\n",
-                        colmesh_path, (unsigned long)cm->header->triangle_count);
+                LVL_LOG("[lvl] colmesh stored: ptr=%p &room.coll_mesh=%p\n",
+                        (void*)cm, (void*)&room.coll_mesh);
+            } else {
+                LVL_LOG("[lvl] colmesh FAILED: %s — collision falls back to colliders\n",
+                        colmesh_path);
             }
         }
     }

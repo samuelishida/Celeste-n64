@@ -32,13 +32,13 @@ static int16_t ToFp(float v) {
 bool LevelRenderer::Init(const LevelGeometry& geometry) {
     if (geometry.vertex_count == 0 || geometry.face_count == 0) return false;
 
-    // Allocate uncached vertex buffer for RSP
+    // Allocate uncached vertex buffer for RSP (one T3DVertPacked per pair of vertices)
+    const int pair_count = (geometry.vertex_count + 1) / 2;
     verts_ = static_cast<T3DVertPacked*>(
-        malloc_uncached(sizeof(T3DVertPacked) * (geometry.vertex_count + 1) / 2 * 2));
+        malloc_uncached(sizeof(T3DVertPacked) * pair_count));
     if (!verts_) return false;
 
     // Build T3DVertPacked from LevelVertex (pair-packed format)
-    const int pair_count = (geometry.vertex_count + 1) / 2;
     for (int pi = 0; pi < pair_count; ++pi) {
         T3DVertPacked& pair = verts_[pi];
         const int ia = pi * 2;

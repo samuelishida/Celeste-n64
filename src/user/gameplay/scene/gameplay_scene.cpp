@@ -205,14 +205,47 @@ struct GameplayScene::Impl {
 
 void GameplayScene::Impl::ResetPlayerToRoomStart() {
     constexpr float kSpawnSkin = 0.2f;
-    const float spawn_lift = player_motor.Config().half_height + kSpawnSkin;
-    checkpoint = room.checkpoint;
-    checkpoint.y += spawn_lift;
+    const PlayerMotorConfig& motor_config = player_motor.Config();
+    const float spawn_lift = motor_config.half_height + kSpawnSkin;
+    const auto snap_spawn_center = [&](const Vec3& authored_point) {
+        Vec3 center = authored_point;
+        center.y += spawn_lift;
+
+        const GroundHit floor = ProbeFloorDebug(
+            room,
+            center,
+            motor_config.half_height,
+            motor_config.ground_snap_distance,
+            motor_config.radius);
+        if (floor.hit) {
+            center.y = floor.point.y + motor_config.half_height + kSpawnSkin;
+        }
+        return center;
+    };
+
+    const Vec3 authored_start = room.player_start;
+    checkpoint = snap_spawn_center(room.checkpoint);
     player = {};
-    player.position = room.player_start;
-    player.position.y += spawn_lift;
+    player.position = snap_spawn_center(room.player_start);
     player.prev_position = player.position;
-    player.grounded = false;
+
+    MotorInput refresh_input;
+    refresh_input.requested_velocity = {0.0f, 0.0f, 0.0f};
+    refresh_input.wants_ground_snap = false;
+    refresh_input.wants_coyote_refresh = true;
+    refresh_input.wants_dash_refill = true;
+    player_motor.RefreshContacts(player, room, refresh_input);
+    player.prev_position = player.position;
+
+    debugf("[spawn] authored=(%.2f,%.2f,%.2f) grounded=(%.2f,%.2f,%.2f) grounded=%d\n",
+           static_cast<double>(authored_start.x),
+           static_cast<double>(authored_start.y),
+           static_cast<double>(authored_start.z),
+           static_cast<double>(player.position.x),
+           static_cast<double>(player.position.y),
+           static_cast<double>(player.position.z),
+           player.grounded ? 1 : 0);
+
     camera_controller.Reset(camera, player.position);
     telemetry.RecordSpawn();
     fixed_step.accumulator = 0.0f;
@@ -233,13 +266,19 @@ void GameplayScene::Impl::ReloadBakedLevel() {
     baked_level_loaded_ =
         LoadLevel(kBakedLevelPath, room, level_geometry) &&
         level_renderer.Init(level_geometry);
+    debugf("[reload] after LoadLevel+Init: baked=%d coll_mesh=%p &coll_mesh=%p impl=%p sizeof_impl=%d\n",
+           baked_level_loaded_ ? 1 : 0, (void*)room.coll_mesh,
+           (void*)&room.coll_mesh, (void*)this, (int)sizeof(*this));
     if (baked_level_loaded_) {
         material_catalog.Load(kBakedLevelName);
+        debugf("[reload] after matcat: coll_mesh=%p\n", (void*)room.coll_mesh);
         DispatchLevelEntities(room, actor_world,
                               strawberry_actor,
                               refill_actor,
                               spring_actor);
+        debugf("[reload] after dispatch: coll_mesh=%p\n", (void*)room.coll_mesh);
         actor_world.ResolvePending();
+        debugf("[reload] after resolve: coll_mesh=%p\n", (void*)room.coll_mesh);
     } else {
         room = GetForsakenCityStartRoom();
     }
@@ -250,6 +289,7 @@ void GameplayScene::Impl::ReloadBakedLevel() {
         cassette_actor = {};
     }
 
+    debugf("[reload] before spawn: coll_mesh=%p\n", (void*)room.coll_mesh);
     ResetPlayerToRoomStart();
     cassette_reload_active_ = false;
     cassette_reload_timer_ = 0.0f;
@@ -338,6 +378,8 @@ void GameplayScene::Update(float delta_seconds) {
 
     // Fixed-step physics loop.
     const int n_ticks = impl_->fixed_step.BeginFrame(delta_seconds);
+    debugf("[update] frame start: coll_mesh=%p n_ticks=%d\n",
+           (void*)impl_->room.coll_mesh, n_ticks);
     impl_->player.prev_position = impl_->player.position;
 
     MotorResult motor_result = {};
@@ -354,6 +396,11 @@ void GameplayScene::Update(float delta_seconds) {
         motor_input.wants_dash_refill = impl_->player.dash_reset_cooldown_remaining <= 0.0f;
         AdvanceMovingSurfaces(impl_->room, FixedStepAccumulator::kTickDt);
         was_grounded_pre_motor = impl_->player.contact.was_grounded;
+        debugf("[tick%d] pre-step: coll_mesh=%p vel=(%.1f,%.1f,%.1f)\n",
+               tick, (void*)impl_->room.coll_mesh,
+               (double)impl_->player.velocity.x,
+               (double)impl_->player.velocity.y,
+               (double)impl_->player.velocity.z);
         motor_result = impl_->player_motor.Step(impl_->player, impl_->room, motor_input, FixedStepAccumulator::kTickDt);
 
         // Controller reads post-motor grounded state for FSM transitions
