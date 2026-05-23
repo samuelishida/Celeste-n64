@@ -105,7 +105,7 @@ struct SweepSphereHit {
 // Raycast from 'origin' in direction 'dir' (NOT normalized; t is in [0, max_t]).
 // Returns nearest hit with t <= max_t.
 RayHit RaycastMesh(const CollMesh& mesh,
-                   const Vec3& origin, const Vec3& dir, float max_t,
+                   Vec3 origin, Vec3 dir, float max_t,
                    BackfaceCull cull = BackfaceCull::Ignore);
 
 // Sweep sphere of 'radius' from 'origin' along 'dir' (dir is normalised, distance <= max_dist).

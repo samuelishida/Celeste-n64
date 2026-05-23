@@ -244,7 +244,7 @@ inline bool AabbInflated(const AABB& box, const Vec3& qmin, const Vec3& qmax) {
 // ---------------------------------------------------------------------------
 
 RayHit RaycastMesh(const CollMesh& mesh,
-                   const Vec3& origin, const Vec3& dir, float max_t,
+                   Vec3 origin, Vec3 dir, float max_t,
                    BackfaceCull cull)
 {
     if (mesh.header->bvh_node_count == 0) return {};
