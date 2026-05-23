@@ -39,8 +39,6 @@ namespace {
 
 constexpr const char* kMadelineModelPath = "rom:/mdl/player.t3dm";
 constexpr const char* kCassetteModelPath = "rom:/mdl/tape_1.t3dm";
-constexpr const char* kBakedLevelPath = "rom:/lvl/1-1.lvl";
-constexpr const char* kBakedLevelName = "1-1";
 constexpr float kFadeReloadSeconds = 0.5f;
 
 struct RenderObject {
@@ -199,6 +197,9 @@ struct GameplayScene::Impl {
     bool cassette_reload_active_ = false;
     float cassette_reload_timer_ = 0.0f;
 
+    const char* lvl_path  = "rom:/lvl/1-1.lvl";
+    const char* level_name = "1-1";
+
     void ResetPlayerToRoomStart();
     void ReloadBakedLevel();
 };
@@ -264,13 +265,13 @@ void GameplayScene::Impl::ReloadBakedLevel() {
     room = Room{};
     actor_world = ActorWorld{};
     baked_level_loaded_ =
-        LoadLevel(kBakedLevelPath, room, level_geometry) &&
+        LoadLevel(lvl_path, room, level_geometry) &&
         level_renderer.Init(level_geometry);
     debugf("[reload] after LoadLevel+Init: baked=%d coll_mesh=%p &coll_mesh=%p impl=%p sizeof_impl=%d\n",
            baked_level_loaded_ ? 1 : 0, (void*)room.coll_mesh,
            (void*)&room.coll_mesh, (void*)this, (int)sizeof(*this));
     if (baked_level_loaded_) {
-        material_catalog.Load(kBakedLevelName);
+        material_catalog.Load(level_name);
         debugf("[reload] after matcat: coll_mesh=%p\n", (void*)room.coll_mesh);
         DispatchLevelEntities(room, actor_world,
                               strawberry_actor,
@@ -295,8 +296,15 @@ void GameplayScene::Impl::ReloadBakedLevel() {
     cassette_reload_timer_ = 0.0f;
 }
 
+void GameplayScene::SetLevel(const char* lvl_path, const char* level_name) {
+    lvl_path_   = lvl_path;
+    level_name_ = level_name;
+}
+
 void GameplayScene::Init() {
     impl_ = new Impl();
+    impl_->lvl_path   = lvl_path_;
+    impl_->level_name = level_name_;
 
     t3d_vec3_norm(&impl_->light_direction);
 

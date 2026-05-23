@@ -34,4 +34,6 @@ echo "Using toolchain: $N64_INST"
 export N64_INST
 export PATH="$N64_INST/bin:$PATH"
 
+rm -rf madeline_cube_rom.z64 madeline_cube_rom.dfs
+
 exec make "$@"

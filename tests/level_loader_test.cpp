@@ -50,9 +50,10 @@ int main() {
         assert(NearlyEq(room.snow_dir.y, 1.0f));
         assert(NearlyEq(room.snow_dir.z, 0.0f));
         assert(room.has_cassette);
-        assert(NearlyEq(room.cassette.x, -36.8f));
-        assert(NearlyEq(room.cassette.y, 100.8f));
-        assert(NearlyEq(room.cassette.z, 12.8f));
+        // scale 0.15: quake (-184, -64, 504) → port (-27.6, 75.6, 9.6)
+        assert(NearlyEq(room.cassette.x, -27.6f));
+        assert(NearlyEq(room.cassette.y, 75.6f));
+        assert(NearlyEq(room.cassette.z, 9.6f));
         assert(room.coll_mesh && "LoadLevel should attach the baked 1-1.colmesh sidecar");
 
         if (room.coll_mesh) physics::FreeCollMesh(room.coll_mesh);

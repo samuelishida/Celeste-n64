@@ -80,7 +80,7 @@ filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest: \
 	tools/bake_map.py \
 	tools/lvl_format.py \
 	tools/entity_ids.py | filesystem/lvl
-	python3 tools/bake_map.py $< filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest
+	python3 tools/bake_map.py $< filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest --world-scale 0.15
 
 # Copy font files
 filesystem/fnt/%.font64: assets/og_converted/fonts/%.font64 | filesystem/fnt
@@ -102,6 +102,7 @@ src = \
 	src/user/gameplay/scene/scene_manager.cpp \
 	src/user/gameplay/debug_hud.cpp \
 	src/user/gameplay/scene/gameplay_scene.cpp \
+	src/user/gameplay/scene/title_scene.cpp \
 	src/user/gameplay/runtime/timing.cpp \
 	src/user/gameplay/physics/geom.cpp \
 	src/user/gameplay/physics/coll_mesh.cpp \

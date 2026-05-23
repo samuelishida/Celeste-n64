@@ -411,10 +411,13 @@ def compute_uv(point: Vec3, face: FaceDef, scale: float = 0.2) -> Tuple[float, f
 
 # ── Coordinate transform ────────────────────────────────────────────
 
+WORLD_SCALE: float = 0.2
+
 def transform_point(p: Tuple[float, float, float]) -> Tuple[float, float, float]:
-    """Transform from Quake coords (Z-up) to port coords (Y-up), scale 0.2."""
+    """Transform from Quake coords (Z-up) to port coords (Y-up)."""
     x, y, z = p
-    return (x * 0.2, z * 0.2, -y * 0.2)
+    s = WORLD_SCALE
+    return (x * s, z * s, -y * s)
 
 def transform_normal(n: Tuple[float, float, float]) -> Tuple[float, float, float]:
     """Transform normal from Quake to port coords (rotation only)."""
@@ -599,6 +602,12 @@ if __name__ == "__main__":
     parser.add_argument("lvl_file", help="Output .lvl file")
     parser.add_argument("manifest_file", help="Output .manifest file")
     parser.add_argument("--dump-spawn", action="store_true", help="Dump spawn coordinates")
+    parser.add_argument("--world-scale", type=float, default=0.2,
+                        help="Quake-unit to game-unit scale (default 0.2)")
     args = parser.parse_args()
+
+    import sys as _sys
+    _mod = _sys.modules[__name__]
+    _mod.WORLD_SCALE = args.world_scale
 
     bake_map(args.map_file, args.lvl_file, args.manifest_file, args.dump_spawn)
