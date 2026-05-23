@@ -6,6 +6,7 @@
 
 #include "gameplay/scene/gameplay_scene.hpp"
 #include "gameplay/scene/scene_manager.hpp"
+#include "gameplay/scene/title_scene.hpp"
 #include "n64/profiler.hpp"
 
 namespace {
@@ -43,7 +44,9 @@ int main() {
 
     SceneManager scene_mgr;
     GameplayScene gameplay;
-    scene_mgr.Register(0, &gameplay);
+    TitleScene title(&gameplay);
+    scene_mgr.Register(0, &title);
+    scene_mgr.Register(1, &gameplay);
     scene_mgr.Goto(0);
 
     n64::FrameProfiler profiler(60);
