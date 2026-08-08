@@ -24,6 +24,8 @@ private:
         uint16_t normB;
         uint32_t rgbaA;
         uint32_t rgbaB;
+        int16_t stA[2];
+        int16_t stB[2];
     };
     PackedVertex* verts_ = nullptr;
     uint16_t indices_[36] = {};

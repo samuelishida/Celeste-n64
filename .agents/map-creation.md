@@ -7,12 +7,13 @@ End-to-end process for authoring, baking, and loading a new room into the demake
 ## Pipeline
 
 ```
-.map (Quake/TrenchBroom) ──→ bake_map.py ──→ .lvl  ──→ level_loader.cpp
-                                          └──→ .manifest ──→ material_catalog.cpp
-                          auto: colmesh_bake.py ──→ .colmesh ──→ LoadCollMesh()
+.map (Quake/TrenchBroom) ──→ bake.py ──→ .lvl  ──→ level_loader.cpp
+                                     └──→ .manifest ──→ material_catalog.cpp
+                                     └──→ .colmesh ──→ LoadCollMesh()
+                                     └──→ .nav ──→ (offline, future)
 ```
 
-All three output files are required. The `.colmesh` is generated automatically by the Makefile pattern rule when `.lvl` is built. Without `.colmesh`, collision falls back to empty colliders and the player falls through the floor.
+All output files are required. The `.colmesh` is generated automatically by `bake.py`. Without `.colmesh`, collision falls back to empty colliders and the player falls through the floor.
 
 ---
 
@@ -34,9 +35,25 @@ DFS_LVL_FILES += \
     filesystem/lvl/<name>.colmesh
 
 # Bake rule:
-filesystem/lvl/<name>.lvl filesystem/lvl/<name>.manifest: \
-    assets/rooms/<name>/<name>.map | filesystem/lvl
-	python3 tools/bake_map.py $< filesystem/lvl/<name>.lvl filesystem/lvl/<name>.manifest
+filesystem/lvl/<name>.lvl filesystem/lvl/<name>.manifest filesystem/lvl/<name>.colmesh: \
+    assets/rooms/<name>/<name>.map \
+    tools/bake.py \
+    tools/ogmap_lib/__init__.py \
+    tools/ogmap_lib/brush_geom.py \
+    tools/ogmap_lib/texture_mapping.py \
+    tools/writers/colmesh_writer.py \
+    tools/writers/lvl_writer.py \
+    tools/writers/t3dm_writer.py \
+    tools/writers/nav_writer.py \
+    tools/lvl_format.py \
+    tools/entity_ids.py \
+    tools/patch_t3dm_materials.py | filesystem/lvl
+	python3 tools/bake.py $< --out-dir build/bake-<name> --scale 0.2
+	mv build/bake-<name>/output.lvl filesystem/lvl/<name>.lvl
+	mv build/bake-<name>/output.manifest filesystem/lvl/<name>.manifest
+	mv build/bake-<name>/output.colmesh filesystem/lvl/<name>.colmesh
+	mv build/bake-<name>/output.nav filesystem/lvl/<name>.nav 2>/dev/null || true
+	rmdir build/bake-<name> 2>/dev/null || true
 ```
 
 The pattern rule `filesystem/lvl/%.colmesh: filesystem/lvl/%.lvl` picks up `.colmesh` automatically.
@@ -53,7 +70,7 @@ The pattern rule `filesystem/tex/%.sprite: assets/og_converted/textures/%.sprite
 ### 4. Verify bake
 
 ```bash
-python3 tools/bake_map.py assets/rooms/<name>/<name>.map /tmp/<name>.lvl /tmp/<name>.manifest
+python3 tools/bake.py assets/rooms/<name>/<name>.map --out-dir /tmp/<name> --scale 0.2
 python3 tests/level_bake_report_smoke.py   # update paths in the script first
 ```
 
@@ -90,7 +107,7 @@ If `colmesh stored` is missing: the sidecar failed to load. Check:
 
 ## Coordinate System
 
-Quake ↔ game transform: `(x * 0.2, z * 0.2, -y * 0.2)` (see `tools/bake_map.py:transform_point`).
+Quake ↔ game transform: `(x * 0.2, z * 0.2, -y * 0.2)` (see `tools/ogmap_lib/__init__.py:transform_point`).
 
 | Axis | Quake | Game |
 |------|-------|------|

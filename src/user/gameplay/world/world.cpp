@@ -188,7 +188,7 @@ static int QueryWallsMesh(const Room& room, const physics::CollMesh& mesh,
         if (normal.y >= 0.85f || normal.y <= -0.85f) continue;
 
         const float pushout = radius - sh.dist;
-        if (pushout <= 0.0f) continue;
+        if (pushout < 0.0f) continue;
 
         OwnerInfo owner = ResolveOwner(mesh, room, fid);
         out_hits[count++] = WallHit{

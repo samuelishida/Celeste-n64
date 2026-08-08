@@ -16,8 +16,7 @@
 #include "gameplay/physics_contracts.hpp"
 #include "gameplay/player/player_controller.hpp"
 #include "gameplay/player/player_motor.hpp"
-#include "gameplay/render/level_renderer.hpp"
-#include "gameplay/render/material_catalog.hpp"
+#include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/model.hpp"
 #include "gameplay/render/texture.hpp"
 #include "gameplay/world/actor_world.hpp"
@@ -149,8 +148,8 @@ CameraInput ReadCameraInput() {
 struct GameplayScene::Impl {
     T3DViewport viewport = t3d_viewport_create();
     T3DVec3 light_direction = {{0.2f, 0.8f, 0.6f}};
-    uint8_t ambient_light[4] = {70, 70, 70, 0xFF};
-    uint8_t directional_light[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+    uint8_t ambient_light[4] = {90, 85, 80, 0xFF};
+    uint8_t directional_light[4] = {0xFF, 0xF8, 0xEE, 0xFF};
 
     T3DVertPacked* cube_vertices = nullptr;
 
@@ -166,8 +165,7 @@ struct GameplayScene::Impl {
     SpriteTexture rock1_texture;
 
     LevelGeometry level_geometry;
-    MaterialCatalog material_catalog;
-    LevelRenderer level_renderer;
+    LvlRoomRenderer room_renderer;
 
     ActorWorld actor_world;
     CassetteActor cassette_actor;
@@ -254,8 +252,7 @@ void GameplayScene::Impl::ResetPlayerToRoomStart() {
 }
 
 void GameplayScene::Impl::ReloadBakedLevel() {
-    level_renderer.Free();
-    material_catalog.Unload();
+    room_renderer.Free();
     if (room.coll_mesh) {
         physics::FreeCollMesh(room.coll_mesh);
         room.coll_mesh = nullptr;
@@ -264,26 +261,33 @@ void GameplayScene::Impl::ReloadBakedLevel() {
     level_geometry = {};
     room = Room{};
     actor_world = ActorWorld{};
-    baked_level_loaded_ =
-        LoadLevel(lvl_path, room, level_geometry) &&
-        level_renderer.Init(level_geometry);
-    debugf("[reload] after LoadLevel+Init: baked=%d coll_mesh=%p &coll_mesh=%p impl=%p sizeof_impl=%d\n",
-           baked_level_loaded_ ? 1 : 0, (void*)room.coll_mesh,
-           (void*)&room.coll_mesh, (void*)this, (int)sizeof(*this));
-    if (baked_level_loaded_) {
-        material_catalog.Load(level_name);
-        debugf("[reload] after matcat: coll_mesh=%p\n", (void*)room.coll_mesh);
-        DispatchLevelEntities(room, actor_world,
-                              strawberry_actor,
-                              refill_actor,
-                              spring_actor);
-        debugf("[reload] after dispatch: coll_mesh=%p\n", (void*)room.coll_mesh);
-        actor_world.ResolvePending();
-        debugf("[reload] after resolve: coll_mesh=%p\n", (void*)room.coll_mesh);
-    } else {
+
+    // Load level data (entities, collision, atmosphere)
+    if (!LoadLevel(lvl_path, room, level_geometry)) {
+        baked_level_loaded_ = false;
         room = GetForsakenCityStartRoom();
+        debugf("[reload] LoadLevel FAILED — fallback to first-room\n");
+        goto skip_entity_dispatch;
     }
 
+    // Load room geometry directly from .lvl (bypasses .glb/.t3dm pipeline)
+    {
+        const bool model_ok = room_renderer.Load(lvl_path);
+        baked_level_loaded_ = model_ok;
+        if (!model_ok) {
+            debugf("[reload] LvlRoomRenderer FAILED — fallback to first-room\n");
+            room = GetForsakenCityStartRoom();
+            goto skip_entity_dispatch;
+        }
+    }
+
+    DispatchLevelEntities(room, actor_world,
+                          strawberry_actor,
+                          refill_actor,
+                          spring_actor);
+    actor_world.ResolvePending();
+
+skip_entity_dispatch:
     if (room.has_cassette) {
         cassette_actor.InitAt(room.cassette);
     } else {
@@ -299,6 +303,10 @@ void GameplayScene::Impl::ReloadBakedLevel() {
 void GameplayScene::SetLevel(const char* lvl_path, const char* level_name) {
     lvl_path_   = lvl_path;
     level_name_ = level_name;
+    if (impl_) {
+        impl_->lvl_path   = lvl_path;
+        impl_->level_name = level_name;
+    }
 }
 
 void GameplayScene::Init() {
@@ -315,10 +323,14 @@ void GameplayScene::Init() {
     impl_->collectible_render.matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
 
     impl_->debug_hud.Init();
-    impl_->strawberry_model.Load("rom:/mdl/strawberry.t3dm");
-    impl_->cassette_model.Load(kCassetteModelPath);
-    impl_->madeline_model.Load(kMadelineModelPath);
-    impl_->room_fixture_model.Load("rom:/mdl/room_fixture.t3dm");
+    if (!impl_->strawberry_model.Load("rom:/mdl/strawberry.t3dm"))
+        debugf("[init] WARNING: strawberry model missing\n");
+    if (!impl_->cassette_model.Load(kCassetteModelPath))
+        debugf("[init] WARNING: cassette model missing\n");
+    if (!impl_->madeline_model.Load(kMadelineModelPath))
+        debugf("[init] WARNING: madeline model missing\n");
+    if (!impl_->room_fixture_model.Load("rom:/mdl/room_fixture.t3dm"))
+        debugf("[init] WARNING: room fixture model missing\n");
     impl_->room_fixture_model.UpdateMatrix({0.0f, 40.0f, -120.0f}, 60.0f, 0.0f);
 
     impl_->ReloadBakedLevel();
@@ -347,8 +359,7 @@ void GameplayScene::Shutdown() {
     impl_->cassette_model.Free();
     impl_->madeline_model.Free();
     impl_->room_fixture_model.Free();
-    impl_->material_catalog.Unload();
-    impl_->level_renderer.Free();
+    impl_->room_renderer.Free();
 
     if (impl_->room.coll_mesh) {
         physics::FreeCollMesh(impl_->room.coll_mesh);
@@ -417,7 +428,7 @@ void GameplayScene::Update(float delta_seconds) {
         impl_->player_controller.StatePhase(impl_->player, input, player_step, FixedStepAccumulator::kTickDt);
         impl_->player_controller.LateContactPhase(impl_->player);
 
-        if (impl_->respawn_system.Step(impl_->player, impl_->checkpoint, impl_->room, impl_->player_motor)) {
+        if (impl_->respawn_system.Step(impl_->player, impl_->checkpoint, impl_->room, impl_->player_motor, motor_result.death)) {
             did_respawn = true;
             impl_->player.prev_position = impl_->player.position;
         }
@@ -527,19 +538,21 @@ void GameplayScene::Render() {
     t3d_viewport_attach(&impl_->viewport);
     t3d_screen_clear_color(RGBA32(88, 163, 221, 0xFF));
     t3d_screen_clear_depth();
+
     t3d_light_set_ambient(impl_->ambient_light);
     t3d_light_set_directional(0, impl_->directional_light, &impl_->light_direction);
     t3d_light_set_count(1);
     if (impl_->room_fixture_visible_) {
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
-        rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+        rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
+        rdpq_set_prim_color(RGBA32(255, 100, 100, 255));  // red — fixture diagnostic
         impl_->room_fixture_model.Draw();
     } else if (impl_->baked_level_loaded_) {
-        // Baked level: textured geometry + actor models
-        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(
-            T3D_FLAG_SHADED | T3D_FLAG_DEPTH | T3D_FLAG_TEXTURED));
-        rdpq_mode_combiner(RDPQ_COMBINER1((TEX0,0,SHADE,0),(TEX0,0,SHADE,0)));
-        impl_->level_renderer.Draw(impl_->material_catalog);
+        // Baked level: draw room geometry from .lvl via LvlRoomRenderer.
+        // Uses PRIM*SHADE combiner with per-material primColor set per batch.
+        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
+        rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
+        impl_->room_renderer.Draw();
         if (impl_->room.has_cassette && !impl_->cassette_actor.collected && impl_->cassette_model.IsLoaded()) {
             constexpr float kCassetteScale = 0.18f;
             impl_->cassette_model.UpdateMatrix(

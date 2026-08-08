@@ -15,7 +15,7 @@ int main() {
         Room room;
         LevelGeometry geometry;
         const bool ok = LoadLevel("filesystem/lvl/first-room.lvl", room, geometry);
-        assert(ok && "LoadLevel failed — run baker first: python3 tools/bake_map.py ...");
+        assert(ok && "LoadLevel failed — run baker first: python3 tools/bake.py ...");
 
         // Static colliders now loaded via .colmesh; runtime collider_count is 0.
         assert(room.collider_count == 0 && "static colliders now loaded via .colmesh");

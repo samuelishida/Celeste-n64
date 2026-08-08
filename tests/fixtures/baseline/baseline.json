@@ -1,0 +1,22 @@
+{
+  "counts": {
+    "colmesh_bvh_nodes": 231,
+    "colmesh_triangles": 308,
+    "colmesh_vertices": 584,
+    "lvl_colliders": 0,
+    "lvl_entities": 3,
+    "lvl_faces": 367,
+    "lvl_vertices": 1362,
+    "nav_platforms": 5,
+    "t3dm_chunks": 12
+  },
+  "map": "assets/og_converted/maps/1-1.map",
+  "map_sha256": "475925330dc29ed92ba6a742c1a0ee23947f48f0b6c2ba86997c333fdd76af9a",
+  "scale": 0.2,
+  "versions": {
+    "colmesh": 1,
+    "lvl": 2,
+    "nav": "NAV1",
+    "t3dm": 4
+  }
+}

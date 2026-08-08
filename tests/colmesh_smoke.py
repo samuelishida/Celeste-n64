@@ -95,8 +95,64 @@ def check(path: str) -> bool:
         print(f"  WARNING: exceeds 256 KB budget ({file_size}/{budget})")
     return True
 
+def check_death_triangles(path: str) -> bool:
+    """Verify the colmesh contains at least one triangle with MAT_DEATH (0x0004)."""
+    data = Path(path).read_bytes()
+    if len(data) < 72:
+        print("FAIL: file too small for header", file=sys.stderr)
+        return False
+
+    # Parse header
+    h = _parse_header(data)
+    version, flags, aabb_min, aabb_max, quant_scale, quant_origin = h[:6]
+    vc, tri_count, bc, lc = h[6:10]
+    voff, tri_off, boff, soff = h[10:14]
+
+    death_count = 0
+    tri_count_actual = 0
+    for i in range(tri_count):
+        off = tri_off + i * 12
+        tri_data = data[off:off+12]
+        i1, i2, i3, mat, face_id, pad = struct.unpack(">HHHHHH", tri_data)
+        tri_count_actual += 1
+        if mat & 0x0004:
+            death_count += 1
+
+    if death_count == 0:
+        print(f"FAIL: no death triangles found (MAT_DEATH=0x0004) in {tri_count_actual} tris",
+              file=sys.stderr)
+        return False
+
+    if tri_count > 32767:
+        print(f"FAIL: triangle_count {tri_count} > 32767", file=sys.stderr)
+        return False
+
+    print(f"PASS: death triangles: {death_count}/{tri_count_actual}")
+    return True
+
+
+def _parse_header(data: bytes):
+    """Parse colmesh header, return raw field tuple for reuse."""
+    f = __import__("io").BytesIO(data)
+    f.read(4)  # magic
+    version = struct.unpack(">H", f.read(2))[0]
+    flags = struct.unpack(">H", f.read(2))[0]
+    aabb_min = struct.unpack(">hhh", f.read(6))
+    aabb_max = struct.unpack(">hhh", f.read(6))
+    quant_scale = struct.unpack(">f", f.read(4))[0]
+    quant_origin = struct.unpack(">fff", f.read(12))
+    vc, tc, bc, lc = struct.unpack(">IIII", f.read(16))
+    voff, toff, boff, soff = struct.unpack(">IIII", f.read(16))
+    return (version, flags, aabb_min, aabb_max, quant_scale, quant_origin,
+            vc, tc, bc, lc, voff, toff, boff, soff)
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <file.colmesh>", file=sys.stderr)
         sys.exit(1)
-    sys.exit(0 if check(sys.argv[1]) else 1)
+
+    path = sys.argv[1]
+    ok = check(path)
+    ok = check_death_triangles(path) and ok
+    sys.exit(0 if ok else 1)

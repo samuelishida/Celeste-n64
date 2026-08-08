@@ -84,6 +84,15 @@ bool FaceIsClimbable(const Room& room, int face_id) {
     return (room.coll_mesh->triangles[face_id].material & physics::MAT_CLIMBABLE) != 0;
 }
 
+// Returns true if the face is a death surface (spikes, lava, etc.).
+// Only CollMesh faces carry death material; dynamic colliders never kill.
+bool FaceIsDeath(const Room& room, int face_id) {
+    if (face_id < 0) return false;  // dynamic collider — not death
+    if (!room.coll_mesh) return false;  // no mesh — no death zones
+    if (face_id >= static_cast<int>(room.coll_mesh->header->triangle_count)) return false;
+    return (room.coll_mesh->triangles[face_id].material & physics::MAT_DEATH) != 0;
+}
+
 GroundHit ProbeFloor(const Room& room, const Vec3& position, float half_height, float probe_distance, float radius) {
     return ProbeFloorDebug(room, position, half_height, probe_distance, radius);
 }
@@ -166,6 +175,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
                 ApplyGroundContact(state, result, floor, config_.half_height);
                 step_vec.y = 0.0f;
                 grounded_mid_sweep = true;
+                if (FaceIsDeath(room, floor.face_id)) result.death = true;
             }
         } else if (step_vec.y > 0.0f) {
             const Vec3 head_origin = {state.position.x, prev_head_y, state.position.z};
@@ -175,16 +185,21 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
                 state.position.y = ceiling.point.y - config_.half_height;
                 state.velocity.y = 0.0f;
                 step_vec.y = 0.0f;
+                if (FaceIsDeath(room, ceiling.face_id)) result.death = true;
             }
         }
 
         const WallHit wall = QueryWallNearest(room, state.position, config_.radius);
-        if (wall.hit && wall.pushout > 0.0f) {
-            state.position.x += wall.normal.x * wall.pushout;
-            state.position.z += wall.normal.z * wall.pushout;
-            RemoveIntoNormal(state.velocity, wall.normal);
+        if (wall.hit) {
+            if (wall.pushout > 0.0f) {
+                state.position.x += wall.normal.x * wall.pushout;
+                state.position.y += wall.normal.y * wall.pushout;
+                state.position.z += wall.normal.z * wall.pushout;
+                RemoveIntoNormal(state.velocity, wall.normal);
+            }
             RecordWallContact(state, result, wall);
             if (FaceIsClimbable(room, wall.face_id)) state.wall_climbable = true;
+            if (FaceIsDeath(room, wall.face_id)) result.death = true;
         }
     }
 
@@ -222,6 +237,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
         if (ceiling.hit) {
             state.position.y = ceiling.point.y - config_.half_height;
             state.velocity.y = 0.0f;
+            if (FaceIsDeath(room, ceiling.face_id)) result.death = true;
         }
     }
 

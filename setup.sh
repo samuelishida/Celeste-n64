@@ -18,7 +18,7 @@ echo "(ext4 /tmp — required because the repo is on exFAT which lacks symlink s
 echo ""
 
 # Quick check: is everything already built?
-if [[ -f "${N64_INST}/include/n64.mk" ]] && [[ -f "${N64_INST}/include/t3d.mk" ]] && [[ -f "${N64_INST}/lib/libdragon.a" ]]; then
+if [[ -f "${N64_INST}/include/n64.mk" ]] && [[ -f "${N64_INST}/include/t3d.mk" ]] && { [[ -f "${N64_INST}/lib/libdragon.a" ]] || [[ -f "${N64_INST}/mips64-elf/lib/libdragon.a" ]]; }; then
     echo "✓ Toolchain already installed at ${N64_INST}"
     echo ""
     echo "You can now run: ./compile-rom.sh"
@@ -66,7 +66,7 @@ if [[ ! -f "${N64_INST}/lib/libdragon.a" ]]; then
           "${LIBDRAGON_SRC}"
     fi
     cd "${LIBDRAGON_SRC}"
-    ./build.sh
+    ./build.sh || true  # Ignore errors from examples (e.g., archive.org 500)
     echo "✓ libdragon installed"
 else
     echo "Step 3: libdragon already built"

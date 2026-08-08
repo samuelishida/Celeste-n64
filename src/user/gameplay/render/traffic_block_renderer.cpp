@@ -16,9 +16,6 @@ bool TrafficBlockRenderer::Init() {
 
     uint32_t color = 0xFFFFFFFF;
 
-    const float fx[4] = {1.0f};
-    (void)fx;
-
     auto pack_normal = [](float x, float y, float z) -> uint16_t {
         T3DVec3 n = {{x, y, z}};
         t3d_vec3_norm(&n);
@@ -36,7 +33,8 @@ bool TrafficBlockRenderer::Init() {
                     int16_t bx, int16_t by, int16_t bz, uint16_t n) {
         verts_[idx] = {.posA={ax, ay, az}, .normA=n,
                        .posB={bx, by, bz}, .normB=n,
-                       .rgbaA=color, .rgbaB=color};
+                       .rgbaA=color, .rgbaB=color,
+                       .stA={0, 0}, .stB={0, 0}};
     };
 
     fill(0,  -1, -1,  1,  1, -1,  1, front);
@@ -60,6 +58,15 @@ bool TrafficBlockRenderer::Init() {
         indices_[i*6 + 5] = base + 0;
     }
 
+    // Probe for sprite file before loading (sprite_load asserts on missing)
+    {
+        FILE* probe = fopen("rom:/tex/metal_floor_1.sprite", "rb");
+        if (!probe) {
+            debugf("[traffic] metal_floor_1.sprite MISSING\n");
+            return false;
+        }
+        fclose(probe);
+    }
     material_sprite_ = sprite_load("rom:/tex/metal_floor_1.sprite");
     if (!material_sprite_) {
         debugf("[traffic] failed to load metal_floor_1.sprite\n");

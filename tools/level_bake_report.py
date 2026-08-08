@@ -6,12 +6,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import math
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
-from bake_map import parse_map_file
+# Add tools to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+
+from ogmap_lib import parse_map, Entity as OgEntity
 from lvl_format import LvlFile
+from colmesh_bake import material_flags
 
 
 def _cross(a, b, c):
@@ -47,7 +52,7 @@ def _read_materials(lvl_path: Path, lvl) -> list[str]:
 
 
 def summarize(map_path: Path, lvl_path: Path) -> list[str]:
-    entities = parse_map_file(str(map_path))
+    parsed_map = parse_map(str(map_path))
     lvl = LvlFile.read(str(lvl_path))
     with lvl_path.open("rb") as f:
         magic = f.read(4).decode("ascii")
@@ -55,11 +60,11 @@ def summarize(map_path: Path, lvl_path: Path) -> list[str]:
 
     brushes_by_class = Counter()
     source_faces_by_class = Counter()
-    for entity in entities:
-        classname = entity.get("classname", "")
-        brushes = entity.get("brushes", [])
+    for entity in parsed_map.entities:
+        classname = entity.classname
+        brushes = entity.brushes
         brushes_by_class[classname] += len(brushes)
-        source_faces_by_class[classname] += sum(len(brush) for brush in brushes)
+        source_faces_by_class[classname] += sum(len(brush.faces) for brush in brushes)
 
     duplicate_vertex_faces = 0
     first_fan_degenerate_faces = 0
@@ -86,6 +91,42 @@ def summarize(map_path: Path, lvl_path: Path) -> list[str]:
         f"reversed_winding_faces={reversed_winding_faces}",
         f"materials={_read_materials(lvl_path, lvl)}",
     ]
+
+    # Material flag summary — accumulate colmesh material flags per LVL face.
+    # Only solid faces (face.flags & 0x01) are processed by colmesh_bake.py;
+    # visual-only faces (face.flags & 0x02) are skipped.
+    materials = _read_materials(lvl_path, lvl)
+    mat_flag_counts: Counter[str] = Counter()
+    for face in lvl.faces:
+        is_visual = bool(face.flags & 0x02)
+        if is_visual:
+            mat_flag_counts["visual"] += 1
+            continue
+        mat_name = materials[face.material_id] if face.material_id < len(materials) else "unknown"
+        flags = material_flags(mat_name)
+        if flags == 0:
+            mat_flag_counts["trigger"] += 1
+        else:
+            if flags & 0x0001:
+                mat_flag_counts["solid"] += 1
+            if flags & 0x0002:
+                mat_flag_counts["oneway"] += 1
+            if flags & 0x0004:
+                mat_flag_counts["death"] += 1
+            if flags & 0x0008:
+                mat_flag_counts["climbable"] += 1
+            if flags & 0x0010:
+                mat_flag_counts["ice"] += 1
+
+    lines.append(
+        f"material_flags=solid:{mat_flag_counts.get('solid', 0)} "
+        f"death:{mat_flag_counts.get('death', 0)} "
+        f"climbable:{mat_flag_counts.get('climbable', 0)} "
+        f"ice:{mat_flag_counts.get('ice', 0)} "
+        f"oneway:{mat_flag_counts.get('oneway', 0)} "
+        f"visual:{mat_flag_counts.get('visual', 0)}"
+    )
+
     return lines
 
 

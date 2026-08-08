@@ -1,0 +1,52 @@
+{
+  "_comment": "Numeric shell probes for 1-1. Values are derived from the current baked colmesh (filesystem/lvl/1-1.colmesh) and committed — no test may capture expectations on first run. Each probe fires a ray from `origin` along `direction` up to `max_t` and asserts the result equals `expect`. On hit, `expected_normal` (returned normal faces the ray origin, per RaycastMesh) and `expected_material` are also checked within tolerance. Semantics per docs/1-1-shell-audit.md: west/north sides must be sealed by a wall (hit); east/south sides must NOT have floor geometry beyond the shell (miss).",
+  "scale": 0.2,
+  "distance_tolerance": 0.5,
+  "normal_dot_tolerance": 0.99,
+  "probes": [
+    {
+      "name": "west_outer_wall_gap",
+      "expect": "hit",
+      "origin": [-60.0, 80.0, -200.0],
+      "direction": [-1.0, 0.0, 0.0],
+      "max_t": 20.0,
+      "expected_distance": 10.4,
+      "expected_normal": [1.0, 0.0, 0.0],
+      "expected_material": 1,
+      "note": "wall should seal the west shell edge"
+    },
+    {
+      "name": "east_floor_overrun",
+      "expect": "miss",
+      "origin": [77.0, 62.0, -120.0],
+      "direction": [1.0, 0.0, 0.0],
+      "max_t": 30.0,
+      "expected_distance": null,
+      "expected_normal": null,
+      "expected_material": null,
+      "note": "floor should not continue beyond the east shell"
+    },
+    {
+      "name": "north_outer_wall_gap",
+      "expect": "hit",
+      "origin": [0.0, 74.0, 10.0],
+      "direction": [0.0, 0.0, 1.0],
+      "max_t": 20.0,
+      "expected_distance": 15.6,
+      "expected_normal": [0.0, 0.0, -1.0],
+      "expected_material": 1,
+      "note": "wall should seal the north shell edge"
+    },
+    {
+      "name": "south_floor_overrun",
+      "expect": "miss",
+      "origin": [0.0, 62.0, -780.0],
+      "direction": [0.0, 0.0, -1.0],
+      "max_t": 30.0,
+      "expected_distance": null,
+      "expected_normal": null,
+      "expected_material": null,
+      "note": "floor should not continue beyond the south shell"
+    }
+  ]
+}

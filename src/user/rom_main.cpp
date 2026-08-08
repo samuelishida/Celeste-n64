@@ -71,6 +71,7 @@ int main() {
         }
     }
 
+    // Unreachable on N64 hardware; kept for host-testing exit paths.
     t3d_destroy();
     return 0;
 }

@@ -29,3 +29,22 @@ made faithful.
 
 These probe names are intentionally descriptive so the host log can point to the
 shell problem before the bake policy is changed.
+
+## Numeric fixtures
+
+The text-only fixture has been replaced by numeric values in
+`tests/fixtures/1-1-shell-probes.json`. Each probe carries:
+
+- `origin` - ray start in game space
+- `direction` - unit ray direction
+- `max_t` - maximum ray distance (world units)
+- `expect` - `hit` (a wall must seal this shell edge) or `miss` (no floor may
+  overrun past this shell edge)
+- `expected_distance` / `expected_normal` / `expected_material` - verified on
+  hit, within `distance_tolerance` / `normal_dot_tolerance`
+- `note` - the original audit note for the probe
+
+Values are derived from the current baked colmesh
+(`filesystem/lvl/1-1.colmesh`) and committed — no test may capture them on
+first run. `tests/shell_probe_test.cpp` validates these numerically against the
+host `CollMesh` query path.

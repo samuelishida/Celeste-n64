@@ -9,6 +9,9 @@
 
 using namespace madeline_cube;
 
+// Prints the named shell probes from the numeric fixture so the host log can
+// point to the shell criteria being validated. The numeric probe values
+// themselves are consumed by tests/shell_probe_test.cpp (increment 6).
 static void PrintShellAuditFixture(const char* path) {
     FILE* f = fopen(path, "r");
     if (!f) {
@@ -17,20 +20,29 @@ static void PrintShellAuditFixture(const char* path) {
     }
 
     printf("[queries] shell audit fixture: %s\n", path);
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        int len = static_cast<int>(strlen(line));
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-            line[--len] = '\0';
-        }
-        if (len == 0 || line[0] == '#') continue;
-        printf("[queries] probe %s\n", line);
-    }
+    char buf[4096];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[n] = '\0';
     fclose(f);
+
+    // Extract "name" fields from the JSON fixture for a compact listing.
+    const char* p = buf;
+    while ((p = strstr(p, "\"name\"")) != nullptr) {
+        p = strchr(p, ':');
+        if (!p) break;
+        p += 1;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p != '"') break;
+        ++p;
+        const char* end = strchr(p, '"');
+        if (!end) break;
+        printf("[queries] probe %.*s\n", (int)(end - p), p);
+        p = end + 1;
+    }
 }
 
 int main(int argc, char* argv[]) {
-    PrintShellAuditFixture("tests/fixtures/1-1-shell-boundary.txt");
+    PrintShellAuditFixture("tests/fixtures/1-1-shell-probes.json");
 
     const char* lvl_path = "filesystem/lvl/first-room.lvl";
     if (argc > 1) lvl_path = argv[1];
