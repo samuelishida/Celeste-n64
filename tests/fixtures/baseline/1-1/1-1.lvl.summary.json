@@ -1,0 +1,56 @@
+{
+  "ambience": "mountain",
+  "collider_count": 0,
+  "entities": [
+    {
+      "id": 0,
+      "name": "rock_1",
+      "pos": [
+        6.400000095367432,
+        76.80000305175781,
+        -24.0
+      ]
+    },
+    {
+      "id": 9,
+      "name": "?",
+      "pos": [
+        -36.79999923706055,
+        100.80000305175781,
+        12.800000190734863
+      ]
+    },
+    {
+      "id": 1,
+      "name": "snow_1",
+      "pos": [
+        -115.19999694824219,
+        91.19999694824219,
+        -320.0
+      ]
+    }
+  ],
+  "entity_count": 3,
+  "face_count": 367,
+  "magic": "LVL2",
+  "materials": [
+    "rock_1",
+    "snow_1",
+    "rock_2",
+    "metal_floor_1",
+    "floor_dirty_concrete",
+    "TB_empty"
+  ],
+  "music": "mus_lvl1_bside",
+  "sha256": "a635d71fb265143e7f3d4744dd19512ed1a37b00c27e826d912233d457b0a889",
+  "skybox": "bsides",
+  "snow_amount_q8": 128,
+  "snow_dir": [
+    0,
+    0,
+    1
+  ],
+  "string_count": 9,
+  "version": 2,
+  "vertex_count": 1362
+}

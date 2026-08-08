@@ -83,7 +83,7 @@ Builds `madeline_cube_rom.z64` (libdragon + tiny3d):
 - Analog movement, `A` jump, `B` air dash, fall respawn
 - Strawberry collectibles
 
-To author a new room, see [`.agents/map-creation.md`](.agents/map-creation.md) for the full pipeline (TrenchBroom → bake_map.py → runtime load).
+To author a new room, see [`.agents/map-creation.md`](.agents/map-creation.md) for the full pipeline (TrenchBroom → bake.py → runtime load).
 
 ## Reference stack
 

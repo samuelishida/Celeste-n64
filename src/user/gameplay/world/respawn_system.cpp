@@ -37,9 +37,10 @@ bool RespawnSystem::Step(
     PlayerState& player,
     const Vec3& checkpoint,
     const Room& room,
-    const PlayerMotor& motor
+    const PlayerMotor& motor,
+    bool death_triggered
 ) const {
-    if (player.position.y >= config_.respawn_fall_height) {
+    if (!death_triggered && player.position.y >= config_.respawn_fall_height) {
         return false;
     }
     ResetState(player, checkpoint);

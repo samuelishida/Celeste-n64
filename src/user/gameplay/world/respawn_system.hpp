@@ -20,11 +20,13 @@ public:
     // Restores spawn point + zero velocity + cleared timers, then calls
     // PlayerMotor::RefreshContacts so the motor is the single owner of the
     // resulting grounded/contact state.
+    // When death_triggered is true, respawns regardless of fall height.
     bool Step(
         PlayerState& player,
         const Vec3& checkpoint,
         const Room& room,
-        const PlayerMotor& motor
+        const PlayerMotor& motor,
+        bool death_triggered = false
     ) const;
 
 private:

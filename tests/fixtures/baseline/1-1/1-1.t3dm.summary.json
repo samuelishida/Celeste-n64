@@ -1,0 +1,52 @@
+{
+  "aabb_max": [
+    77,
+    115,
+    27
+  ],
+  "aabb_min": [
+    -70,
+    -1,
+    -774
+  ],
+  "chunk_count": 12,
+  "chunk_offsets": [
+    96,
+    152,
+    232,
+    384,
+    464,
+    784,
+    22256,
+    25200,
+    25344,
+    25488,
+    25632,
+    25776
+  ],
+  "chunk_types": [
+    "O",
+    "O",
+    "O",
+    "O",
+    "O",
+    "V",
+    "I",
+    "M",
+    "M",
+    "M",
+    "M",
+    "M"
+  ],
+  "first_indices_chunk": 6,
+  "first_material_chunk": 7,
+  "first_vertex_chunk": 5,
+  "magic": "T3M",
+  "note": "T3DM is produced/validated offline; renderer cutover is out of scope.",
+  "offline_only": true,
+  "sha256": "97359497485afc1c4c5bad5139e41af7b55e1a5d0aa5433457287d12b2ecb62c",
+  "string_table_offset": 25916,
+  "total_index_count": 39,
+  "total_vertex_count": 1342,
+  "version": 4
+}

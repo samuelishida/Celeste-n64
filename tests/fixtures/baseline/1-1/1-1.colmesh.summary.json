@@ -1,0 +1,40 @@
+{
+  "aabb_max_quant": [
+    6029,
+    2621,
+    32767
+  ],
+  "aabb_min_quant": [
+    0,
+    0,
+    0
+  ],
+  "bvh_node_count": 231,
+  "bvh_offset": 7272,
+  "flags": 1,
+  "magic": "CMSH",
+  "quant_origin": [
+    -70.4,
+    51.2,
+    -774.4
+  ],
+  "quant_scale": 0.024415,
+  "sha256": "b6966cd41a51e4d41ef0c6be9be28fc676911b6db6016fef84b53a4faf0f2a59",
+  "surface_link_count": 0,
+  "surface_offset": 10968,
+  "triangle_count": 308,
+  "triangle_offset": 3576,
+  "version": 1,
+  "vertex_count": 584,
+  "vertex_offset": 72,
+  "world_aabb_max": [
+    76.7969,
+    115.1912,
+    25.6
+  ],
+  "world_aabb_min": [
+    -70.4,
+    51.2,
+    -774.4
+  ]
+}

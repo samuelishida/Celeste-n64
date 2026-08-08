@@ -7,7 +7,7 @@ faces even though collision queries still load and pass.
 
 ### Cause
 
-`tools/bake_map.py` sorted clipped brush-face vertices in the opposite winding
+`tools/ogmap_lib/brush_geom.py` sorted clipped brush-face vertices in the opposite winding
 from the transformed face normal, and clipping could also leave duplicate
 adjacent vertices in the polygon. The renderer fans those vertices directly, so
 reversed or duplicated points turn into degenerate or self-crossing triangles.

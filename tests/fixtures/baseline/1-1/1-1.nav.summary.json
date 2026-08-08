@@ -1,0 +1,92 @@
+{
+  "magic": "NAV1",
+  "platform_count": 5,
+  "platforms": [
+    {
+      "entity_index": 3,
+      "travel_time": 2.0,
+      "waypoint_count": 2,
+      "waypoints": [
+        [
+          -54.4,
+          73.7,
+          -124.8
+        ],
+        [
+          60.8,
+          73.6,
+          -124.8
+        ]
+      ]
+    },
+    {
+      "entity_index": 6,
+      "travel_time": 2.0,
+      "waypoint_count": 2,
+      "waypoints": [
+        [
+          60.8,
+          73.7,
+          -201.6
+        ],
+        [
+          -54.4,
+          73.6,
+          -201.6
+        ]
+      ]
+    },
+    {
+      "entity_index": 11,
+      "travel_time": 2.0,
+      "waypoint_count": 2,
+      "waypoints": [
+        [
+          -54.4,
+          73.7,
+          -278.4
+        ],
+        [
+          60.8,
+          73.6,
+          -278.4
+        ]
+      ]
+    },
+    {
+      "entity_index": 12,
+      "travel_time": 2.0,
+      "waypoint_count": 2,
+      "waypoints": [
+        [
+          60.8,
+          73.7,
+          -355.2
+        ],
+        [
+          -54.4,
+          73.6,
+          -355.2
+        ]
+      ]
+    },
+    {
+      "entity_index": 16,
+      "travel_time": 2.0,
+      "waypoint_count": 2,
+      "waypoints": [
+        [
+          3.2,
+          73.7,
+          -432.0
+        ],
+        [
+          3.2,
+          73.6,
+          -547.2
+        ]
+      ]
+    }
+  ],
+  "sha256": "0189d627a044abadb4ec2a69143177cf72d6f1b8557afb9ae9336d4270190765"
+}

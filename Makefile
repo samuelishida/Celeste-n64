@@ -68,20 +68,49 @@ filesystem/tex/%.sprite: assets/og_converted/textures/%.sprite | filesystem/tex
 	cp $< $@
 
 # Bake level files
-filesystem/lvl/first-room.lvl filesystem/lvl/first-room.manifest: \
+filesystem/lvl/first-room.lvl filesystem/lvl/first-room.manifest filesystem/lvl/first-room.colmesh: \
 	assets/rooms/first-room/first-room.map \
-	tools/bake_map.py \
+	tools/bake.py \
+	tools/ogmap_lib/__init__.py \
+	tools/ogmap_lib/brush_geom.py \
+	tools/ogmap_lib/texture_mapping.py \
+	tools/writers/colmesh_writer.py \
+	tools/writers/lvl_writer.py \
+	tools/writers/t3dm_writer.py \
+	tools/writers/nav_writer.py \
 	tools/lvl_format.py \
-	tools/entity_ids.py | filesystem/lvl
-	python3 tools/bake_map.py $< filesystem/lvl/first-room.lvl filesystem/lvl/first-room.manifest
+	tools/entity_ids.py \
+	tools/patch_t3dm_materials.py | filesystem/lvl
+	python3 tools/bake.py $< --out-dir build/bake-first-room --scale 0.2
+	mv build/bake-first-room/output.lvl filesystem/lvl/first-room.lvl
+	mv build/bake-first-room/output.manifest filesystem/lvl/first-room.manifest
+	mv build/bake-first-room/output.colmesh filesystem/lvl/first-room.colmesh
+	mv build/bake-first-room/output.nav filesystem/lvl/first-room.nav 2>/dev/null || true
+	rmdir build/bake-first-room 2>/dev/null || true
 
-filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest: \
+# OG MAP PIPELINE (ogmap_lib → tools/bake.py)
+filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest filesystem/lvl/1-1.colmesh: \
 	assets/og_converted/maps/1-1.map \
-	tools/bake_map.py \
+	tools/bake.py \
+	tools/ogmap_lib/__init__.py \
+	tools/ogmap_lib/brush_geom.py \
+	tools/ogmap_lib/texture_mapping.py \
+	tools/writers/colmesh_writer.py \
+	tools/writers/lvl_writer.py \
+	tools/writers/t3dm_writer.py \
+	tools/writers/nav_writer.py \
 	tools/lvl_format.py \
-	tools/entity_ids.py | filesystem/lvl
-	python3 tools/bake_map.py $< filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest --world-scale 0.15
-
+	tools/entity_ids.py \
+	tools/patch_t3dm_materials.py | filesystem/lvl
+	python3 tools/bake.py $< --out-dir build/bake-1-1 --scale 0.2 --fixture-manifest tests/fixtures/1-1.manifest
+	@# Rename output files to match expected names
+	mv build/bake-1-1/output.lvl filesystem/lvl/1-1.lvl
+	mv build/bake-1-1/output.manifest filesystem/lvl/1-1.manifest
+	mv build/bake-1-1/output.colmesh filesystem/lvl/1-1.colmesh
+	mv build/bake-1-1/output.t3dm filesystem/lvl/1-1.t3dm 2>/dev/null || true
+	mv build/bake-1-1/output.nav filesystem/lvl/1-1.nav 2>/dev/null || true
+	mv build/bake-1-1/output.report.json filesystem/lvl/1-1.report.json 2>/dev/null || true
+	rmdir build/bake-1-1 2>/dev/null || true
 # Copy font files
 filesystem/fnt/%.font64: assets/og_converted/fonts/%.font64 | filesystem/fnt
 	cp $< $@
@@ -118,6 +147,8 @@ src = \
 	src/user/gameplay/render/texture.cpp \
 	src/user/gameplay/render/material_catalog.cpp \
 	src/user/gameplay/render/level_renderer.cpp \
+	src/user/gameplay/render/lvl_room_renderer.cpp \
+	src/user/gameplay/render/t3dm_room_renderer.cpp \
 	src/user/gameplay/world/level_loader.cpp \
 	src/user/gameplay/world/entity_dispatch.cpp \
 	src/user/gameplay/world/actor_factory.cpp \

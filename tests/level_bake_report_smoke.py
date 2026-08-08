@@ -21,10 +21,16 @@ assert "duplicate_vertex_faces=0" in text
 assert "first_fan_degenerate_faces=0" in text
 assert "reversed_winding_faces=0" in text
 baked_counts = next(line for line in lines if line.startswith("baked_counts="))
-assert "colliders:102" in baked_counts
+assert "colliders:0" in baked_counts
+assert "faces:367" in baked_counts
+assert "vertices:1362" in baked_counts
 assert "entities:3" in baked_counts
 materials_line = next(line for line in lines if line.startswith("materials="))
-for material in ("rock_1", "rock_2", "snow_1"):
-    assert material in materials_line
+for material in ("rock_1", "rock_2", "snow_1", "metal_floor_1",
+                 "floor_dirty_concrete", "TB_empty"):
+    assert material in materials_line, f"Material {material} not found in line: {materials_line}"
+flag_line = next(line for line in lines if line.startswith("material_flags="))
+assert "solid:139" in flag_line, f"Material flag summary missing solid:139: {flag_line}"
+assert "visual:228" in flag_line
 print(text)
 print("level bake report smoke test: PASS")
