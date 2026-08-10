@@ -130,6 +130,10 @@ bool IsCloser(float candidate_dist, int candidate_face_id, const GroundHit& best
 // Mesh-backed query helpers (CollMesh path)
 // ---------------------------------------------------------------------------
 
+// Prevent the MIPS -Os/-ffast-math optimizer from inlining this function and
+// corrupting the GroundHit return value; a noinline here made the difference
+// between the player falling through the floor on boot and snapping correctly.
+__attribute__((noinline))
 static GroundHit RaycastRoomMesh(const Room& room, const physics::CollMesh& mesh,
                                   const Vec3& origin, const Vec3& direction,
                                   float max_distance, BackfacePolicy backface) {
@@ -225,6 +229,9 @@ bool AABB::IntersectsXZ(const Vec3& point) const {
            point.z >= min.z && point.z <= max.z;
 }
 
+// Prevent MIPS -Os/-ffast-math optimizer from inlining and corrupting the
+// GroundHit struct return value (world.cpp:133-134).
+__attribute__((noinline))
 GroundHit RaycastRoomSource(const Room& room, const Vec3& origin, const Vec3& direction, float max_distance, BackfacePolicy backface) {
     // Static world geometry: always use collmesh.
     GroundHit best;
@@ -274,10 +281,16 @@ GroundHit RaycastRoomSource(const Room& room, const Vec3& origin, const Vec3& di
     return best;
 }
 
+// Prevent MIPS -Os/-ffast-math optimizer from inlining and corrupting the
+// GroundHit struct return value (world.cpp:133-134).
+__attribute__((noinline))
 GroundHit QueryFloorSource(const Room& room, const Vec3& origin, float max_distance) {
     return RaycastRoomSource(room, origin, {0.0f, -1.0f, 0.0f}, max_distance, BackfacePolicy::Ignore);
 }
 
+// Prevent MIPS -Os/-ffast-math optimizer from inlining and corrupting the
+// GroundHit struct return value (world.cpp:133-134).
+__attribute__((noinline))
 CeilingHit QueryCeilingSource(const Room& room, const Vec3& origin, float max_distance) {
     GroundHit ground = RaycastRoomSource(room, origin, {0.0f, 1.0f, 0.0f}, max_distance, BackfacePolicy::Ignore);
     if (!ground.hit) return CeilingHit{};
@@ -292,6 +305,9 @@ CeilingHit QueryCeilingSource(const Room& room, const Vec3& origin, float max_di
     };
 }
 
+// Prevent MIPS -Os/-ffast-math optimizer from inlining and corrupting the
+// GroundHit struct return value (world.cpp:133-134).
+__attribute__((noinline))
 GroundHit ProbeFloorDebug(const Room& room, const Vec3& position, float half_height,
                           float probe_distance, float radius,
                           CollisionQueryDiagnostics* diagnostics) {
@@ -528,6 +544,67 @@ void AdvanceMovingSurfaces(Room& room, float delta_seconds) {
             c.velocity = surface.rider_velocity;
         }
     }
+}
+
+// ── WorldCollision (Inc 6) ─────────────────────────────────────────
+
+WorldCollision::~WorldCollision() {
+    Reset();
+}
+
+bool WorldCollision::Load(const char* path) {
+    Reset();
+    mesh_ = physics::LoadCollMesh(path);
+    if (!mesh_) {
+        return false;
+    }
+    return true;
+}
+
+void WorldCollision::Reset() {
+    if (mesh_) {
+        physics::FreeCollMesh(mesh_);
+        mesh_ = nullptr;
+    }
+}
+
+GroundHit WorldCollision::QueryFloor(const Vec3& origin, float max_distance) const {
+    if (!mesh_) return GroundHit{};
+    return RaycastRoomMesh(Room{}, *mesh_, origin, {0.0f, -1.0f, 0.0f},
+                           max_distance, BackfacePolicy::Ignore);
+}
+
+CeilingHit WorldCollision::QueryCeiling(const Vec3& origin, float max_distance) const {
+    if (!mesh_) return CeilingHit{};
+    GroundHit ground = RaycastRoomMesh(Room{}, *mesh_, origin, {0.0f, 1.0f, 0.0f},
+                                       max_distance, BackfacePolicy::Ignore);
+    if (!ground.hit) return CeilingHit{};
+    return CeilingHit{
+        .hit = true,
+        .point = ground.point,
+        .normal = ground.normal,
+        .distance = ground.distance,
+        .face_id = ground.face_id,
+        .owner_id = ground.owner_id,
+        .owner_velocity = ground.owner_velocity,
+    };
+}
+
+int WorldCollision::QueryWalls(const Vec3& point, float radius,
+                               WallHit* out_hits, int max_hits) const {
+    if (!mesh_) return 0;
+    return QueryWallsMesh(Room{}, *mesh_, point, radius, out_hits, max_hits);
+}
+
+WallHit WorldCollision::QueryWallNearest(const Vec3& point, float radius) const {
+    WallHit hits[kMaxWallHits];
+    const int count = QueryWalls(point, radius, hits, kMaxWallHits);
+    if (count == 0) return WallHit{};
+    WallHit best = hits[0];
+    for (int i = 1; i < count; ++i) {
+        if (hits[i].pushout > best.pushout) best = hits[i];
+    }
+    return best;
 }
 
 }  // namespace madeline_cube

@@ -14,6 +14,7 @@ void RomTelemetry::PrintLine() const {
 #ifdef N64
     debugf("[telemetry] f=%u sp=%u rp=%u g=%u a=%u w=%u ip=%u iv=%u st=%u "
            "L=%u Ds=%u De=%u W=%u C=%u ms=%u sl=%u sn=%u "
+           "room=%s fnorm=%.3f orig=(%.1f,%.1f,%.1f) "
            "pos=(%.3f,%.3f,%.3f) vel=(%.3f,%.3f,%.3f)\n",
            static_cast<unsigned int>(frame_index),
            static_cast<unsigned int>(spawn_count),
@@ -32,6 +33,11 @@ void RomTelemetry::PrintLine() const {
            static_cast<unsigned int>(moving_surface_count),
            static_cast<unsigned int>(slope_ground_count),
            static_cast<unsigned int>(snap_recoveries_count),
+           active_room[0] ? active_room : "-",
+           static_cast<double>(floor_normal_y),
+           static_cast<double>(render_origin[0]),
+           static_cast<double>(render_origin[1]),
+           static_cast<double>(render_origin[2]),
            static_cast<double>(last_position.x),
            static_cast<double>(last_position.y),
            static_cast<double>(last_position.z),
@@ -41,6 +47,7 @@ void RomTelemetry::PrintLine() const {
 #else
     std::printf("[telemetry] f=%u sp=%u rp=%u g=%u a=%u w=%u ip=%u iv=%u st=%u "
                 "L=%u Ds=%u De=%u W=%u C=%u ms=%u sl=%u sn=%u "
+                "room=%s fnorm=%.3f orig=(%.1f,%.1f,%.1f) "
                 "pos=(%.3f,%.3f,%.3f) vel=(%.3f,%.3f,%.3f)\n",
                 static_cast<unsigned int>(frame_index),
                 static_cast<unsigned int>(spawn_count),
@@ -59,6 +66,11 @@ void RomTelemetry::PrintLine() const {
                 static_cast<unsigned int>(moving_surface_count),
                 static_cast<unsigned int>(slope_ground_count),
                 static_cast<unsigned int>(snap_recoveries_count),
+                active_room[0] ? active_room : "-",
+                static_cast<double>(floor_normal_y),
+                static_cast<double>(render_origin[0]),
+                static_cast<double>(render_origin[1]),
+                static_cast<double>(render_origin[2]),
                 static_cast<double>(last_position.x),
                 static_cast<double>(last_position.y),
                 static_cast<double>(last_position.z),
@@ -78,6 +90,23 @@ void RomTelemetry::RecordSurfaceSample(uint32_t live_moving_surfaces, bool groun
     if (snap_recovered) {
         ++snap_recoveries_count;
     }
+    // Inc 3: Store floor_normal_y for diagnostic printing.
+    floor_normal_y = grounded ? ground_normal_y : 0.0f;
+}
+
+void RomTelemetry::RecordActiveRoom(const char* room_id, float fnorm_y,
+                                    const Vec3& origin) {
+    if (room_id != nullptr) {
+        // Safe copy: max 15 chars + null terminator.
+        std::strncpy(active_room, room_id, 15);
+        active_room[15] = '\0';
+    } else {
+        active_room[0] = '\0';
+    }
+    floor_normal_y = fnorm_y;
+    render_origin[0] = origin.x;
+    render_origin[1] = origin.y;
+    render_origin[2] = origin.z;
 }
 
 void RomTelemetry::RecordPlayerState(const PlayerState& state) {

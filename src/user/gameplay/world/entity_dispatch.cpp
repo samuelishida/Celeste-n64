@@ -2,7 +2,13 @@
 #include "gameplay/world/actor_factory.hpp"
 #include "gameplay/world/entity_ids.hpp"
 
+#ifdef __mips__
 #include <libdragon.h>
+#define ED_LOG debugf
+#else
+#include <cstdio>
+#define ED_LOG printf
+#endif
 
 namespace madeline_cube {
 
@@ -33,7 +39,7 @@ void DispatchLevelEntities(const Room& room, ActorWorld& world,
         translated.placeholder_id = ClassnameToPlaceholder(room.spawns[i].placeholder_id);
 
         if (translated.placeholder_id == kUnknown) {
-            debugf("[dispatch] unknown classname_id=%u at (%.2f,%.2f,%.2f) — skipped\n",
+            ED_LOG("[dispatch] unknown classname_id=%u at (%.2f,%.2f,%.2f) — skipped\n",
                    room.spawns[i].placeholder_id,
                    static_cast<double>(translated.position.x),
                    static_cast<double>(translated.position.y),
@@ -42,7 +48,7 @@ void DispatchLevelEntities(const Room& room, ActorWorld& world,
         }
 
         SpawnActor(world, translated, strawberry, refill, spring);
-        debugf("[dispatch] spawned classname_id=%u ph=%u at (%.2f,%.2f,%.2f)\n",
+        ED_LOG("[dispatch] spawned classname_id=%u ph=%u at (%.2f,%.2f,%.2f)\n",
                room.spawns[i].placeholder_id, translated.placeholder_id,
                static_cast<double>(translated.position.x),
                static_cast<double>(translated.position.y),

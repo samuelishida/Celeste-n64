@@ -17,6 +17,7 @@
 #include "gameplay/player/player_controller.hpp"
 #include "gameplay/player/player_motor.hpp"
 #include "gameplay/render/lvl_room_renderer.hpp"
+#include "gameplay/render/chunk_ring_renderer.hpp"
 #include "gameplay/render/model.hpp"
 #include "gameplay/render/texture.hpp"
 #include "gameplay/world/actor_world.hpp"
@@ -27,6 +28,8 @@
 #include "gameplay/actor/spring_actor.hpp"
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/world/level_loader.hpp"
+#include "gameplay/world/mappack_loader.hpp"
+#include "gameplay/world/map_runtime.hpp"
 #include "gameplay/world/respawn_system.hpp"
 #include "gameplay/world/room_data.hpp"
 #include "gameplay/rom_telemetry.hpp"
@@ -195,11 +198,43 @@ struct GameplayScene::Impl {
     bool cassette_reload_active_ = false;
     float cassette_reload_timer_ = 0.0f;
 
+    // Multi-room map-pack state. When use_map_pack_ is true, the active room
+    // is map_runtime_.Active() and the single-room room/room_renderer/actor_world
+    // below are not used for the active chunk. The legacy single-room path is
+    // preserved as a fallback when no map-pack is loaded.
+    MapRuntime map_runtime_;
+    bool use_map_pack_ = false;
+    const char* mappack_path_ = nullptr;  // set via SetMapPack before Init
+    // Render-only neighbor ring (active cell + its 4 neighbors). Does not
+    // affect collision, actors, or respawn — gameplay stays active-only.
+    ChunkRingRenderer chunk_ring_;
+
+    // Resolve the active room for query/update/render. Routes to the MapRuntime
+    // active room when a map-pack is in use, else the legacy single room.
+    Room& ActiveRoom() {
+        return use_map_pack_ ? map_runtime_.Active()->room : room;
+    }
+    const Room& ActiveRoom() const {
+        return use_map_pack_ ? map_runtime_.Active()->room : room;
+    }
+
     const char* lvl_path  = "rom:/lvl/1-1.lvl";
     const char* level_name = "1-1";
 
     void ResetPlayerToRoomStart();
     void ReloadBakedLevel();
+    // Initialize cassette actor from room data (extracted helper for DRY).
+    void InitCassetteForRoom(const Room& room);
+    // Boot a multi-room map-pack: load the manifest, ensure + activate the
+    // start room, dispatch its entities, and reset the player (boot IS a
+    // spawn, so ResetPlayerToRoomStart is correct here). Returns true on
+    // success; on failure the caller falls back to the legacy single-room
+    // ReloadBakedLevel path.
+    bool BootMapPack(const char* mappack_path);
+    // Chunk-transition load: swap the active room WITHOUT resetting the
+    // player (preserves world pos/velocity). Used by the per-tick boundary
+    // check. Returns true if the new room is now active.
+    bool TransitionToRoom(const char* room_id);
 };
 
 void GameplayScene::Impl::ResetPlayerToRoomStart() {
@@ -300,12 +335,146 @@ skip_entity_dispatch:
     cassette_reload_timer_ = 0.0f;
 }
 
+// Initialize cassette actor from room data (extracted helper for DRY).
+void GameplayScene::Impl::InitCassetteForRoom(const Room& room) {
+    if (room.has_cassette) {
+        cassette_actor.InitAt(room.cassette);
+        // Wire cassette target: if the room has a target set, use it.
+        if (room.cassette_target[0] != '\0') {
+            cassette_actor.target_level_path = room.cassette_target;
+        }
+    } else {
+        cassette_actor = {};
+    }
+}
+
+bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
+    if (!mappack_path || mappack_path[0] == '\0') {
+        debugf("[mappack] BootMapPack ENTRY: path=null — invalid\n");
+        return false;
+    }
+    debugf("[mappack] BootMapPack ENTRY: path=%s\n", mappack_path);
+
+    // MapRuntime owns the ONE global collision mesh + the active visual room.
+    // It loads the v2 manifest (which carries the manifest Start spawn) and the
+    // global CMSH. On failure, no gameplay state is committed — the caller
+    // falls back to the legacy single-room path.
+    if (!map_runtime_.Init(mappack_path)) {
+        debugf("[mappack] MapRuntime::Init FAILED: %s — falling back to single-room\n", mappack_path);
+        return false;
+    }
+    use_map_pack_ = true;
+
+    const ActiveRoomView* active = map_runtime_.Active();
+    if (!active) {
+        debugf("[mappack] MapRuntime active room null after Init\n");
+        use_map_pack_ = false;
+        map_runtime_.Reset();
+        return false;
+    }
+
+    baked_level_loaded_ = true;
+    // Dispatch the start room's entities into its own ActorWorld.
+    DispatchLevelEntities(active->room, actor_world,
+                          strawberry_actor, refill_actor, spring_actor);
+    actor_world.ResolvePending();
+    InitCassetteForRoom(active->room);
+
+    // Boot IS a spawn: reset the player to the start room's spawn.
+    // ResetPlayerToRoomStart reads the legacy `room` field, so mirror the
+    // active chunk's spawn + collision into `room` before snapping. The
+    // active room exposes a compatibility pointer to the global mesh.
+    room.player_start = active->room.player_start;
+    room.checkpoint = active->room.checkpoint;
+    room.coll_mesh = active->room.coll_mesh;
+
+    // Boot from the manifest start_spawn (the 'Start'-named PlayerSpawn), not
+    // from the .lvl's last PlayerSpawn, so the boot position is robust across
+    // bake re-runs regardless of .lvl entity order. Guarded so a future
+    // non-start boot (continue-from-save, debug room) cannot teleport the
+    // player to Start.
+    const V2SpawnSpec* start = map_runtime_.FindStartSpawn();
+    if (start) {
+        room.player_start = start->position;
+        room.checkpoint = start->position;
+    }
+
+    ResetPlayerToRoomStart();
+
+    // Load the render-only neighbor ring for the start cell.
+    const V2RoomSpec* start_spec = map_runtime_.ActiveSpec();
+    if (start_spec) {
+        chunk_ring_.Load(map_runtime_.Spec(), *start_spec, nullptr);
+    }
+
+    debugf("[mappack] booted %s: %d rooms, start=%s\n",
+           mappack_path, map_runtime_.Spec().room_count,
+           map_runtime_.Spec().start_room_id);
+    return true;
+}
+
+bool GameplayScene::Impl::TransitionToRoom(const char* room_id) {
+    if (!room_id || room_id[0] == '\0') {
+        debugf("[mappack] transition FAILED: room_id null or empty\n");
+        return false;
+    }
+    // Chunk transition: load + activate WITHOUT resetting the player.
+    // Player world position/velocity are preserved (all chunks share world
+    // coords). Per the missing-player-start-init common-mistake, we do NOT
+    // call ResetPlayerToRoomStart here — that is reserved for death-respawn.
+    if (!map_runtime_.CommitActive(room_id)) {
+        debugf("[mappack] transition to %s FAILED — staying in current room\n", room_id);
+        return false;
+    }
+    const ActiveRoomView* active = map_runtime_.Active();
+    if (!active) {
+        debugf("[mappack] Active() returned null after CommitActive(%s)\n", room_id);
+        return false;
+    }
+    // Refresh the render-only neighbor ring to the new cell's neighbors.
+    const V2RoomSpec* active_spec = map_runtime_.ActiveSpec();
+    if (active_spec) {
+        chunk_ring_.Load(map_runtime_.Spec(), *active_spec, nullptr);
+    }
+    // Re-dispatch the new active room's entities and re-init cassette.
+    actor_world = ActorWorld{};
+    DispatchLevelEntities(active->room, actor_world,
+                          strawberry_actor, refill_actor, spring_actor);
+    actor_world.ResolvePending();
+    InitCassetteForRoom(active->room);
+    // Mirror the active room's collision into the legacy `room` reference so
+    // the existing motor/camera queries (which read `room`) keep working until
+    // a later refactor routes them through ActiveRoom(). The active room
+    // exposes a compatibility pointer to the global mesh.
+    room.coll_mesh = active->room.coll_mesh;
+    room.has_cassette = active->room.has_cassette;
+    room.cassette = active->room.cassette;
+    // Mirror cassette target to legacy room reference.
+    room.cassette_target[0] = '\0';
+    if (active->room.cassette_target[0] != '\0') {
+        std::strncpy(room.cassette_target, active->room.cassette_target, 31);
+        room.cassette_target[31] = '\0';
+    }
+    debugf("[mappack] transitioned to %s\n", room_id);
+    return true;
+}
+
 void GameplayScene::SetLevel(const char* lvl_path, const char* level_name) {
     lvl_path_   = lvl_path;
     level_name_ = level_name;
     if (impl_) {
         impl_->lvl_path   = lvl_path;
         impl_->level_name = level_name;
+    }
+}
+
+void GameplayScene::SetMapPack(const char* mappack_path) {
+    // Stored; consumed by Init() to boot the multi-room path.
+    if (impl_) {
+        impl_->mappack_path_ = mappack_path;
+    } else {
+        // Stash on the outer object for Init to read.
+        mappack_path_pending_ = mappack_path;
     }
 }
 
@@ -333,7 +502,25 @@ void GameplayScene::Init() {
         debugf("[init] WARNING: room fixture model missing\n");
     impl_->room_fixture_model.UpdateMatrix({0.0f, 40.0f, -120.0f}, 60.0f, 0.0f);
 
-    impl_->ReloadBakedLevel();
+    // Boot path: if a map-pack was set (SetMapPack), boot the multi-room
+    // world; else fall back to the legacy single-room .lvl path.
+    debugf("[init] ENTRY: mappack_path_pending_=%s lvl_path_=%s\n",
+           mappack_path_pending_ ? mappack_path_pending_ : "(null)",
+           lvl_path_ ? lvl_path_ : "(null)");
+    if (mappack_path_pending_ != nullptr) {
+        impl_->mappack_path_ = mappack_path_pending_;
+        debugf("[init] Calling BootMapPack(%s)\n", mappack_path_pending_);
+        if (!impl_->BootMapPack(mappack_path_pending_)) {
+            debugf("[init] BootMapPack FAILED — falling back to single-room\n");
+            // Boot failed — fall back to single-room.
+            impl_->ReloadBakedLevel();
+        } else {
+            debugf("[init] BootMapPack SUCCEEDED — use_map_pack_ should be true\n");
+        }
+    } else {
+        debugf("[init] No mappack pending — using single-room path\n");
+        impl_->ReloadBakedLevel();
+    }
 
     // Graybox room geometry render objects (only when not using baked level)
     if (!impl_->baked_level_loaded_) {
@@ -360,6 +547,10 @@ void GameplayScene::Shutdown() {
     impl_->madeline_model.Free();
     impl_->room_fixture_model.Free();
     impl_->room_renderer.Free();
+
+    // Free the multi-room map-pack runtime (frees the global collision mesh +
+    // active room renderer). Safe to call when not using a map-pack (no-op).
+    impl_->map_runtime_.Reset();
 
     if (impl_->room.coll_mesh) {
         physics::FreeCollMesh(impl_->room.coll_mesh);
@@ -401,6 +592,17 @@ void GameplayScene::Update(float delta_seconds) {
            (void*)impl_->room.coll_mesh, n_ticks);
     impl_->player.prev_position = impl_->player.position;
 
+    // Multi-room: check if the player crossed a chunk boundary this frame and
+    // transition to the new active room (preserves player pos/velocity).
+    if (impl_->use_map_pack_) {
+        const char* new_room_id = nullptr;
+        if (impl_->map_runtime_.SetActiveByPosition(impl_->player.position, &new_room_id)) {
+            if (new_room_id && new_room_id[0] != '\0') {
+                impl_->TransitionToRoom(new_room_id);
+            }
+        }
+    }
+
     MotorResult motor_result = {};
     bool was_grounded_pre_motor = impl_->player.contact.was_grounded;
     bool did_respawn = false;
@@ -431,6 +633,21 @@ void GameplayScene::Update(float delta_seconds) {
         if (impl_->respawn_system.Step(impl_->player, impl_->checkpoint, impl_->room, impl_->player_motor, motor_result.death)) {
             did_respawn = true;
             impl_->player.prev_position = impl_->player.position;
+            // Multi-room death-respawn: ensure the checkpoint's room is active
+            // (per-chunk respawn routing). The checkpoint Vec3 is the spawn
+            // point; resolve which room it lives in and load it.
+            if (impl_->use_map_pack_) {
+                const char* cp_room = impl_->map_runtime_.ResolveCellByPosition(impl_->checkpoint);
+                if (cp_room && cp_room[0] != '\0') {
+                    if (impl_->map_runtime_.CommitActive(cp_room)) {
+                        // Mirror active room into the legacy `room` reference so
+                        // the next motor tick's collision query sees the chunk.
+                        impl_->room.coll_mesh = impl_->map_runtime_.Active()->room.coll_mesh;
+                    } else {
+                        debugf("[respawn] CommitActive(%s) FAILED — using current room\n", cp_room);
+                    }
+                }
+            }
         }
     }
 
@@ -445,6 +662,15 @@ void GameplayScene::Update(float delta_seconds) {
         motor_result.ground_normal.y,
         motor_result.grounded && was_grounded_pre_motor &&
             impl_->player.contact.ground_snap_cooldown_remaining <= 0.0f);
+    // Inc 3: Record active room id, floor normal, and render origin for
+    // chunk-traversal diagnostics.
+    {
+        const ActiveRoomView* active = impl_->map_runtime_.Active();
+        impl_->telemetry.RecordActiveRoom(
+            impl_->map_runtime_.ActiveRoomId(),
+            motor_result.grounded ? motor_result.ground_normal.y : 0.0f,
+            active ? active->render_origin : Vec3{0.0f, 0.0f, 0.0f});
+    }
     if (did_respawn) {
         impl_->telemetry.RecordRespawn();
         impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
@@ -482,7 +708,15 @@ void GameplayScene::Update(float delta_seconds) {
     if (impl_->cassette_reload_active_) {
         impl_->cassette_reload_timer_ += delta_seconds;
         if (impl_->cassette_reload_timer_ >= kFadeReloadSeconds) {
-            impl_->ReloadBakedLevel();
+            // If the cassette has a target level, load it via SetLevel (B-side Push/Pop).
+            if (impl_->room.has_cassette && impl_->room.cassette_target[0] != '\0') {
+                // Store the target and reload via SetLevel path.
+                impl_->lvl_path = impl_->room.cassette_target;
+                impl_->level_name = "cassette-target";  // placeholder name
+                impl_->ReloadBakedLevel();
+            } else {
+                impl_->ReloadBakedLevel();
+            }
             return;
         }
     }
@@ -536,7 +770,7 @@ void GameplayScene::Render() {
     rdpq_attach(display_get(), display_get_zbuf());
     t3d_frame_start();
     t3d_viewport_attach(&impl_->viewport);
-    t3d_screen_clear_color(RGBA32(88, 163, 221, 0xFF));
+    t3d_screen_clear_color(RGBA32(88, 163, 221, 0xFF));  // normal blue sky
     t3d_screen_clear_depth();
 
     t3d_light_set_ambient(impl_->ambient_light);
@@ -552,7 +786,14 @@ void GameplayScene::Render() {
         // Uses PRIM*SHADE combiner with per-material primColor set per batch.
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
         rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
-        impl_->room_renderer.Draw();
+        // In map-pack mode, draw the render-only neighbor ring (active cell +
+        // its 4 neighbors), each rebased to its own render origin. Otherwise
+        // use the legacy single-room renderer.
+        if (impl_->use_map_pack_) {
+            impl_->chunk_ring_.Draw();
+        } else {
+            impl_->room_renderer.Draw();
+        }
         if (impl_->room.has_cassette && !impl_->cassette_actor.collected && impl_->cassette_model.IsLoaded()) {
             constexpr float kCassetteScale = 0.18f;
             impl_->cassette_model.UpdateMatrix(

@@ -33,7 +33,14 @@ struct LevelGeometry {
 
 // Load a baked .lvl file. Populates room (collision + spawns) and geometry
 // (faces + vertices for rendering). Path may be "rom:/lvl/1-1.lvl" on device
-// or a local filesystem path in host tests.
+// or a local filesystem path in host tests. Also loads the .colmesh sidecar
+// (same path with .lvl → .colmesh).
 bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry);
+
+// Load only the .lvl sections (entities, atmosphere, faces, vertices) into
+// room + geometry, WITHOUT loading the .colmesh sidecar. Used by the Map
+// pool, which loads the colmesh separately from the map-pack manifest path.
+// Returns true on success.
+bool LoadLevelInto(const char* path, Room& room, LevelGeometry& geometry);
 
 }  // namespace madeline_cube

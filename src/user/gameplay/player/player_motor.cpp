@@ -1,6 +1,7 @@
 #include "gameplay/player/player_motor.hpp"
 
 #include <cmath>
+#include <cstdio>
 
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/world/world.hpp"

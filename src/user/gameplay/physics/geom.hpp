@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include "gameplay/math_types.hpp"
 
 namespace madeline_cube::physics {
@@ -9,6 +10,23 @@ namespace madeline_cube::physics {
 // ---------------------------------------------------------------------------
 
 enum class BackfaceCull : bool { Ignore = false, Cull = true };
+
+inline Vec3 Sub(const Vec3& a, const Vec3& b) { return {a.x-b.x, a.y-b.y, a.z-b.z}; }
+inline Vec3 Add(const Vec3& a, const Vec3& b) { return {a.x+b.x, a.y+b.y, a.z+b.z}; }
+inline Vec3 Scale(const Vec3& v, float s)     { return {v.x*s, v.y*s, v.z*s}; }
+inline float Dot(const Vec3& a, const Vec3& b){ return a.x*b.x + a.y*b.y + a.z*b.z; }
+inline Vec3 Cross(const Vec3& a, const Vec3& b) {
+    return { a.y*b.z - a.z*b.y,
+             a.z*b.x - a.x*b.z,
+             a.x*b.y - a.y*b.x };
+}
+inline float Len2(const Vec3& v) { return Dot(v, v); }
+inline Vec3 Norm(const Vec3& v) {
+    float l = std::sqrt(Len2(v));
+    if (l < 1e-12f) return {0.f,1.f,0.f};
+    float inv = 1.f / l;
+    return {v.x*inv, v.y*inv, v.z*inv};
+}
 
 struct TriHit {
     bool  hit = false;

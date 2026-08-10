@@ -27,7 +27,8 @@ uint16_t ReadU16(FILE* f) {
 
 }  // namespace
 
-bool LvlRoomRenderer::Load(const char* lvl_path) {
+bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin) {
+    render_origin_ = render_origin;
     FILE* f = fopen(lvl_path, "rb");
     if (!f) { debugf("[lvlroom] open FAILED: %s\n", lvl_path); return false; }
 
@@ -90,7 +91,8 @@ bool LvlRoomRenderer::Load(const char* lvl_path) {
     }
     fclose(f);
 
-    // Build T3DVertPacked pairs
+    // Build T3DVertPacked pairs, subtracting the render origin so the full
+    // map's absolute world coordinates do not overflow the int16 packing.
     pair_count_ = (vertex_count + 1) / 2;
     vert_count_ = vertex_count;
     verts_ = static_cast<T3DVertPacked*>(
@@ -106,8 +108,12 @@ bool LvlRoomRenderer::Load(const char* lvl_path) {
 
         auto toFp = [](float v) -> int16_t { return static_cast<int16_t>(v * kPosScale); };
 
-        p.posA[0] = toFp(va.x); p.posA[1] = toFp(va.y); p.posA[2] = toFp(va.z);
-        p.posB[0] = toFp(vb.x); p.posB[1] = toFp(vb.y); p.posB[2] = toFp(vb.z);
+        p.posA[0] = toFp(va.x - render_origin.x);
+        p.posA[1] = toFp(va.y - render_origin.y);
+        p.posA[2] = toFp(va.z - render_origin.z);
+        p.posB[0] = toFp(vb.x - render_origin.x);
+        p.posB[1] = toFp(vb.y - render_origin.y);
+        p.posB[2] = toFp(vb.z - render_origin.z);
         p.normA = 0; p.normB = 0;
         p.rgbaA = 0xFFFFFFFF; p.rgbaB = 0xFFFFFFFF;
         p.stA[0] = static_cast<int16_t>(va.u * 1024.0f);
@@ -132,27 +138,41 @@ bool LvlRoomRenderer::Load(const char* lvl_path) {
     // same-material faces and fanning across the whole range creates
     // garbage triangles between unrelated faces, so we draw each face
     // as its own fan. Material state changes are cheap enough for now.
+    // Faces that exceed the batch cap are counted as discarded (must be 0
+    // for a validated artifact) rather than silently truncated.
     batch_count_ = 0;
-    for (uint32_t fi = 0; fi < face_count && batch_count_ < kMaxBatches; ++fi) {
+    discarded_faces_ = 0;
+    for (uint32_t fi = 0; fi < face_count; ++fi) {
         const LvlFace& lf = faces[fi];
         if (lf.vc < 3) continue;
+        if (batch_count_ >= kMaxBatches) {
+            ++discarded_faces_;
+            continue;
+        }
         batches_[batch_count_++] = {lf.vs, lf.vc, lf.vc - 2, lf.mid};
     }
 
     free(faces);
     free(lvl_verts);
 
-    // Model matrix: compensate for kPosScale
+    // Model matrix: compensate for kPosScale AND translate back to world
+    // space. The vertices were rebased by `render_origin` before packing, so
+    // the matrix must apply scale kInvScale then translation `render_origin`
+    // to map the packed int16 (already (world - origin) * kPosScale) back to
+    // world coordinates. Without the translation, the chunk is drawn at
+    // `world - render_origin` while the player/camera are world-space, which
+    // manifests as "only a small piece" + apparent fall-through.
     matrix_fp_ = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
     T3DMat4 m;
     const float s[3] = {kInvScale, kInvScale, kInvScale};
     const float r[3] = {0, 0, 0};
-    const float p[3] = {0, 0, 0};
+    const float p[3] = {render_origin_.x, render_origin_.y, render_origin_.z};
     t3d_mat4_from_srt_euler(&m, s, r, p);
     t3d_mat4_to_fixed(matrix_fp_, &m);
 
-    debugf("[lvlroom] loaded: %lu verts, %d batches, %lu faces\n",
-           (unsigned long)vertex_count, batch_count_, (unsigned long)face_count);
+    debugf("[lvlroom] loaded: %lu verts, %d batches, %lu faces, %d discarded\n",
+           (unsigned long)vertex_count, batch_count_, (unsigned long)face_count,
+           discarded_faces_);
     return true;
 }
 

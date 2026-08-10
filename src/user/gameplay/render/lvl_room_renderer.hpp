@@ -3,6 +3,8 @@
 #include <t3d/t3dmodel.h>
 #include <cstdint>
 
+#include "gameplay/math_types.hpp"
+
 namespace madeline_cube {
 
 // Renders baked room geometry directly from .lvl face/vertex data.
@@ -15,7 +17,11 @@ public:
     ~LvlRoomRenderer() { Free(); }
 
     // Load faces + vertices from a .lvl file. Returns true on success.
-    bool Load(const char* lvl_path);
+    // `render_origin` is subtracted from each vertex before fixed-point
+    // packing so the full map's absolute world coordinates do not overflow
+    // the int16 kPosScale packing (chunk-local rendering). The scene renders
+    // the player/camera/actors in the same local frame.
+    bool Load(const char* lvl_path, const Vec3& render_origin = {0.0f, 0.0f, 0.0f});
 
     // Free all allocated resources.
     void Free();
@@ -25,8 +31,16 @@ public:
 
     bool IsLoaded() const { return verts_ != nullptr; }
 
+    // Number of faces discarded because they exceeded the batch cap. Must
+    // remain zero for a validated artifact.
+    int DiscardedFaces() const { return discarded_faces_; }
+
+    // The render origin this renderer was loaded with (world units). Stored
+    // as a plain Vec3 so host tests can assert it without any N64 dependency.
+    const Vec3& RenderOrigin() const { return render_origin_; }
+
 private:
-    static constexpr int kMaxBatches = 512;
+    static constexpr int kMaxBatches = 1024;  // covers the bake's 1024-face cap
     static constexpr float kPosScale = 32.0f;   // fixed-point precision
     static constexpr float kInvScale = 1.0f / kPosScale;
 
@@ -43,8 +57,11 @@ private:
 
     Batch batches_[kMaxBatches];
     int batch_count_ = 0;
+    int discarded_faces_ = 0;
 
     T3DMat4FP* matrix_fp_ = nullptr;
+
+    Vec3 render_origin_ = {0.0f, 0.0f, 0.0f};
 };
 
 }  // namespace madeline_cube

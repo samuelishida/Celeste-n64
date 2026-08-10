@@ -8,6 +8,7 @@ ActorId SpawnActor(ActorWorld& world, const ActorSpawn& spawn, StrawberryActor& 
     if (!actor) return 0;
     actor->position = spawn.position;
     actor->placeholder_id = spawn.placeholder_id;
+    actor->source_id = spawn.source_id;
     return world.Add(*actor);
 }
 }

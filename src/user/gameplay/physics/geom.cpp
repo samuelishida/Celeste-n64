@@ -6,42 +6,6 @@
 namespace madeline_cube::physics {
 
 // ---------------------------------------------------------------------------
-// Vec3 helpers (avoid dependency on T3DVec3 / fm_vec3_t in this pure layer)
-// ---------------------------------------------------------------------------
-
-namespace {
-
-inline Vec3 Sub(const Vec3& a, const Vec3& b) { return {a.x-b.x, a.y-b.y, a.z-b.z}; }
-inline Vec3 Add(const Vec3& a, const Vec3& b) { return {a.x+b.x, a.y+b.y, a.z+b.z}; }
-inline Vec3 Scale(const Vec3& v, float s)     { return {v.x*s, v.y*s, v.z*s}; }
-inline float Dot(const Vec3& a, const Vec3& b){ return a.x*b.x + a.y*b.y + a.z*b.z; }
-inline Vec3 Cross(const Vec3& a, const Vec3& b) {
-    return { a.y*b.z - a.z*b.y,
-             a.z*b.x - a.x*b.z,
-             a.x*b.y - a.y*b.x };
-}
-inline float Len2(const Vec3& v) { return Dot(v, v); }
-inline Vec3 Norm(const Vec3& v) {
-    float l = std::sqrt(Len2(v));
-    if (l < 1e-12f) return {0.f,1.f,0.f};
-    float inv = 1.f / l;
-    return {v.x*inv, v.y*inv, v.z*inv};
-}
-inline float Clamp01(float x) { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
-inline float ClampF(float x, float lo, float hi) { return x < lo ? lo : (x > hi ? hi : x); }
-
-// Closest point on segment ab to point p; returns parameter t ∈ [0,1].
-inline Vec3 ClosestPointOnSegment(const Vec3& a, const Vec3& b, const Vec3& p, float& out_t) {
-    Vec3 ab = Sub(b, a);
-    float denom = Len2(ab);
-    if (denom < 1e-12f) { out_t = 0.f; return a; }
-    out_t = Clamp01(Dot(Sub(p, a), ab) / denom);
-    return Add(a, Scale(ab, out_t));
-}
-
-}  // namespace
-
-// ---------------------------------------------------------------------------
 // Möller–Trumbore
 // ---------------------------------------------------------------------------
 

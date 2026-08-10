@@ -71,6 +71,7 @@ from .brush_geom import (
     validate_scene,
 )
 from .texture_mapping import compute_uv
+from . import brush_grid  # grid partitioning for multi-room map-packs
 
 # ── Types ───────────────────────────────────────────────────────────
 

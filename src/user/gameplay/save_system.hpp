@@ -8,7 +8,7 @@ namespace madeline_cube {
 // Stored in EEPROM or SRAM with dual-slot rollback safety.
 
 constexpr uint32_t kSaveMagic = 0x4336344E;  // "C64N"
-constexpr uint16_t kSaveVersion = 1;
+constexpr uint16_t kSaveVersion = 2;  // bumped for per-chunk save fields
 
 struct SaveHeader {
     uint32_t magic = kSaveMagic;
@@ -21,14 +21,41 @@ struct SaveHeader {
     uint8_t flags = 0x03;  // bit0 z-guide, bit1 timer
 };
 
+static constexpr int kMaxChunkBits = 64;  // matches MapSpec::kMaxRooms
+
 struct LevelRecord {
     uint16_t level_id = 0;
     uint16_t checkpoint_id = 0;
-    uint32_t strawberry_bits = 0;
+    uint32_t strawberry_bits = 0;           // legacy per-level bits (kept for B-side compat)
     uint16_t completed_submap_bits = 0;
     uint16_t script_flag_bits = 0;
     uint16_t deaths = 0;
     uint32_t time_frames = 0;
+    // Per-chunk save for map-packs (Forsaken City A-side).
+    uint64_t chunk_strawberry_bits[kMaxChunkBits / 64] = {};  // 64-bit bitfield per chunk (64 chunks max)
+    char checkpoint_room_id[16] = {};  // which room to respawn in for this level
+
+    // Per-chunk strawberry helpers (chunk_index must be 0..63).
+    bool IsChunkStrawberryCollected(int chunk_index) const {
+        if (chunk_index < 0 || chunk_index >= kMaxChunkBits) return false;
+        return (chunk_strawberry_bits[chunk_index / 64] >> (chunk_index % 64)) & 1ULL;
+    }
+    void SetChunkStrawberryCollected(int chunk_index, bool collected = true) {
+        if (chunk_index < 0 || chunk_index >= kMaxChunkBits) return;
+        if (collected) {
+            chunk_strawberry_bits[chunk_index / 64] |= (1ULL << (chunk_index % 64));
+        } else {
+            chunk_strawberry_bits[chunk_index / 64] &= ~(1ULL << (chunk_index % 64));
+        }
+    }
+
+    // Checkpoint room helpers.
+    void SetCheckpointRoom(const char* room_id) {
+        if (!room_id) { checkpoint_room_id[0] = '\0'; return; }
+        for (int i = 0; i < 15 && room_id[i]; ++i) checkpoint_room_id[i] = room_id[i];
+        checkpoint_room_id[15] = '\0';
+    }
+    const char* GetCheckpointRoom() const { return checkpoint_room_id; }
 };
 
 struct SaveBlock {

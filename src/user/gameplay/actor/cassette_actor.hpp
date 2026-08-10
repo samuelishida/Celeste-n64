@@ -11,6 +11,9 @@ public:
 
     float SpinYawRadians() const { return spin_phase_seconds_ * 1.5f; }
 
+    // Target level to load when cassette is collected (empty = none).
+    const char* target_level_path = nullptr;
+
 private:
     float spin_phase_seconds_ = 0.0f;
 };

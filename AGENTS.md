@@ -42,6 +42,23 @@ Important current behavior:
 - falling below the kill plane respawns at the checkpoint
 - controller `X` input is intentionally negated in `src/user/rom_main.cpp`; the first test ROM had left/right mirrored until this was fixed
 
+The main world is now the whole Forsaken City A-side `1.map`, baked through
+the **canonical world IR** (`tools/ogworld/`) into one global collision mesh +
+per-cell LVL2 visual rooms + a **map-pack v2** manifest
+(`filesystem/lvl/forsyken-city/`, 45 cells at `--chunk-size 1200`). The
+runtime (`MapRuntime` + `WorldCollision`) owns ONE global CMSH for the map
+lifetime and one authoritative active visual room; all static queries resolve
+through the global mesh, and the active room exposes a compatibility pointer
+to it. **Axis convention (load-bearing):** the grid is 2D in WORLD XZ
+(cell `iz = floor(world_z / (chunk_size·scale))`, world_z = depth = −map_y) —
+never map_z, which is the Quake UP axis. Boot uses the manifest `Start` spawn
+record. Render origins are per-cell centers so the full map's absolute
+coordinates do not overflow the int16 fixed-point packing.
+
+Bake: `make bake-forsaken-city` (or `python3 tools/bake_interconnected_map.py
+assets/og_converted/maps/1.map --out-dir build/bake-fc-1200 --chunk-size 1200
+--scale 0.2 --mappack-id forsyken-city`).
+
 ## Repository map
 
 ```txt
@@ -52,9 +69,11 @@ docs/                       design notes, budgets, milestone notes
 src/user/gameplay/          engine-light gameplay code (see subdirs below)
 src/user/gameplay/actor/    actor base + spring, refill, strawberry, bobbing
 src/user/gameplay/player/   player controller, motor, camera, state, config
-src/user/gameplay/world/    world, rooms, collectibles, respawn
+src/user/gameplay/world/    world, rooms, collectibles, respawn, map_runtime
 src/user/gameplay/scene/    scene graph, manager, gameplay scene
 src/user/rom_main.cpp       current hand-authored N64 demo entrypoint
+tools/ogworld/              canonical world IR + class policy + geometry/chunking
+tools/writers/              colmesh/lvl/t3dm/nav writers (incl. world writers)
 tests/                      host-side smoke tests
 Makefile                    current libdragon/tiny3d ROM build
 ```
@@ -172,8 +191,11 @@ Known local result:
 
 Recommended validation habit:
 
-- use Mupen64Plus for a quick local smoke launch if convenient
 - use Ares or gopher64 for serious validation of modern libdragon/tiny3d behavior
+- **Do NOT rely on Mupen64Plus/glide for validating this ROM** — the glide
+  video plugin fails to render it (broken/blank output). Use **Ares** for the
+  Inc 3 hardware traversal gate (cross ≥2 seams, no fall-through, confirmed via
+  the `orig=(...)` telemetry). See `tests/rom_traversal_acceptance.md`.
 
 Current ROM control map:
 
