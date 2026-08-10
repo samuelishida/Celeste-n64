@@ -66,7 +66,7 @@ static void CopyString(char* dst, size_t dst_size, const char* src) {
 
 }  // namespace
 
-bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry) {
+bool LoadLevelInto(const char* path, Room& room, LevelGeometry& geometry) {
     FILE* f = fopen(path, "rb");
     if (!f) {
         LVL_LOG("[lvl] open FAILED: %s\n", path);
@@ -262,6 +262,12 @@ bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry) {
     LVL_LOG("[lvl] loaded %s: colliders=%d faces=%d vertices=%d entities=%lu\n",
             path, room.collider_count, geometry.face_count,
             geometry.vertex_count, static_cast<unsigned long>(entity_count));
+
+    return true;
+}
+
+bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry) {
+    if (!LoadLevelInto(path, room, geometry)) return false;
 
     // Try loading the .colmesh sidecar (same path, .lvl → .colmesh).
     {

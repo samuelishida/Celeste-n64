@@ -53,6 +53,15 @@ struct RomTelemetry {
     Vec3 last_velocity;
     bool last_grounded = false;
 
+    // Inc 3: Per-chunk ROM telemetry fields for traversal diagnostics.
+    // active_room: the current active room id (from map_.ActiveRoomId()).
+    char active_room[16] = {0};
+    // floor_normal_y: ground_normal.y from the last SurfaceSample (only valid when grounded).
+    float floor_normal_y = 0.0f;
+    // render_origin: the active room's render origin (world units), for
+    // verifying the drawn chunk matches the collision frame.
+    float render_origin[3] = {0.0f, 0.0f, 0.0f};
+
     void BeginFrame() { ++frame_index; }
 
     void RecordPlayerState(const PlayerState& state);
@@ -63,6 +72,10 @@ struct RomTelemetry {
     //   snap_recovered  -- motor recovered ground via ground-snap this frame.
     void RecordSurfaceSample(uint32_t live_moving_surfaces, bool grounded,
                              float ground_normal_y, bool snap_recovered);
+
+    // Inc 3: Record the active room id, floor normal, and render origin.
+    void RecordActiveRoom(const char* room_id, float fnorm_y,
+                          const Vec3& render_origin);
 
     void RecordLanding() { ++landing_events; }
     void RecordDashStart() { ++dash_start_events; }

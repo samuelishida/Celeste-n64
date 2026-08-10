@@ -109,6 +109,7 @@ struct StaticGeometry {
 struct ActorSpawn {
     Vec3 position;
     uint16_t placeholder_id = 0;
+    uint32_t source_id = 0;  // stable source entity id (Inc 9)
 };
 
 // A graybox room composed of static geometry, collision, and spawns.
@@ -137,6 +138,7 @@ struct Room {
     Vec3 snow_dir = {0.0f, 0.0f, 0.0f};
     Vec3 cassette = {0.0f, 0.0f, 0.0f};
     bool has_cassette = false;
+    char cassette_target[32] = {};  // map path to load on cassette pickup (e.g. "rom:/lvl/1-1.lvl")
 
     Vec3 player_start = {0.0f, 30.0f, 0.0f};
     Vec3 checkpoint = {0.0f, 30.0f, 0.0f};
@@ -180,5 +182,38 @@ WallHit QueryWallNearest(const Room& room, const Vec3& point, float radius);
 // Wall whose normal is closest to the given direction.
 WallHit QueryWallClosestToNormal(const Room& room, const Vec3& point, float radius, const Vec3& normal);
 
+// ── WorldCollision (Inc 6) ─────────────────────────────────────────
+//
+// Owns the ONE global static collision mesh for the map lifetime. All static
+// queries (floor/ceiling/wall, player motor, camera, respawn) resolve through
+// this same mesh. A v2 active room may expose a compatibility pointer to the
+// global mesh, but room cleanup never frees or replaces it.
+class WorldCollision {
+public:
+    WorldCollision() = default;
+    ~WorldCollision();
+
+    WorldCollision(const WorldCollision&) = delete;
+    WorldCollision& operator=(const WorldCollision&) = delete;
+
+    // Load the global CMSH from a path. Returns false on failure.
+    bool Load(const char* path);
+
+    // Release the global mesh.
+    void Reset();
+
+    bool IsLoaded() const { return mesh_ != nullptr; }
+    physics::CollMesh* Mesh() { return mesh_; }
+    const physics::CollMesh* Mesh() const { return mesh_; }
+
+    // Source-shaped static queries against the global mesh.
+    GroundHit QueryFloor(const Vec3& origin, float max_distance) const;
+    CeilingHit QueryCeiling(const Vec3& origin, float max_distance) const;
+    int QueryWalls(const Vec3& point, float radius, WallHit* out_hits, int max_hits) const;
+    WallHit QueryWallNearest(const Vec3& point, float radius) const;
+
+private:
+    physics::CollMesh* mesh_ = nullptr;
+};
 
 }  // namespace madeline_cube

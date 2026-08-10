@@ -44,9 +44,10 @@ int main() {
 
     SceneManager scene_mgr;
     GameplayScene gameplay;
-    TitleScene title(&gameplay);
-    scene_mgr.Register(0, &title);
-    scene_mgr.Register(1, &gameplay);
+    gameplay.SetMapPack("rom:/lvl/forsyken-city/forsyken-city.mappack");
+    // TitleScene title(&gameplay);
+    scene_mgr.Register(0, &gameplay);  // skip title, go straight to gameplay
+    // scene_mgr.Register(1, &gameplay);
     scene_mgr.Goto(0);
 
     n64::FrameProfiler profiler(60);

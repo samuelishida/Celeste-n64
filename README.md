@@ -34,12 +34,35 @@ Completed:
 - Fall respawn to checkpoint
 - Strawberry collection
 - Material catalog with textured geometry
+- **Full Forsaken City A-side `1.map`** as one traversable world: one global
+  collision mesh + per-cell LVL2 visual rooms + map-pack v2 manifest
+  (`tools/ogworld/` canonical IR → `MapRuntime` + `WorldCollision`)
 
 In progress:
-- Stabilizing 1-1 map load (diagnostics in place for pointer corruption tracking)
+- Hardware traversal validation under Ares/Mupen64Plus (see
+  `tests/rom_traversal_acceptance.md`)
 - Verifying collision mesh queries under 1-1 geometry
 
 See [`.agents/map-creation.md`](.agents/map-creation.md) for the full end-to-end pipeline (author → bake → load).
+
+## Interconnected map bake
+
+The full A-side `1.map` is baked through the canonical world IR into one
+global CMSH + per-cell LVL2 rooms + a map-pack v2 manifest:
+
+```sh
+make bake-forsaken-city
+# or
+python3 tools/bake_interconnected_map.py assets/og_converted/maps/1.map \
+  --out-dir build/bake-fc-1200 --chunk-size 1200 --scale 0.2 \
+  --mappack-id forsyken-city
+```
+
+The runtime (`MapRuntime` + `WorldCollision`) owns ONE global CMSH for the map
+lifetime and one authoritative active visual room. All static queries resolve
+through the global mesh; the active room exposes a compatibility pointer to
+it. Render origins are per-cell centers so the full map's absolute coordinates
+do not overflow the int16 fixed-point packing.
 
 ## Next build step
 

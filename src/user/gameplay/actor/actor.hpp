@@ -20,6 +20,7 @@ public:
     bool collected = false;
     float pickup_radius = 1.0f;
     uint16_t placeholder_id = 0;
+    uint32_t source_id = 0;  // stable source entity id (Inc 9)
 };
 
 }  // namespace madeline_cube
