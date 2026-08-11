@@ -9,11 +9,17 @@
 #include "gameplay/render/tile_visibility.hpp"      // Mat4, ProjectFrustumToGround, ScanlineTileRanges
 #include "gameplay/world/mappack_loader.hpp"        // MapSpecV2, V2RoomSpec
 
+namespace n64 {
+class FrameProfiler;  // defined in n64/profiler.hpp (Inc 1 / D7)
+class FrameArena;     // defined in n64/frame_arena.hpp (Inc 5 / D6)
+}  // namespace n64
+
 namespace madeline_cube {
 
 class LvlRoomRenderer;
 class TexturedRoomRenderer;
 class MaterialCatalog;
+struct RenderCounters;  // defined in open_world_renderer.hpp (Inc 1 / D7)
 
 // Texturing gate (Inc 5). When true, the near pass uses `TexturedRoomRenderer`
 // (per-material sprites); when false, it uses the flat-color `LvlRoomRenderer`
@@ -149,6 +155,22 @@ public:
     // streamer. Pass nullptr to force the flat-color fallback.
     void SetMaterialCatalog(const MaterialCatalog* catalog);
 
+    // Attach the per-frame draw counters (Inc 1 / D7). Forwarded to every
+    // resident room renderer; the orchestrator owns + resets them.
+    void SetCounters(RenderCounters* counters);
+
+    // Attach the per-phase profiler (Inc 1 / D7). The textured near pass wraps
+    // each `TexturedRoomRenderer::Draw` in `kPhaseTextureUpload` so the TMEM
+    // upload cost is measured separately from the high-priority pass total.
+    void SetProfiler(n64::FrameProfiler* profiler);
+
+    // Attach the frame-scoped arena (Inc 5 / D6). The per-frame visible-tile
+    // snapshot (`ResolveVisibleTiles` output) is allocated from it; a
+    // null/empty arena falls back to a small stack buffer. The resident ring
+    // + renderers stay persistent member state — never the arena (it resets
+    // every frame; putting the ring there would thrash streaming).
+    void SetArena(n64::FrameArena* arena);
+
     void UpdateCamera(const Vec3& camera_pos, const Mat4& inv_view_proj,
                       float ground_y);
 
@@ -166,7 +188,20 @@ private:
     LvlRoomRenderer* renderers_[kMaxRing] = {};
     TexturedRoomRenderer* textured_renderers_[kMaxRing] = {};
     const MaterialCatalog* catalog_ = nullptr;
+    RenderCounters* counters_ = nullptr;      // per-frame draw counters (Inc 1 / D7)
+    n64::FrameProfiler* profiler_ = nullptr;  // per-phase profiler (Inc 1 / D7)
+    n64::FrameArena* arena_ = nullptr;        // frame-scoped arena (Inc 5 / D6)
     int evicted_this_frame_ = 0;
+
+    // The map-pack spec (Inc 4 / D4). Stored as a pointer from the last
+    // `SetCenter` — the caller (MapRuntime) owns the spec for the map lifetime,
+    // and the resident set already stores `const V2RoomSpec*` pointers into it.
+    const MapSpecV2* spec_ = nullptr;
+
+    // Per-frame near-pass visibility mask (Inc 4 / D4). Index 0 (center) is
+    // ALWAYS true (transition/respawn safety — never a black frame). Filled by
+    // `UpdateCamera` from `ResolveVisibleTiles`; read by `DrawHighPriority`.
+    bool visible_[kMaxRing] = {};
 };
 
 }  // namespace madeline_cube

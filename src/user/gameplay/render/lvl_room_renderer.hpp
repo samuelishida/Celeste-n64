@@ -4,8 +4,11 @@
 #include <cstdint>
 
 #include "gameplay/math_types.hpp"
+#include "gameplay/render/batch_coalesce.hpp"  // FaceSpec, BatchRun, RunFace (Inc 3 / D3)
 
 namespace madeline_cube {
+
+struct RenderCounters;  // defined in open_world_renderer.hpp (Inc 1 / D7)
 
 // Renders baked room geometry directly from .lvl face/vertex data.
 // Bypasses the .t3dm / gltf_to_t3d pipeline entirely — builds T3DVertPacked
@@ -48,6 +51,11 @@ public:
     // remain zero for a validated artifact.
     int DiscardedFaces() const { return discarded_faces_; }
 
+    // Attach the per-frame draw counters (Inc 1 / D7). The renderer increments
+    // `near_batches` / `vert_loads` / `syncs` in Draw; the orchestrator owns
+    // + resets them. May be null (counters disabled).
+    void SetCounters(RenderCounters* counters) { counters_ = counters; }
+
     // The render origin this renderer was loaded with (world units). Stored
     // as a plain Vec3 so host tests can assert it without any N64 dependency.
     const Vec3& RenderOrigin() const { return render_origin_; }
@@ -55,6 +63,7 @@ public:
 private:
     static constexpr int kMaxBatches = 1024;  // covers the bake's 1024-face cap
     static constexpr float kDefaultPosScale = 32.0f;  // fixed-point precision
+    static constexpr uint32_t kMaxRunSpan = 70;  // RSP vertex-load cap (D3)
 
     float kPosScale = kDefaultPosScale;  // fixed-point precision (near or LOD)
     float kInvScale = 1.0f / kDefaultPosScale;
@@ -66,17 +75,41 @@ private:
         uint16_t material_id;
     };
 
+    // Release the coalesced-run scratch (runs_ / run_faces_). Safe to call on
+    // an unloaded renderer (both null). Nulls both pointers.
+    void FreeRuns();
+
+    // Release the heap-allocated batch array (Inc 5 / D6). Safe on an
+    // unloaded renderer. Nulls `batches_` so the destructor path can't
+    // double-free.
+    void FreeBatches();
+
     T3DVertPacked* verts_ = nullptr;
     uint32_t vert_count_ = 0;     // total logical vertices (half of pairs*2)
     uint32_t pair_count_ = 0;     // number of T3DVertPacked structs
 
-    Batch batches_[kMaxBatches];
+    // Heap-allocated batch array (Inc 5 / D6): sized to the face count
+    // (clamped to kMaxBatches) instead of an embedded `Batch[1024]` (16 KB
+    // each — ~720 KB across 45 distant cells). Load() frees any existing
+    // array before reallocating (streaming re-loads / SetCenter leak
+    // otherwise); Free() frees + nulls it.
+    Batch* batches_ = nullptr;
     int batch_count_ = 0;
     int discarded_faces_ = 0;
+
+    // Coalesced material runs (Inc 3 / D3). Heap-allocated in Load() sized to
+    // the face count; freed by FreeRuns()/Free(). When run_count_ > 0, Draw()
+    // uses the run path (one RDP state + one vert_load + one tri_sync per run,
+    // each face fanned from its own origin); otherwise it falls back to the
+    // per-face batch path.
+    BatchRun* runs_ = nullptr;
+    RunFace* run_faces_ = nullptr;
+    int run_count_ = 0;
 
     T3DMat4FP* matrix_fp_ = nullptr;
 
     Vec3 render_origin_ = {0.0f, 0.0f, 0.0f};
+    RenderCounters* counters_ = nullptr;  // per-frame draw counters (Inc 1 / D7)
 };
 
 }  // namespace madeline_cube

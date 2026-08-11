@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <utility>
 
 #include "gameplay/math_types.hpp"
 
@@ -20,6 +21,45 @@ struct Mat4 {
         return r;
     }
 };
+
+// Invert a 4x4 matrix in place via Gauss-Jordan elimination with partial
+// pivoting (Inc 4 / D4). Returns false if the matrix is singular (no inverse)
+// — the caller must fall back to no-culling that frame (never a black screen).
+// Host-safe; used both by the device renderer (to invert the world-space
+// view-projection for `ResolveVisibleTiles`) and by host tests.
+inline bool Mat4Invert(Mat4& m) {
+    // Augmented [m | I] as rows.
+    float a[4][8];
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) a[i][j] = m.m[j * 4 + i];  // row i, col j
+        for (int j = 0; j < 4; ++j) a[i][4 + j] = (i == j) ? 1.0f : 0.0f;
+    }
+    for (int col = 0; col < 4; ++col) {
+        // Partial pivot: largest |a[row][col]| at/after `col`.
+        int piv = col;
+        float best = std::fabs(a[col][col]);
+        for (int r = col + 1; r < 4; ++r) {
+            const float v = std::fabs(a[r][col]);
+            if (v > best) { best = v; piv = r; }
+        }
+        if (best < 1e-12f) return false;  // singular
+        if (piv != col) {
+            for (int j = 0; j < 8; ++j) std::swap(a[col][j], a[piv][j]);
+        }
+        const float d = a[col][col];
+        for (int j = 0; j < 8; ++j) a[col][j] /= d;
+        for (int r = 0; r < 4; ++r) {
+            if (r == col) continue;
+            const float f = a[r][col];
+            if (f == 0.0f) continue;
+            for (int j = 0; j < 8; ++j) a[r][j] -= f * a[col][j];
+        }
+    }
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) m.m[j * 4 + i] = a[i][4 + j];
+    }
+    return true;
+}
 
 // Transform a 4D homogenous point by `m`. Returns the w component separately.
 inline void Mat4TransformPoint(const Mat4& m, float x, float y, float z,

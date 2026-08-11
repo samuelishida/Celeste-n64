@@ -8,6 +8,8 @@
 #include <t3d/t3d.h>
 #include <t3d/t3dmath.h>
 
+#include "gameplay/render/open_world_renderer.hpp"  // RenderCounters (Inc 1 / D7)
+
 namespace madeline_cube {
 
 namespace {
@@ -143,6 +145,23 @@ bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
     }
 
     // Build batches: one batch per face (same as lvl_room_renderer).
+    // Inc 5 / D6: heap-allocate the batch array sized to the face count
+    // (clamped to kMaxBatches). Free any previous array first (streaming
+    // re-loads leak otherwise). Allocation failure → Load returns false.
+    FreeBatches();
+    {
+        const int batch_cap = static_cast<int>(face_count) < kMaxBatches
+            ? static_cast<int>(face_count) : kMaxBatches;
+        if (batch_cap > 0) {
+            batches_ = static_cast<Batch*>(malloc(sizeof(Batch) * batch_cap));
+            if (!batches_) {
+                free(faces);
+                free(lvl_verts);
+                debugf("[texroom] batch alloc FAILED\n");
+                return false;
+            }
+        }
+    }
     batch_count_ = 0;
     discarded_faces_ = 0;
     for (uint32_t fi = 0; fi < face_count; ++fi) {
@@ -150,6 +169,35 @@ bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
         if (lf.vc < 3) continue;
         if (batch_count_ >= kMaxBatches) { ++discarded_faces_; continue; }
         batches_[batch_count_++] = {lf.vs, lf.vc, lf.vc - 2, lf.mid};
+    }
+
+    // Build the coalesced material runs (Inc 3 / D3) — same as the flat
+    // renderer: adjacent same-material faces merge into runs capped at
+    // `kMaxRunSpan` loaded vertices, each face keeping its own fan origin. On
+    // failure we fall back to the per-face batch path (run_count_ stays 0).
+    FreeRuns();
+    {
+        FaceSpec* specs = static_cast<FaceSpec*>(malloc(sizeof(FaceSpec) * batch_count_));
+        if (specs) {
+            for (int s = 0; s < batch_count_; ++s) {
+                specs[s] = {batches_[s].first_vertex, batches_[s].vertex_count,
+                            batches_[s].tri_count, batches_[s].material_id};
+            }
+            const int alloc = batch_count_ > 0 ? batch_count_ : 1;
+            runs_ = static_cast<BatchRun*>(malloc(sizeof(BatchRun) * alloc));
+            run_faces_ = static_cast<RunFace*>(malloc(sizeof(RunFace) * alloc));
+            if (runs_ && run_faces_ && batch_count_ > 0) {
+                run_count_ = CoalesceBatches(specs, batch_count_, runs_,
+                                             batch_count_, run_faces_,
+                                             batch_count_, kMaxRunSpan);
+                if (run_count_ <= 0) {  // coalescing failed — fall back
+                    FreeRuns();
+                }
+            } else {
+                FreeRuns();
+            }
+            free(specs);
+        }
     }
 
     free(faces);
@@ -172,9 +220,21 @@ bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
 void TexturedRoomRenderer::Free() {
     if (verts_) { free_uncached(verts_); verts_ = nullptr; }
     if (matrix_fp_) { free_uncached(matrix_fp_); matrix_fp_ = nullptr; }
-    batch_count_ = 0;
+    FreeBatches();
+    FreeRuns();
     vert_count_ = 0;
     pair_count_ = 0;
+}
+
+void TexturedRoomRenderer::FreeBatches() {
+    if (batches_) { free(batches_); batches_ = nullptr; }
+    batch_count_ = 0;
+}
+
+void TexturedRoomRenderer::FreeRuns() {
+    if (runs_) { free(runs_); runs_ = nullptr; }
+    if (run_faces_) { free(run_faces_); run_faces_ = nullptr; }
+    run_count_ = 0;
 }
 
 void TexturedRoomRenderer::SetCameraPosition(const Vec3& camera_pos) {
@@ -196,39 +256,98 @@ void TexturedRoomRenderer::Draw() const {
 
     t3d_matrix_push(matrix_fp_);
 
-    for (int b = 0; b < batch_count_; ++b) {
-        const Batch& batch = batches_[b];
-        if (batch.tri_count == 0) continue;
+    // Coalesced material runs (Inc 3 / D3): the sprite is uploaded + combiner
+    // set ONCE per run (this is the TMEM-upload collapse: ~1350 uploads/frame →
+    // ~distinct material runs), primColor once for flat fallbacks, and EACH
+    // FACE FANS FROM ITS OWN ORIGIN so triangulation never crosses a face
+    // boundary (MUST-FIX #1).
+    if (run_count_ > 0 && runs_ && run_faces_) {
+        for (int r = 0; r < run_count_; ++r) {
+            const BatchRun& run = runs_[r];
+            if (run.face_count == 0 || run.vertex_count == 0) continue;
+            // Inc 1 / D7: count near-pass batches (one per run).
+            if (counters_) ++counters_->near_batches;
 
-        // Resolve the material's sprite. If present, use a textured combiner
-        // and upload the sprite as a tile; else fall back to flat primColor.
-        sprite_t* sprite = catalog_ ? catalog_->MaterialFor(batch.material_id)
-                                    : nullptr;
-        if (sprite) {
-            t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH));
-            rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-            rdpq_sprite_upload(TILE0, sprite, NULL);
-        } else {
-            t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
-            rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
-            uint32_t color = material_color(batch.material_id);
-            rdpq_set_prim_color(RGBA32(
-                (uint8_t)(color >> 24),
-                (uint8_t)(color >> 16),
-                (uint8_t)(color >> 8),
-                (uint8_t)(color)
-            ));
+            // Resolve the run's material sprite once. If present, upload it as
+            // a tile; else fall back to flat primColor for the whole run.
+            sprite_t* sprite = catalog_ ? catalog_->MaterialFor(run.material_id)
+                                        : nullptr;
+            if (sprite) {
+                t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH));
+                rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+                rdpq_sprite_upload(TILE0, sprite, NULL);
+                if (counters_) ++counters_->texture_uploads;  // Inc 1 / D7
+            } else {
+                t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
+                rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
+                uint32_t color = material_color(run.material_id);
+                rdpq_set_prim_color(RGBA32(
+                    (uint8_t)(color >> 24),
+                    (uint8_t)(color >> 16),
+                    (uint8_t)(color >> 8),
+                    (uint8_t)(color)
+                ));
+            }
+
+            // Load the run span once (≤ kMaxRunSpan vertices, pair-aligned).
+            const uint32_t base_offset = run.first_vertex & 1u;
+            uint32_t load_count = ((base_offset + run.vertex_count + 1u) / 2u) * 2u;
+            if (load_count > 70) load_count = 70;  // safety net
+            t3d_vert_load(verts_ + run.first_vertex / 2, 0, load_count);
+            if (counters_) ++counters_->vert_loads;  // Inc 1 / D7
+
+            // Each face fans from its own origin (offset + base_offset).
+            for (uint32_t f = 0; f < run.face_count; ++f) {
+                const RunFace& rf = run_faces_[run.first_face + f];
+                const uint32_t base = rf.offset + base_offset;
+                for (uint32_t t = 0; t < rf.tri_count; ++t) {
+                    t3d_tri_draw(base, base + t + 1, base + t + 2);
+                }
+            }
+            t3d_tri_sync();
+            if (counters_) ++counters_->syncs;  // Inc 1 / D7
         }
+    } else if (batches_) {
+        // Fallback: per-face batches (coalescing failed or unbuilt).
+        for (int b = 0; b < batch_count_; ++b) {
+            const Batch& batch = batches_[b];
+            if (batch.tri_count == 0) continue;
+            // Inc 1 / D7: count near-pass batches.
+            if (counters_) ++counters_->near_batches;
 
-        uint32_t base_vertex = batch.first_vertex & 1u;
-        uint32_t load_count = ((base_vertex + batch.vertex_count + 1u) / 2u) * 2u;
-        if (load_count > 70) load_count = 70;
-        t3d_vert_load(verts_ + batch.first_vertex / 2, 0, load_count);
+            // Resolve the material's sprite. If present, use a textured combiner
+            // and upload the sprite as a tile; else fall back to flat primColor.
+            sprite_t* sprite = catalog_ ? catalog_->MaterialFor(batch.material_id)
+                                        : nullptr;
+            if (sprite) {
+                t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH));
+                rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+                rdpq_sprite_upload(TILE0, sprite, NULL);
+                if (counters_) ++counters_->texture_uploads;  // Inc 1 / D7
+            } else {
+                t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
+                rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
+                uint32_t color = material_color(batch.material_id);
+                rdpq_set_prim_color(RGBA32(
+                    (uint8_t)(color >> 24),
+                    (uint8_t)(color >> 16),
+                    (uint8_t)(color >> 8),
+                    (uint8_t)(color)
+                ));
+            }
 
-        for (uint32_t t = 0; t < batch.tri_count; ++t) {
-            t3d_tri_draw(base_vertex, base_vertex + t + 1, base_vertex + t + 2);
+            uint32_t base_vertex = batch.first_vertex & 1u;
+            uint32_t load_count = ((base_vertex + batch.vertex_count + 1u) / 2u) * 2u;
+            if (load_count > 70) load_count = 70;
+            t3d_vert_load(verts_ + batch.first_vertex / 2, 0, load_count);
+            if (counters_) ++counters_->vert_loads;  // Inc 1 / D7
+
+            for (uint32_t t = 0; t < batch.tri_count; ++t) {
+                t3d_tri_draw(base_vertex, base_vertex + t + 1, base_vertex + t + 2);
+            }
+            t3d_tri_sync();
+            if (counters_) ++counters_->syncs;  // Inc 1 / D7
         }
-        t3d_tri_sync();
     }
 
     t3d_matrix_pop(1);

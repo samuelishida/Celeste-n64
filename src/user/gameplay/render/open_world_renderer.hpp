@@ -2,6 +2,7 @@
 
 #include "gameplay/math_types.hpp"
 #include "gameplay/render/pass_camera_math.hpp"
+#include "gameplay/render/tile_visibility.hpp"  // Mat4, Mat4Invert (Inc 4 / D4)
 #include "n64/frame_arena.hpp"
 #include "n64/profiler.hpp"
 
@@ -60,6 +61,19 @@ inline void OrderedFrameStages(FrameStage out[4]) {
     out[3] = FrameStage::Present;
 }
 
+// Per-frame draw counters (Inc 1 / D7). Reset each frame in `BeginFrame` and
+// consumed by the profiler report + device walk to validate each pass's cost
+// with hard numbers. The orchestrator owns the counters and hands pointers to
+// the distant renderer and tile streamer, which thread them to the room
+// renderers. Host-safe — plain integers, no N64 types.
+struct RenderCounters {
+    uint32_t distant_cells = 0;    // cells drawn in the distant pass
+    uint32_t near_batches = 0;     // batches drawn in the near pass
+    uint32_t texture_uploads = 0;  // rdpq_sprite_upload calls (near pass)
+    uint32_t vert_loads = 0;       // t3d_vert_load calls (near pass)
+    uint32_t syncs = 0;            // t3d_tri_sync calls (near pass)
+};
+
 // N64-only renderer types, forward-declared so this header stays host-safe.
 class TileStreamer;           // near pass (Inc 3 resident pool)
 class DistantWorldRenderer;   // distant pass (Inc 4 fleshes out)
@@ -89,6 +103,15 @@ public:
                    const char* build_dir);
     void SetCameraPosition(const Vec3& camera_pos);
 
+    // Inc 4 / D4: per-frame near-pass visibility update. `inv_view_proj` is
+    // the inverse of the WORLD-SPACE near view-projection (pos/target/fov,
+    // planes 20..800) — NOT the camera-at-origin view used for drawing, since
+    // `ResolveVisibleTiles` projects NDC corners back to WORLD XZ tile indices.
+    // `ground_y` is the Y plane at which the frustum is intersected (unused by
+    // the XZ projection; kept for signature clarity).
+    void UpdateCamera(const Vec3& camera_pos, const Mat4& inv_view_proj,
+                      float ground_y);
+
     // Set the material catalog for the textured near pass (Inc 5). Forwarded
     // to the tile streamer. The catalog is owned by the caller.
     void SetMaterialCatalog(const class MaterialCatalog* catalog);
@@ -105,6 +128,10 @@ public:
     // Per-phase profiler (Inc 7). Reports per-pass timing.
     n64::FrameProfiler& Profiler() { return profiler_; }
 
+    // The per-frame draw counters (Inc 1 / D7). Reset in BeginFrame; filled by
+    // the distant + near passes. Read by the profiler report / device walk.
+    const RenderCounters& Counters() const { return counters_; }
+
 private:
     TileStreamer* tile_streamer_ = nullptr;  // Inc 3 near pass
     DistantWorldRenderer* distant_ = nullptr;
@@ -112,6 +139,7 @@ private:
     Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};
     n64::FrameArena arena_;  // frame-scoped transient allocations
     n64::FrameProfiler profiler_;  // per-phase timing
+    RenderCounters counters_;  // per-frame draw counters (Inc 1 / D7)
 };
 
 }  // namespace madeline_cube
