@@ -278,4 +278,9 @@ bake-colmesh-all:
 # Usage: make bake-forsaken-city
 bake-forsaken-city: filesystem/lvl/forsyken-city/forsyken-city.mappack
 
-.PHONY: all clean bake-colmesh bake-colmesh-all bake-forsaken-city
+# Host-side test runner (Inc 7). Runs all host C++ + Python tests with one
+# command. No N64 toolchain needed.
+test:
+	./tests/run_host_tests.sh
+
+.PHONY: all clean bake-colmesh bake-colmesh-all bake-forsaken-city test

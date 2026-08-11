@@ -2,6 +2,8 @@
 
 #include "gameplay/math_types.hpp"
 #include "gameplay/render/pass_camera_math.hpp"
+#include "n64/frame_arena.hpp"
+#include "n64/profiler.hpp"
 
 namespace madeline_cube {
 
@@ -94,11 +96,22 @@ public:
     // Set the fog applied to the distant pass (Inc 6).
     void SetFog(const class FogParams& fog);
 
+    // Reset the frame-scoped arena at the start of each frame (Inc 7).
+    void BeginFrame();
+
+    // The frame-scoped arena for transient per-frame allocations (Inc 7).
+    n64::FrameArena& Arena() { return arena_; }
+
+    // Per-phase profiler (Inc 7). Reports per-pass timing.
+    n64::FrameProfiler& Profiler() { return profiler_; }
+
 private:
     TileStreamer* tile_streamer_ = nullptr;  // Inc 3 near pass
     DistantWorldRenderer* distant_ = nullptr;
     Skybox* skybox_ = nullptr;
     Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};
+    n64::FrameArena arena_;  // frame-scoped transient allocations
+    n64::FrameProfiler profiler_;  // per-phase timing
 };
 
 }  // namespace madeline_cube
