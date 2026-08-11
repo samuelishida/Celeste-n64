@@ -39,10 +39,24 @@ void OpenWorldRenderer::RenderHighPriority(const CameraDesc& cam) {
 
 void OpenWorldRenderer::Render(const PassCameras& cams) {
     // arch.md §21 order: distant (Z off), low-priority (Z off), high-priority
-    // (Z on). The skybox is prepended in Inc 6.
+    // (Z on). The skybox is prepended in Inc 6. Each pass is wrapped in a
+    // profiler phase scope (Inc 7).
+    profiler_.BeginPhase(n64::FrameProfiler::kPhaseDistant);
     RenderDistant(cams.distant_cam);
+    profiler_.EndPhase(n64::FrameProfiler::kPhaseDistant);
+
+    profiler_.BeginPhase(n64::FrameProfiler::kPhaseLowPriority);
     RenderLowPriority(cams.near_cam);
+    profiler_.EndPhase(n64::FrameProfiler::kPhaseLowPriority);
+
+    profiler_.BeginPhase(n64::FrameProfiler::kPhaseHighPriority);
     RenderHighPriority(cams.near_cam);
+    profiler_.EndPhase(n64::FrameProfiler::kPhaseHighPriority);
+}
+
+void OpenWorldRenderer::BeginFrame() {
+    // Reset the frame-scoped arena at the start of each frame (Inc 7).
+    arena_.Reset();
 }
 
 void OpenWorldRenderer::SetCenter(const MapSpecV2& spec,

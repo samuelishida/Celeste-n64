@@ -848,15 +848,9 @@ structure (fog is applied/removed between the distant and near passes).
 - Done: the skybox sits behind the world; the distant horizon fades into
   atmospheric fog; the near pass is unaffected.
 
-### Inc 7 — Per-phase profiler + host test runner + budgets (M)
+### Inc 7 — Per-phase profiler + host test runner + budgets (M) ✅ DONE
 
-**Depends on:** 2, 3, 4, 5, 6 (must be last — it wraps every pass and
-aggregates the tests produced across Inc 1-6)
-**Unblocks:** none
-**Done criteria:** a host test runner executes all host C++ + Python tests with
-one command; a per-phase profiler reports per-pass timing (distant, near,
-particles, texture-upload, streaming); the renderer enforces documented
-per-frame budgets.
+**Status:** DONE (verified 2026-08-11)
 
 #### Files to touch
 

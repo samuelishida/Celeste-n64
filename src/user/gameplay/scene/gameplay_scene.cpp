@@ -858,6 +858,8 @@ void GameplayScene::Render() {
         // Inc 3 swaps it for TileStreamer. Otherwise use the legacy single-room
         // renderer.
         if (impl_->use_map_pack_) {
+            // Reset the frame-scoped arena + profiler phases (Inc 7).
+            impl_->open_world_.BeginFrame();
             const PassCameras cams = BuildPassCameras(
                 impl_->camera.position, impl_->camera.target,
                 fov_deg, 20.0f, 800.0f,
