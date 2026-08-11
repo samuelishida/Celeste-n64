@@ -191,17 +191,17 @@ Known local result:
 
 Recommended validation habit:
 
+- use Mupen64Plus for a quick local smoke launch if convenient
 - use Ares or gopher64 for serious validation of modern libdragon/tiny3d behavior
-- **Do NOT rely on Mupen64Plus/glide for validating this ROM** — the glide
-  video plugin fails to render it (broken/blank output). Use **Ares** for the
-  Inc 3 hardware traversal gate (cross ≥2 seams, no fall-through, confirmed via
-  the `orig=(...)` telemetry). See `tests/rom_traversal_acceptance.md`.
 
-Current ROM control map:
+Current ROM control map (N64 controller, via `src/user/gameplay/input/input_system.cpp`):
 
-- analog stick: move
-- `A`: jump
-- `B`: dash
+- left analog stick + D-Pad: move
+- `A` (or GameCube `Y`): jump
+- `B` (or GameCube `X`): dash
+- `Z` / `L` / `R` (or analog triggers): climb / grab
+- C-Stick + C-Buttons: camera (orbit + zoom)
+- `Start`: pause/fixture debug toggle
 
 First field issue already found:
 

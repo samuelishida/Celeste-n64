@@ -50,6 +50,12 @@ void ChunkRingRenderer::Draw() const {
     }
 }
 
+void ChunkRingRenderer::SetCameraPosition(const Vec3& camera_pos) {
+    for (int i = 0; i < loaded_count_; ++i) {
+        if (renderers_[i]) renderers_[i]->SetCameraPosition(camera_pos);
+    }
+}
+
 void ChunkRingRenderer::Free() {
     for (int i = 0; i < loaded_count_; ++i) {
         if (renderers_[i]) {

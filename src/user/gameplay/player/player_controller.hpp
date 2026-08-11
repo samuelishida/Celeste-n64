@@ -2,6 +2,7 @@
 
 #include "gameplay/player/movement_config.hpp"
 #include "gameplay/player/player_state.hpp"
+#include "gameplay/world/world.hpp"
 
 namespace madeline_cube {
 
@@ -20,7 +21,8 @@ public:
         PlayerState& state,
         const PlayerInput& input,
         const Vec3& camera_forward,
-        float delta_seconds
+        float delta_seconds,
+        const Room* room = nullptr
     ) const;
 
     StepContext TimerInputPhase(
@@ -33,7 +35,8 @@ public:
         PlayerState& state,
         const PlayerInput& input,
         StepContext& context,
-        float delta_seconds
+        float delta_seconds,
+        const Room* room = nullptr
     ) const;
     void LateContactPhase(PlayerState& state) const;
 

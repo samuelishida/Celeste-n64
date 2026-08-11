@@ -22,6 +22,12 @@ class FeelFixtureTaxonomyTests(unittest.TestCase):
                 "long_jump",
                 "climb_drain",
                 "climb_exhaustion",
+                "skid",
+                "slope_speed",
+                "ledge_assist",
+                "oneway",
+                "ice",
+                "dash_jump",
             },
         )
         self.assertEqual(payload["families"]["motor-regression"], ["slope", "ledge", "platform", "camera"])

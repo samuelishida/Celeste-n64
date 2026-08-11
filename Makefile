@@ -29,6 +29,9 @@ DFS_MDL_FILES := \
 DFS_TEX_FILES := \
     filesystem/tex/rock_1.sprite \
     filesystem/tex/rock_1_climbable.sprite \
+    filesystem/tex/rock_1_ice.sprite \
+    filesystem/tex/rock_1_oneway.sprite \
+    filesystem/tex/rock_1_death.sprite \
     filesystem/tex/snow_1.sprite \
     filesystem/tex/rock_2.sprite \
     filesystem/tex/metal_floor_1.sprite \
@@ -185,6 +188,7 @@ madeline_cube_rom.dfs: $(DFS_MDL_FILES) $(DFS_TEX_FILES) $(DFS_FNT_FILES) $(DFS_
 
 src = \
 	src/user/rom_main.cpp \
+	src/user/gameplay/input/input_system.cpp \
 	src/user/gameplay/player/player_controller.cpp \
 	src/user/gameplay/player/player_motor.cpp \
 	src/user/gameplay/player/camera_controller.cpp \
@@ -197,6 +201,7 @@ src = \
 	src/user/gameplay/scene/gameplay_scene.cpp \
 	src/user/gameplay/scene/title_scene.cpp \
 	src/user/gameplay/runtime/timing.cpp \
+	src/user/gameplay/runtime/math.cpp \
 	src/user/gameplay/physics/geom.cpp \
 	src/user/gameplay/physics/coll_mesh.cpp \
 	src/user/gameplay/world/world.cpp \
@@ -213,6 +218,9 @@ src = \
 	src/user/gameplay/render/level_renderer.cpp \
 	src/user/gameplay/render/lvl_room_renderer.cpp \
 	src/user/gameplay/render/chunk_ring_renderer.cpp \
+	src/user/gameplay/render/open_world_renderer.cpp \
+	src/user/gameplay/render/tile_streamer.cpp \
+	src/user/gameplay/render/distant_world_renderer.cpp \
 	src/user/gameplay/render/t3dm_room_renderer.cpp \
 	src/user/gameplay/world/level_loader.cpp \
 	src/user/gameplay/world/mappack_loader.cpp \

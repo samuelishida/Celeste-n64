@@ -4,14 +4,10 @@
 #include <cstdint>
 #include <cstring>
 
+#include "gameplay/runtime/math.hpp"
+
 namespace madeline_cube {
 namespace {
-
-float Clamp(float value, float min_value, float max_value) {
-    if (value < min_value) return min_value;
-    if (value > max_value) return max_value;
-    return value;
-}
 
 float Lerp(float a, float b, float t) {
     return a + ((b - a) * t);
@@ -37,18 +33,6 @@ float ClampedMap(float value, float in_min, float in_max,
     return Lerp(out_min, out_max, t);
 }
 
-// Approach target at a given rate. Returns new value after moving toward target.
-float Approach(float current, float target, float max_step) {
-    if (current < target) {
-        return current + max_step > target ? target : current + max_step;
-    }
-    return current - max_step < target ? target : current - max_step;
-}
-
-float LengthXZ(const Vec3& value) {
-    return std::sqrt((value.x * value.x) + (value.z * value.z));
-}
-
 uint32_t FloatBits(float value) {
     uint32_t bits = 0;
     std::memcpy(&bits, &value, sizeof(bits));
@@ -68,27 +52,6 @@ float FlushSubnormalBits(float value) {
 
 float SanitizeCoordinateBits(float value) {
     return IsFiniteBits(value) ? FlushSubnormalBits(value) : 0.0f;
-}
-
-Vec3 NormalizeXZ(const Vec3& value) {
-    if (!IsFiniteBits(value.x) || !IsFiniteBits(value.z)) {
-        return {0.0f, 0.0f, 1.0f};
-    }
-
-    const Vec3 sanitized = {
-        FlushSubnormalBits(value.x),
-        0.0f,
-        FlushSubnormalBits(value.z),
-    };
-    const float len = LengthXZ(sanitized);
-    if (!std::isfinite(len) || len <= 0.0001f) {
-        return {0.0f, 0.0f, 1.0f};
-    }
-    return {
-        FlushSubnormalBits(sanitized.x / len),
-        0.0f,
-        FlushSubnormalBits(sanitized.z / len),
-    };
 }
 
 Vec3 RotateAroundUp(const Vec3& direction, float radians) {

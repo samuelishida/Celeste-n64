@@ -31,6 +31,14 @@ public:
 
     bool IsLoaded() const { return verts_ != nullptr; }
 
+    // Recompute the model-matrix translation so the drawn world is expressed
+    // camera-relative: the matrix translates by `render_origin_ - camera_pos`
+    // instead of `render_origin_`. Vertices stay packed against their fixed
+    // per-cell render origin (no per-frame re-packing). The near-pass view
+    // must ALSO be camera-at-origin (see the CRITICAL coupling note in
+    // gameplay_scene.cpp) or geometry is double-offset by `-camera`.
+    void SetCameraPosition(const Vec3& camera_pos);
+
     // Number of faces discarded because they exceeded the batch cap. Must
     // remain zero for a validated artifact.
     int DiscardedFaces() const { return discarded_faces_; }

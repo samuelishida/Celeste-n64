@@ -114,10 +114,10 @@ class MaterialClass(IntEnum):
     SOLID = 0       # MAT_SOLID (0x0001)
     DEATH = 1       # MAT_SOLID | MAT_DEATH (0x0005)
     CLIMBABLE = 2   # MAT_SOLID | MAT_CLIMBABLE (0x0009)
+    ICE = 3         # MAT_SOLID | MAT_ICE (0x0011)
     VISUAL_ONLY = 4 # 0 — not in colmesh
     TRIGGER = 5     # 0 — non-solid trigger volume
     ONEWAY = 6      # MAT_SOLID | MAT_ONEWAY (0x0003)
-    # ICE (3) reserved for future
 
 
 class EntityClass(IntEnum):
@@ -175,6 +175,7 @@ CLASS_REGISTRY: Dict[str, ClassDef] = {
     "CassetteBlock":         ClassDef(MaterialClass.SOLID,       EntityClass.NONE,         RenderMode.STATIC_MESH, FaceFilter.NONE,         CollisionMode.SOLID),
     "BreakBlock":            ClassDef(MaterialClass.SOLID,       EntityClass.NONE,         RenderMode.STATIC_MESH, FaceFilter.NONE,         CollisionMode.SOLID),
     "DoubleDashPuzzleBlock": ClassDef(MaterialClass.SOLID,       EntityClass.NONE,         RenderMode.STATIC_MESH, FaceFilter.NONE,         CollisionMode.SOLID),
+    "IceBlock":              ClassDef(MaterialClass.ICE,         EntityClass.NONE,         RenderMode.STATIC_MESH, FaceFilter.NONE,         CollisionMode.SOLID),
 }
 
 SKIPPED_CLASSES: Dict[str, str] = {
@@ -209,6 +210,8 @@ def material_class_to_flags(mc: MaterialClass) -> int:
         return MAT_SOLID | MAT_DEATH
     elif mc == MaterialClass.CLIMBABLE:
         return MAT_SOLID | MAT_CLIMBABLE
+    elif mc == MaterialClass.ICE:
+        return MAT_SOLID | MAT_ICE
     elif mc == MaterialClass.ONEWAY:
         return MAT_SOLID | MAT_ONEWAY
     elif mc == MaterialClass.TRIGGER:

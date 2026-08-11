@@ -54,6 +54,11 @@ public:
     // Draw all loaded renderers. Call within a t3d_frame_start/end pair.
     void Draw() const;
 
+    // Rebase every loaded renderer to draw camera-relative (see
+    // `LvlRoomRenderer::SetCameraPosition`). Called once per frame before
+    // `Draw()`. The near-pass view must be camera-at-origin to match.
+    void SetCameraPosition(const Vec3& camera_pos);
+
     // Free all loaded renderers.
     void Free();
 
