@@ -43,10 +43,19 @@ void OpenWorldRenderer::SetCenter(const MapSpecV2& spec,
                                   const V2RoomSpec& center,
                                   const char* build_dir) {
     tile_streamer_->SetCenter(spec, center, build_dir);
+    // Load the distant LOD table once per map-pack (all cells, coarse).
+    // Inc 4: the distant pass renders the horizon from these coarse meshes.
+    if (distant_->EntryCount() == 0) {
+        distant_->Load(spec, build_dir);
+    }
+    // Fan the camera position to the distant pass too (compressed rebase).
+    distant_->SetCameraPosition(camera_pos_);
 }
 
 void OpenWorldRenderer::SetCameraPosition(const Vec3& camera_pos) {
+    camera_pos_ = camera_pos;
     tile_streamer_->SetCameraPosition(camera_pos);
+    distant_->SetCameraPosition(camera_pos);
 }
 
 }  // namespace madeline_cube

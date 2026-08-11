@@ -27,8 +27,14 @@ uint16_t ReadU16(FILE* f) {
 
 }  // namespace
 
-bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin) {
+bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
+                           float pos_scale) {
     render_origin_ = render_origin;
+    // Sanity-clamp the fixed-point scale so a bad distant LOD scale cannot
+    // produce a degenerate (inverted / overflowing) transform.
+    kPosScale = (pos_scale > 0.0f && pos_scale <= 256.0f) ? pos_scale
+                                                          : kDefaultPosScale;
+    kInvScale = 1.0f / kPosScale;
     FILE* f = fopen(lvl_path, "rb");
     if (!f) { debugf("[lvlroom] open FAILED: %s\n", lvl_path); return false; }
 
@@ -106,7 +112,7 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin) {
         const LvlVertex& va = lvl_verts[ia];
         const LvlVertex& vb = (ib < vertex_count) ? lvl_verts[ib] : lvl_verts[ia];
 
-        auto toFp = [](float v) -> int16_t { return static_cast<int16_t>(v * kPosScale); };
+        auto toFp = [this](float v) -> int16_t { return static_cast<int16_t>(v * kPosScale); };
 
         p.posA[0] = toFp(va.x - render_origin.x);
         p.posA[1] = toFp(va.y - render_origin.y);

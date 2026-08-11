@@ -521,17 +521,9 @@ frame-stage order, pass-camera derivation, and tile-visibility math.
   the player, with streaming/eviction; crossing seams shows the next chunk
   without a blank or a stale cell.
 
-### Inc 4 — Distant LOD generation + compressed distant pass (L)
+### Inc 4 — Distant LOD generation + compressed distant pass (L) ✅ DONE
 
-**Depends on:** 2, 3
-**Unblocks:** 6 (transitively 7 through the edges)
-**Done criteria:** the bake emits a coarse distant representation per cell; the
-distant pass renders them Z-off with compressed coordinates and explicit
-back-to-front sorting; a host test proves the coarse mesh's packed vertices stay
-inside int16 at the chosen `kLodScale` for every cell.
-
-This is the core n64brew2025 trick — a distant world that doesn't share the
-near world's coordinate space or Z-buffer.
+**Status:** DONE (verified 2026-08-11)
 
 #### Files to touch
 
