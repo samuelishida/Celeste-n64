@@ -232,6 +232,17 @@ def main() -> int:
     mappack_path = staging / f"{args.mappack_id}.mappack"
     write_mappack_v2_binary(pack, str(mappack_path))
 
+    # Emit the per-pack material manifest (Inc 5): one material name per line,
+    # in the SAME order as `build.texture_manifest` (the per-cell LVL string
+    # ids). `MaterialCatalog` reads rom:/lvl/<pack>.manifest to resolve a
+    # material id -> sprite. The order MUST match the bake's material ids so
+    # the texture <-> material mapping stays consistent with
+    # `LvlRoomRenderer::material_color()`.
+    manifest_path = staging / f"{args.mappack_id}.manifest"
+    with open(manifest_path, "w") as f:
+        for mat in build.texture_manifest:
+            f.write(mat + "\n")
+
     report = {
         "source": args.map,
         "source_sha256": build.source_sha256,

@@ -659,14 +659,9 @@ frame-stage order, pass-camera derivation, and tile-visibility math.
   coords + explicit sort; the near pass renders on top with Z-on; no int16
   overflow.
 
-### Inc 5 — Textured near pass (M)
+### Inc 5 — Textured near pass (M) ✅ DONE
 
-**Depends on:** 3, 4
-**Unblocks:** 7
-**Done criteria:** near-pass cells render with their materials textured (via
-`MaterialCatalog` + the existing `.sprite` files), gated behind a config flag
-that defaults on and can be disabled if RDP cost is too high. A host test
-asserts the material index → sprite resolution is stable.
+**Status:** DONE (verified 2026-08-11)
 
 **Dependency rationale:** Inc 5 depends on Inc 4 purely to enforce `arch.md`
 §41 phase ordering (Phase 5 after Phase 4). The texturing itself only needs

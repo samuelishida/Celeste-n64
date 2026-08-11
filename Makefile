@@ -53,6 +53,7 @@ DFS_LVL_FILES := \
 DFS_MAP_PACK_FILES := $(wildcard filesystem/lvl/forsyken-city/*.lvl) \
                       $(wildcard filesystem/lvl/forsyken-city/*.colmesh) \
                       $(wildcard filesystem/lvl/forsyken-city/*.mappack) \
+                      $(wildcard filesystem/lvl/forsyken-city/*.manifest) \
                       $(wildcard filesystem/lvl/forsyken-city/*.json)
 
 # Combine all DFS files
@@ -147,6 +148,7 @@ filesystem/lvl/forsyken-city/%.lvl filesystem/lvl/forsyken-city/%.colmesh filesy
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.lvl filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.colmesh filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.mappack filesystem/lvl/forsyken-city/ 2>/dev/null || true
+	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.manifest filesystem/lvl/forsyken-city/ 2>/dev/null || true
 
 filesystem/lvl/forsyken-city:
 	mkdir -p $@
@@ -217,6 +219,7 @@ src = \
 	src/user/gameplay/render/material_catalog.cpp \
 	src/user/gameplay/render/level_renderer.cpp \
 	src/user/gameplay/render/lvl_room_renderer.cpp \
+	src/user/gameplay/render/textured_room_renderer.cpp \
 	src/user/gameplay/render/open_world_renderer.cpp \
 	src/user/gameplay/render/tile_streamer.cpp \
 	src/user/gameplay/render/distant_world_renderer.cpp \
