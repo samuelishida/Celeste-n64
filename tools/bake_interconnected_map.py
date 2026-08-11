@@ -31,6 +31,7 @@ from ogworld.collision import (
 )
 from ogworld.chunking import partition_world, build_adjacency, cell_id
 from ogworld.class_policy import validate_policies
+from ogworld.distant_lod import build_distant_lvl
 from writers.colmesh_world_writer import write_colmesh
 from writers.lvl_world_writer import write_lvl_room
 from mappack_format import (
@@ -167,6 +168,16 @@ def main() -> int:
         lvl_stats = write_lvl_room(c, build.texture_manifest, str(lvl_path),
                                    scale=args.scale)
         lvl_hash = artifact_hash(str(lvl_path))
+        # Distant LOD: emit a coarse distant LVL per cell (Inc 4). Skips cells
+        # with no renderable geometry (decoration/hazard). The `.lvl` wildcard
+        # in the Makefile DFS packaging already covers `*_distant.lvl`.
+        distant_path = staging / f"{cid}_distant.lvl"
+        distant_stats = build_distant_lvl(c, build.texture_manifest,
+                                          str(distant_path))
+        if distant_stats is None:
+            # No renderable geometry — remove any stale distant file.
+            if distant_path.exists():
+                distant_path.unlink()
         # Render origin = the cell's world-space CENTER (XZ), Y=0. Using the
         # center keeps every vertex within ±cell_w/2 of the origin, so the
         # int16 kPosScale packing never overflows even for far cells.

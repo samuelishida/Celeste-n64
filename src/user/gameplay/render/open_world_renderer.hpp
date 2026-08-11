@@ -89,6 +89,7 @@ public:
 private:
     TileStreamer* tile_streamer_ = nullptr;  // Inc 3 near pass
     DistantWorldRenderer* distant_ = nullptr;
+    Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};
 };
 
 }  // namespace madeline_cube

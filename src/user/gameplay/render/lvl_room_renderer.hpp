@@ -19,9 +19,14 @@ public:
     // Load faces + vertices from a .lvl file. Returns true on success.
     // `render_origin` is subtracted from each vertex before fixed-point
     // packing so the full map's absolute world coordinates do not overflow
-    // the int16 kPosScale packing (chunk-local rendering). The scene renders
-    // the player/camera/actors in the same local frame.
-    bool Load(const char* lvl_path, const Vec3& render_origin = {0.0f, 0.0f, 0.0f});
+    // the int16 packing (chunk-local rendering). The scene renders the
+    // player/camera/actors in the same local frame.
+    //
+    // `pos_scale` is the fixed-point precision (kPosScale). The near pass
+    // uses the default 32; the distant pass (Inc 4) passes a compressed
+    // `kLodScale` so coarse distant meshes pack far inside int16 range.
+    bool Load(const char* lvl_path, const Vec3& render_origin = {0.0f, 0.0f, 0.0f},
+              float pos_scale = kDefaultPosScale);
 
     // Free all allocated resources.
     void Free();
@@ -49,8 +54,10 @@ public:
 
 private:
     static constexpr int kMaxBatches = 1024;  // covers the bake's 1024-face cap
-    static constexpr float kPosScale = 32.0f;   // fixed-point precision
-    static constexpr float kInvScale = 1.0f / kPosScale;
+    static constexpr float kDefaultPosScale = 32.0f;  // fixed-point precision
+
+    float kPosScale = kDefaultPosScale;  // fixed-point precision (near or LOD)
+    float kInvScale = 1.0f / kDefaultPosScale;
 
     struct Batch {
         uint32_t first_vertex;   // index of first vertex in the full array
