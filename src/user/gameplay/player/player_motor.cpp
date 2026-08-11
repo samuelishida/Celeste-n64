@@ -94,11 +94,36 @@ bool FaceIsDeath(const Room& room, int face_id) {
     return (room.coll_mesh->triangles[face_id].material & physics::MAT_DEATH) != 0;
 }
 
+// Returns true if the face is a one-way platform (pass-through from below).
+bool FaceIsOneWay(const Room& room, int face_id) {
+    if (face_id < 0) return false;  // dynamic collider — never one-way
+    if (!room.coll_mesh) return false;
+    if (face_id >= static_cast<int>(room.coll_mesh->header->triangle_count)) return false;
+    return (room.coll_mesh->triangles[face_id].material & physics::MAT_ONEWAY) != 0;
+}
+
+// Returns true if the face is an ice surface (low friction).
+bool FaceIsIce(const Room& room, int face_id) {
+    if (face_id < 0) return false;  // dynamic collider — never ice
+    if (!room.coll_mesh) return false;
+    if (face_id >= static_cast<int>(room.coll_mesh->header->triangle_count)) return false;
+    return (room.coll_mesh->triangles[face_id].material & physics::MAT_ICE) != 0;
+}
+
+// One-way platforms act as floors only when landing from above. Reject a
+// one-way floor hit when the player's feet are below the platform surface
+// (approaching from below = pass-through).
+bool AcceptFloorHit(const Room& room, const GroundHit& hit, const Vec3& feet_pos) {
+    if (!FaceIsOneWay(room, hit.face_id)) return true;
+    // Landing from above: feet must be above the platform surface.
+    return feet_pos.y > hit.point.y;
+}
+
 GroundHit ProbeFloor(const Room& room, const Vec3& position, float half_height, float probe_distance, float radius) {
     return ProbeFloorDebug(room, position, half_height, probe_distance, radius);
 }
 
-void ApplyGroundContact(PlayerState& state, MotorResult& result, const GroundHit& hit, float half_height) {
+void ApplyGroundContact(PlayerState& state, MotorResult& result, const Room& room, const GroundHit& hit, float half_height) {
     state.position.y = hit.point.y + half_height;
     if (state.velocity.y < 0.0f) state.velocity.y = 0.0f;
     state.grounded = true;
@@ -106,6 +131,10 @@ void ApplyGroundContact(PlayerState& state, MotorResult& result, const GroundHit
     state.contact.coyote_height = state.position.y;
     result.ground_face_id = hit.face_id;
     result.ground_normal = hit.normal;
+    result.on_ice = FaceIsIce(room, hit.face_id);
+    result.on_oneway = FaceIsOneWay(room, hit.face_id);
+    state.on_ice = result.on_ice;
+    state.on_oneway = result.on_oneway;
 }
 
 }  // namespace
@@ -172,8 +201,8 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
             } else {
                 floor = QueryFloorSource(room, feet_origin, probe);
             }
-            if (floor.hit) {
-                ApplyGroundContact(state, result, floor, config_.half_height);
+            if (floor.hit && AcceptFloorHit(room, floor, feet_origin)) {
+                ApplyGroundContact(state, result, room, floor, config_.half_height);
                 step_vec.y = 0.0f;
                 grounded_mid_sweep = true;
                 if (FaceIsDeath(room, floor.face_id)) result.death = true;
@@ -182,7 +211,8 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
             const Vec3 head_origin = {state.position.x, prev_head_y, state.position.z};
             const float probe = step_vec.y + kGroundSkin;
             const CeilingHit ceiling = QueryCeilingSource(room, head_origin, probe);
-            if (ceiling.hit) {
+            // One-way platforms are pass-through from below: never a ceiling.
+            if (ceiling.hit && !FaceIsOneWay(room, ceiling.face_id)) {
                 state.position.y = ceiling.point.y - config_.half_height;
                 state.velocity.y = 0.0f;
                 step_vec.y = 0.0f;
@@ -191,7 +221,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
         }
 
         const WallHit wall = QueryWallNearest(room, state.position, config_.radius);
-        if (wall.hit) {
+        if (wall.hit && !FaceIsOneWay(room, wall.face_id)) {
             if (wall.pushout > 0.0f) {
                 state.position.x += wall.normal.x * wall.pushout;
                 state.position.y += wall.normal.y * wall.pushout;
@@ -207,11 +237,15 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
     state.grounded = false;
     result.ground_face_id = -1;
     result.ground_normal = {0.0f, 1.0f, 0.0f};
+    result.on_ice = false;
+    result.on_oneway = false;
+    state.on_ice = false;
+    state.on_oneway = false;
 
     const GroundHit ground = ProbeFloor(room, state.position, config_.half_height,
                                         config_.ground_contact_tolerance, config_.radius);
-    if (ground.hit) {
-        ApplyGroundContact(state, result, ground, config_.half_height);
+    if (ground.hit && AcceptFloorHit(room, ground, {state.position.x, state.position.y - config_.half_height, state.position.z})) {
+        ApplyGroundContact(state, result, room, ground, config_.half_height);
     } else if (grounded_mid_sweep) {
         // Slope-follow: a previous substep grounded, but horizontal substeps
         // walked the player slightly above the slope (the substep ground
@@ -219,23 +253,23 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
         // of tolerance so the post-grounding horizontal travel stays pinned.
         const GroundHit follow = ProbeFloor(room, state.position, config_.half_height,
                                             config_.sweep_step + kGroundSkin, config_.radius);
-        if (follow.hit) {
-            ApplyGroundContact(state, result, follow, config_.half_height);
+        if (follow.hit && AcceptFloorHit(room, follow, {state.position.x, state.position.y - config_.half_height, state.position.z})) {
+            ApplyGroundContact(state, result, room, follow, config_.half_height);
         }
     } else if (input.wants_ground_snap &&
                was_grounded &&
                state.contact.ground_snap_cooldown_remaining <= 0.0f) {
         const GroundHit snap = ProbeFloor(room, state.position, config_.half_height,
                                           config_.ground_snap_distance, config_.radius);
-        if (snap.hit) {
-            ApplyGroundContact(state, result, snap, config_.half_height);
+        if (snap.hit && AcceptFloorHit(room, snap, {state.position.x, state.position.y - config_.half_height, state.position.z})) {
+            ApplyGroundContact(state, result, room, snap, config_.half_height);
         }
     }
 
     if (state.velocity.y > 0.0f) {
         const Vec3 head = {state.position.x, state.position.y + config_.half_height, state.position.z};
         const CeilingHit ceiling = QueryCeilingSource(room, head, config_.ground_contact_tolerance);
-        if (ceiling.hit) {
+        if (ceiling.hit && !FaceIsOneWay(room, ceiling.face_id)) {
             state.position.y = ceiling.point.y - config_.half_height;
             state.velocity.y = 0.0f;
             if (FaceIsDeath(room, ceiling.face_id)) result.death = true;

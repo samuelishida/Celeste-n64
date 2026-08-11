@@ -66,6 +66,8 @@ struct MotorResult {
     bool wall_contact = false;
     bool landed_this_frame = false;
     bool death = false;
+    bool on_ice = false;
+    bool on_oneway = false;
     int ground_face_id = -1;
     int wall_face_id = -1;
     Vec3 ground_normal = {0.0f, 1.0f, 0.0f};

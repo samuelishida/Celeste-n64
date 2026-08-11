@@ -11,7 +11,13 @@
       "dash_hitstop",
       "long_jump",
       "climb_drain",
-      "climb_exhaustion"
+      "climb_exhaustion",
+      "skid",
+      "slope_speed",
+      "ledge_assist",
+      "oneway",
+      "ice",
+      "dash_jump"
     ]
   },
   "scenarios": {
@@ -23,6 +29,12 @@
     "dash_hitstop": {"freeze_seconds": 0.05},
     "long_jump": {"dash_jump_farther_than_run_jump": true},
     "climb_drain": {"distinct_hold_up_jump_costs": true},
-    "climb_exhaustion": {"requires_ground_refill": true}
+    "climb_exhaustion": {"requires_ground_refill": true},
+    "skid": {"dot_threshold": -0.7, "preserve_momentum": true},
+    "slope_speed": {"flat_1_0": true, "downhill_gt_1_0": true, "uphill_lt_1_0": true},
+    "ledge_assist": {"search_deg": 17, "no_input_no_move": true},
+    "oneway": {"land_from_above": true, "pass_through_from_below": true},
+    "ice": {"decel_slower_than_solid": true},
+    "dash_jump": {"ground_only": true, "preserve_momentum": true}
   }
 }

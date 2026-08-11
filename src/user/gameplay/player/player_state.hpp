@@ -6,12 +6,43 @@
 
 namespace madeline_cube {
 
+// Input snapshot consumed by the PlayerController each physics tick.
+//
+// Pressed edges are CONSUMABLE (spec §1, §42): gameplay actions call the
+// Consume*() helpers after claiming an edge so a single physical press can
+// never fire more than one action (e.g. wall-jump + normal jump + dash-jump
+// in the same frame). The flags are `mutable` so a const PlayerInput& can be
+// consumed by the controller's const StatePhase.
 struct PlayerInput {
     Vec2 move;
     bool jump_pressed = false;
     bool jump_held = false;
     bool dash_pressed = false;
     bool climb_held = false;
+
+    // True once the jump press has been claimed by an action this frame.
+    mutable bool jump_press_consumed = false;
+    // True once the dash press has been claimed by an action this frame.
+    mutable bool dash_press_consumed = false;
+
+    // Claim the jump press edge. Returns true if a press was available and
+    // not already claimed; afterwards jump_pressed() reads false.
+    bool ConsumeJumpPress() const {
+        if (jump_pressed && !jump_press_consumed) {
+            jump_press_consumed = true;
+            return true;
+        }
+        return false;
+    }
+    // Claim the dash press edge. Returns true if a press was available and
+    // not already claimed; afterwards dash_pressed() reads false.
+    bool ConsumeDashPress() const {
+        if (dash_pressed && !dash_press_consumed) {
+            dash_press_consumed = true;
+            return true;
+        }
+        return false;
+    }
 };
 
 enum class PlayerMovementState : uint8_t {
@@ -94,6 +125,13 @@ struct PlayerState {
 
     // Movement timer.
     float no_move_time_remaining = 0.0f;
+
+    // Skid state: running fast and pushing opposite direction.
+    bool skidding = false;
+
+    // Surface material flags (set by the motor alongside `grounded`).
+    bool on_ice = false;
+    bool on_oneway = false;
 
     // Source bookkeeping retained explicitly for the later motor migration.
     int8_t dash_count = 1;

@@ -5,130 +5,15 @@
 #include <cstdint>
 #include <cstring>
 
+#include "gameplay/runtime/math.hpp"
+
 namespace madeline_cube {
 namespace {
 
 constexpr float kEpsilon = 0.0001f;
 
-float Clamp(float value, float min_value, float max_value) {
-    if (value < min_value) return min_value;
-    if (value > max_value) return max_value;
-    return value;
-}
-
 float Length(float x, float y) {
     return std::sqrt((x * x) + (y * y));
-}
-
-float LengthXZ(const Vec3& value) {
-    return Length(value.x, value.z);
-}
-
-float DotXZ(const Vec3& a, const Vec3& b) {
-    return (a.x * b.x) + (a.z * b.z);
-}
-
-uint32_t FloatBits(float value) {
-    uint32_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    return bits;
-}
-
-bool IsFiniteBits(float value) {
-    return (FloatBits(value) & 0x7F800000u) != 0x7F800000u;
-}
-
-float FlushSubnormalBits(float value) {
-    const uint32_t bits = FloatBits(value);
-    const uint32_t exponent = bits & 0x7F800000u;
-    const uint32_t mantissa = bits & 0x007FFFFFu;
-    return exponent == 0u && mantissa != 0u ? 0.0f : value;
-}
-
-Vec3 NormalizeXZ(const Vec3& value, const Vec3& fallback = {0.0f, 0.0f, 1.0f}) {
-    if (!IsFiniteBits(value.x) || !IsFiniteBits(value.z)) {
-        return fallback;
-    }
-
-    const Vec3 sanitized = {
-        FlushSubnormalBits(value.x),
-        0.0f,
-        FlushSubnormalBits(value.z),
-    };
-    const float len = LengthXZ(sanitized);
-    if (!std::isfinite(len) || len <= kEpsilon) {
-        return fallback;
-    }
-    return {
-        FlushSubnormalBits(sanitized.x / len),
-        0.0f,
-        FlushSubnormalBits(sanitized.z / len),
-    };
-}
-
-float MoveToward(float current, float target, float max_delta) {
-    if (current < target) {
-        const float next = current + max_delta;
-        return next > target ? target : next;
-    }
-    const float next = current - max_delta;
-    return next < target ? target : next;
-}
-
-Vec3 MoveTowardXZ(const Vec3& current, const Vec3& target, float max_delta) {
-    const float dx = target.x - current.x;
-    const float dz = target.z - current.z;
-    const float distance = Length(dx, dz);
-    if (distance <= max_delta || distance <= kEpsilon) {
-        return {target.x, current.y, target.z};
-    }
-    const float scale = max_delta / distance;
-    return {current.x + (dx * scale), current.y, current.z + (dz * scale)};
-}
-
-float AngleXZ(const Vec3& value) {
-    return std::atan2(value.z, value.x);
-}
-
-Vec3 DirectionFromAngle(float angle) {
-    return {std::cos(angle), 0.0f, std::sin(angle)};
-}
-
-float ApproachAngle(float from, float to, float max_delta) {
-    constexpr float kPi = 3.14159265358979323846f;
-    constexpr float kTau = kPi * 2.0f;
-    float diff = std::fmod(to - from + kPi, kTau);
-    if (diff < 0.0f) diff += kTau;
-    diff -= kPi;
-    if (diff > max_delta) diff = max_delta;
-    if (diff < -max_delta) diff = -max_delta;
-    return from + diff;
-}
-
-Vec3 RotateTowardXZ(const Vec3& from, const Vec3& to, float max_delta) {
-    return DirectionFromAngle(ApproachAngle(AngleXZ(from), AngleXZ(to), max_delta));
-}
-
-float AnalogMagnitude(float raw_length) {
-    const float t = Clamp((raw_length - 0.4f) / (0.92f - 0.4f), 0.0f, 1.0f);
-    return 0.3f + ((1.0f - 0.3f) * t);
-}
-
-Vec3 RelativeMoveInput(const Vec2& move, const Vec3& camera_forward, const Vec3& fallback_facing) {
-    const float input_length = Length(move.x, move.y);
-    if (input_length <= kEpsilon) {
-        return {};
-    }
-
-    const Vec3 forward = NormalizeXZ(camera_forward, fallback_facing);
-    const Vec3 right = {forward.z, 0.0f, -forward.x};
-    const float normalized_x = move.x / input_length;
-    const float normalized_y = move.y / input_length;
-    return NormalizeXZ({
-        (right.x * normalized_x) + (forward.x * normalized_y),
-        0.0f,
-        (right.z * normalized_x) + (forward.z * normalized_y),
-    }, fallback_facing);
 }
 
 void StartJump(PlayerState& state, const MovementConfig& config, const Vec3& move_input) {
@@ -188,6 +73,7 @@ void ApplyJumpAndGravity(
     const bool can_jump = state.grounded || state.coyote_time_remaining > 0.0f;
     if (state.jump_buffer_remaining > 0.0f && can_jump) {
         state.jump_buffer_remaining = 0.0f;
+        input.ConsumeJumpPress();  // claim the press that this jump consumed
         StartJump(state, config, move_input);
         return;
     }
@@ -215,29 +101,137 @@ void ApplyJumpAndGravity(
         state.auto_jump = false;
     }
 
-    state.velocity.y = MoveToward(
+    state.velocity.y = Approach(
         state.velocity.y,
         config.max_fall_speed,
         config.gravity * gravity_mult * delta_seconds
     );
 }
 
+// Skid: running fast and pushing the opposite direction. Preserves momentum,
+// decelerates at skid_start_accel then skid_accel, and allows a skid jump.
+void EnterSkid(PlayerState& state, const MovementConfig& config) {
+    state.skidding = true;
+    state.locomotion_state = LocomotionState::Run;
+    // Preserve momentum: keep current velocity, only decelerate.
+    (void)config;
+}
+
+void UpdateSkid(
+    PlayerState& state,
+    const MovementConfig& config,
+    const Vec3& move_input,
+    bool has_move_input,
+    float delta_seconds
+) {
+    const Vec3 horizontal_velocity = {state.velocity.x, 0.0f, state.velocity.z};
+    const float speed_xz = LengthXZ(horizontal_velocity);
+
+    // Exit when slow enough or input agrees with velocity direction.
+    if (speed_xz <= config.end_skid_speed) {
+        state.skidding = false;
+        return;
+    }
+    if (has_move_input) {
+        const float dot = DotXZ(NormalizeXZ(horizontal_velocity, state.target_facing), move_input);
+        if (dot > 0.0f) {
+            state.skidding = false;
+            return;
+        }
+    }
+
+    // Decelerate: start fast, then ease into skid_accel.
+    const float accel = speed_xz > config.run_speed
+        ? config.skid_start_accel
+        : config.skid_accel;
+    const Vec3 target = {0.0f, state.velocity.y, 0.0f};
+    state.velocity = ApproachXZ(state.velocity, target, accel * delta_seconds);
+}
+
+// Slope speed multiplier (§42): scale ground speed by the ground normal.
+// Flat ground ({0,1,0}) -> 1.0; downhill (moving with slope) -> up to
+// slope_downhill_mult; uphill -> down to slope_uphill_mult. Clamped.
+float SlopeSpeedMultiplier(
+    const Vec3& ground_normal,
+    const Vec3& move_dir,
+    const MovementConfig& config
+) {
+    // Guard against near-vertical normals (walls) — only apply on real floors.
+    if (ground_normal.y < 0.5f) {
+        return 1.0f;
+    }
+    const float dot = DotXZ(ground_normal, move_dir);
+    // dot > 0 means moving downhill (normal leans forward), dot < 0 uphill.
+    if (dot >= 0.0f) {
+        return 1.0f + (dot * (config.slope_downhill_mult - 1.0f));
+    }
+    return 1.0f + (dot * (1.0f - config.slope_uphill_mult));
+}
+
+// Ledge assist (§43): when the input direction has no floor ahead, steer the
+// desired movement toward the nearest valid floor direction within ±search_deg.
+// Returns the (possibly steered) move direction. No input -> no assist.
+Vec3 LedgeAssist(
+    const Room& room,
+    const Vec3& position,
+    const Vec3& move_dir,
+    float search_deg
+) {
+    constexpr float kProbeDist = 20.0f;
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kDegToRad = kPi / 180.0f;
+
+    // Sample floor directly ahead.
+    const Vec3 ahead = {
+        position.x + move_dir.x * kProbeDist,
+        position.y,
+        position.z + move_dir.z * kProbeDist,
+    };
+    const GroundHit ahead_hit = QueryFloorSource(room, ahead, kProbeDist);
+    if (ahead_hit.hit) {
+        return move_dir;  // floor ahead, no assist needed
+    }
+
+    // Search ±search_deg for a valid floor.
+    const float base_angle = AngleXZ(move_dir);
+    const float max_delta = search_deg * kDegToRad;
+    constexpr int kSamples = 8;
+    for (int i = 1; i <= kSamples; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(kSamples);
+        for (int sign = -1; sign <= 1; sign += 2) {
+            const float angle = base_angle + (sign * max_delta * t);
+            const Vec3 dir = DirectionFromAngle(angle);
+            const Vec3 sample = {
+                position.x + dir.x * kProbeDist,
+                position.y,
+                position.z + dir.z * kProbeDist,
+            };
+            const GroundHit hit = QueryFloorSource(room, sample, kProbeDist);
+            if (hit.hit) {
+                return dir;
+            }
+        }
+    }
+    return move_dir;  // no floor found, no steering
+}
+
 }  // namespace
 
-PlayerController::PlayerController(MovementConfig config) : config_(config) {}
+PlayerController::PlayerController(MovementConfig config) : config_(config), profile_(ToProfile(config)) {}
 
 void PlayerController::Step(
     PlayerState& state,
     const PlayerInput& input,
     const Vec3& camera_forward,
-    float delta_seconds
+    float delta_seconds,
+    const Room* room
 ) const {
     if (delta_seconds <= 0.0f) {
         return;
     }
 
     StepContext context = TimerInputPhase(state, input, camera_forward, delta_seconds);
-    StatePhase(state, input, context, delta_seconds);
+    StatePhase(state, input, context, delta_seconds, room);
     LateContactPhase(state);
 }
 
@@ -274,28 +268,28 @@ PlayerController::StepContext PlayerController::TimerInputPhase(
         state.stamina = state.stamina_max;
         state.climb_exhausted = false;
     } else {
-        state.coyote_time_remaining = MoveToward(state.coyote_time_remaining, 0.0f, delta_seconds);
+        state.coyote_time_remaining = Approach(state.coyote_time_remaining, 0.0f, delta_seconds);
     }
 
     if (input.jump_pressed) {
         state.jump_buffer_remaining = profile_.jump_buffer_time;
     } else {
-        state.jump_buffer_remaining = MoveToward(state.jump_buffer_remaining, 0.0f, delta_seconds);
+        state.jump_buffer_remaining = Approach(state.jump_buffer_remaining, 0.0f, delta_seconds);
     }
 
-    state.dash_cooldown_remaining = MoveToward(state.dash_cooldown_remaining, 0.0f, delta_seconds);
-    state.dash_reset_cooldown_remaining = MoveToward(state.dash_reset_cooldown_remaining, 0.0f, delta_seconds);
-    state.no_dash_jump_remaining = MoveToward(state.no_dash_jump_remaining, 0.0f, delta_seconds);
-    state.wall_jump_cooldown_remaining = MoveToward(state.wall_jump_cooldown_remaining, 0.0f, delta_seconds);
-    state.climb.cooldown_remaining = MoveToward(state.climb.cooldown_remaining, 0.0f, delta_seconds);
-    state.climb.hop_no_move_remaining = MoveToward(state.climb.hop_no_move_remaining, 0.0f, delta_seconds);
-    state.no_move_time_remaining = MoveToward(state.no_move_time_remaining, 0.0f, delta_seconds);
-    state.contact.ground_snap_cooldown_remaining = MoveToward(
+    state.dash_cooldown_remaining = Approach(state.dash_cooldown_remaining, 0.0f, delta_seconds);
+    state.dash_reset_cooldown_remaining = Approach(state.dash_reset_cooldown_remaining, 0.0f, delta_seconds);
+    state.no_dash_jump_remaining = Approach(state.no_dash_jump_remaining, 0.0f, delta_seconds);
+    state.wall_jump_cooldown_remaining = Approach(state.wall_jump_cooldown_remaining, 0.0f, delta_seconds);
+    state.climb.cooldown_remaining = Approach(state.climb.cooldown_remaining, 0.0f, delta_seconds);
+    state.climb.hop_no_move_remaining = Approach(state.climb.hop_no_move_remaining, 0.0f, delta_seconds);
+    state.no_move_time_remaining = Approach(state.no_move_time_remaining, 0.0f, delta_seconds);
+    state.contact.ground_snap_cooldown_remaining = Approach(
         state.contact.ground_snap_cooldown_remaining,
         0.0f,
         delta_seconds
     );
-    state.platform_carry.time_remaining = MoveToward(state.platform_carry.time_remaining, 0.0f, delta_seconds);
+    state.platform_carry.time_remaining = Approach(state.platform_carry.time_remaining, 0.0f, delta_seconds);
 
     return context;
 }
@@ -304,7 +298,8 @@ void PlayerController::StatePhase(
     PlayerState& state,
     const PlayerInput& input,
     StepContext& context,
-    float delta_seconds
+    float delta_seconds,
+    const Room* room
 ) const {
     const Vec3& move_input = context.move_input;
     const bool has_move_input = context.has_move_input;
@@ -335,8 +330,10 @@ void PlayerController::StatePhase(
             return;
         }
 
-        // Wall jump from climb
-        if (input.jump_pressed) {
+        // Wall jump from climb (claims the jump press so it cannot also
+        // trigger a normal jump / buffer this frame).
+        if (input.ConsumeJumpPress()) {
+            state.jump_buffer_remaining = 0.0f;  // press already claimed
             if (state.stamina >= config_.stamina_jump_cost) {
                 state.stamina -= config_.stamina_jump_cost;
                 state.movement_state = PlayerMovementState::Normal;
@@ -422,24 +419,29 @@ void PlayerController::StatePhase(
         }
     }
 
-    // Wall slide: forgiving fallback when climb not held but touching wall while falling
-    const bool can_wall_grab = !state.grounded && state.velocity.y < 0.0f &&
+    // Wall slide: grab a vertical wall while airborne by holding the Climb
+    // button (Z/L/R) — NOT the jump button. Per spec §15-16 the grab/climb
+    // action is bound to Climb; this forgiving fallback lets the player latch
+    // and slide even when the wall lacks MAT_CLIMBABLE (which the climb-entry
+    // path below requires).
+    const bool can_wall_grab = !state.grounded &&
                                (state.wall_left || state.wall_right) &&
                                state.wall_grab_time_remaining > 0.0f &&
                                state.wall_jump_cooldown_remaining <= 0.0f;
-    if (can_wall_grab && input.jump_held) {
+    if (can_wall_grab && input.climb_held) {
         state.wall_grabbing = true;
-    } else if (!input.jump_held || state.grounded) {
+    } else if (!input.climb_held || state.grounded) {
         state.wall_grabbing = false;
     }
 
     if (state.wall_grabbing) {
-        state.wall_grab_time_remaining = MoveToward(state.wall_grab_time_remaining, 0.0f, delta_seconds);
+        state.wall_grab_time_remaining = Approach(state.wall_grab_time_remaining, 0.0f, delta_seconds);
         state.velocity.y = -config_.wall_slide_speed;
         state.velocity.x = 0.0f;
         state.velocity.z = 0.0f;
 
-        if (input.jump_pressed) {
+        if (input.ConsumeJumpPress()) {
+            state.jump_buffer_remaining = 0.0f;  // press already claimed
             state.wall_grabbing = false;
             state.wall_jump_cooldown_remaining = config_.wall_jump_cooldown;
             // Jump away from wall using wall_normal direction
@@ -460,8 +462,9 @@ void PlayerController::StatePhase(
     // Directional wall jump (without grab)
     if (!state.wall_grabbing &&
         !state.grounded &&
-        input.jump_pressed &&
+        input.ConsumeJumpPress() &&
         (state.wall_left || state.wall_right)) {
+        state.jump_buffer_remaining = 0.0f;  // press already claimed
         const Vec3 fallback_dir = state.wall_left ? Vec3{1.0f,0.0f,0.0f} : Vec3{-1.0f,0.0f,0.0f};
         const Vec3 jump_dir = LengthXZ(state.wall_normal) > 0.1f
             ? NormalizeXZ(state.wall_normal, fallback_dir)
@@ -477,7 +480,7 @@ void PlayerController::StatePhase(
     }
 
     if (!state.wall_grabbing &&
-        input.dash_pressed &&
+        input.ConsumeDashPress() &&
         state.air_dash_available &&
         state.dash_cooldown_remaining <= 0.0f) {
         if (has_move_input) {
@@ -504,11 +507,11 @@ void PlayerController::StatePhase(
         if (state.movement_state == PlayerMovementState::Dashing) {
             state.dash_time_remaining -= delta_seconds;
             if (state.dash_hitstop_remaining > 0.0f) {
-                state.dash_hitstop_remaining = MoveToward(state.dash_hitstop_remaining, 0.0f, delta_seconds);
+                state.dash_hitstop_remaining = Approach(state.dash_hitstop_remaining, 0.0f, delta_seconds);
                 state.velocity = {};
                 return;
             }
-            state.dash_active_remaining = MoveToward(state.dash_active_remaining, 0.0f, delta_seconds);
+            state.dash_active_remaining = Approach(state.dash_active_remaining, 0.0f, delta_seconds);
             state.velocity.x = state.target_facing.x * profile_.dash_speed;
             state.velocity.y = 0.0f;
             state.velocity.z = state.target_facing.z * profile_.dash_speed;
@@ -526,7 +529,8 @@ void PlayerController::StatePhase(
                 if (state.dashed_on_ground &&
                     state.coyote_time_remaining > 0.0f &&
                     state.no_dash_jump_remaining <= 0.0f &&
-                    input.jump_pressed) {
+                    input.ConsumeJumpPress()) {
+                    state.jump_buffer_remaining = 0.0f;  // press already claimed
                     state.movement_state = PlayerMovementState::Normal;
                     StartDashJump(state, config_, move_input, context);
                 }
@@ -542,31 +546,67 @@ void PlayerController::StatePhase(
                 : Vec3{0.0f, state.velocity.y, 0.0f};
 
             if (state.grounded) {
-                // OG: rotation-based turning when above rotate threshold
+                // Ledge assist (§43): steer input toward a valid floor ahead.
+                Vec3 grounded_move = move_input;
+                if (has_move_input && room != nullptr) {
+                    grounded_move = LedgeAssist(*room, state.position, move_input, 17.0f);
+                }
+
+                // Slope speed multiplier (§42): scale desired speed by ground normal.
+                const float slope_mult = has_move_input
+                    ? SlopeSpeedMultiplier(state.contact.ground_normal, grounded_move, config_)
+                    : 1.0f;
+                const float grounded_desired_speed = desired_speed * slope_mult;
+
+                // Skid: running fast and pushing opposite direction.
                 if (has_move_input && speed_xz > profile_.rotate_threshold) {
-                    state.target_facing = RotateTowardXZ(state.target_facing, move_input, profile_.rotate_speed * delta_seconds);
+                    const float input_dot = DotXZ(
+                        NormalizeXZ(horizontal_velocity, state.target_facing),
+                        grounded_move);
+                    if (input_dot <= config_.skid_dot_threshold) {
+                        if (!state.skidding) {
+                            EnterSkid(state, config_);
+                        }
+                    } else if (state.skidding) {
+                        state.skidding = false;
+                    }
+                } else if (state.skidding) {
+                    state.skidding = false;
+                }
+
+                if (state.skidding) {
+                    UpdateSkid(state, config_, grounded_move, has_move_input, delta_seconds);
+                } else if (has_move_input && speed_xz > profile_.rotate_threshold) {
+                    // OG: rotation-based turning when above rotate threshold
+                    state.target_facing = RotateTowardXZ(state.target_facing, grounded_move, profile_.rotate_speed * delta_seconds);
                     const float accel = profile_.ground_acceleration;
                     const Vec3 rotated_target = {
-                        state.target_facing.x * desired_speed,
+                        state.target_facing.x * grounded_desired_speed,
                         state.velocity.y,
-                        state.target_facing.z * desired_speed,
+                        state.target_facing.z * grounded_desired_speed,
                     };
-                    state.velocity = MoveTowardXZ(state.velocity, rotated_target, accel * delta_seconds);
+                    state.velocity = ApproachXZ(state.velocity, rotated_target, accel * delta_seconds);
                 } else {
+                    // Ice (§): low-friction ground — decelerate much slower.
+                    const float ice_mult = state.on_ice ? config_.ice_friction_mult : 1.0f;
                     const float accel = has_move_input
                         ? profile_.ground_acceleration
-                        : profile_.ground_deceleration;
-                    state.velocity = MoveTowardXZ(state.velocity, target_velocity, accel * delta_seconds);
+                        : profile_.ground_deceleration * ice_mult;
+                    const Vec3 grounded_target = has_move_input
+                        ? Vec3{grounded_move.x * grounded_desired_speed, state.velocity.y, grounded_move.z * grounded_desired_speed}
+                        : target_velocity;
+                    state.velocity = ApproachXZ(state.velocity, grounded_target, accel * delta_seconds);
                 }
                 state.locomotion_state = has_move_input || speed_xz > kEpsilon
                     ? LocomotionState::Run
                     : LocomotionState::Idle;
                 if (has_move_input) {
-                    state.target_facing = move_input;
-                    state.facing = move_input;
+                    state.target_facing = grounded_move;
+                    state.facing = grounded_move;
                 }
             } else {
                 // Air movement: OG scales accel by dot product of input vs velocity direction
+                state.skidding = false;
                 const float input_dot = has_move_input
                     ? DotXZ(NormalizeXZ(horizontal_velocity, state.target_facing), move_input)
                     : 1.0f;
@@ -591,9 +631,9 @@ void PlayerController::StatePhase(
                             state.velocity.y,
                             state.target_facing.z * desired_speed,
                         };
-                        state.velocity = MoveTowardXZ(state.velocity, rotated_target, accel * delta_seconds);
+                        state.velocity = ApproachXZ(state.velocity, rotated_target, accel * delta_seconds);
                     } else {
-                        state.velocity = MoveTowardXZ(state.velocity, target_velocity, accel * delta_seconds);
+                        state.velocity = ApproachXZ(state.velocity, target_velocity, accel * delta_seconds);
                     }
                     state.target_facing = move_input;
                 }

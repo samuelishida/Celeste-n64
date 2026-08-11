@@ -16,7 +16,9 @@
 #include "gameplay/physics_contracts.hpp"
 #include "gameplay/player/player_controller.hpp"
 #include "gameplay/player/player_motor.hpp"
+#include "gameplay/input/input_system.hpp"
 #include "gameplay/render/lvl_room_renderer.hpp"
+#include "gameplay/render/open_world_renderer.hpp"
 #include "gameplay/render/chunk_ring_renderer.hpp"
 #include "gameplay/render/model.hpp"
 #include "gameplay/render/texture.hpp"
@@ -112,37 +114,27 @@ void DrawCube(const T3DVertPacked* vertices, T3DMat4FP* matrix_fp) {
     t3d_tri_sync();
 }
 
-PlayerInput ReadPlayerInput() {
-    joypad_inputs_t held_inputs = joypad_get_inputs(JOYPAD_PORT_1);
-    joypad_buttons_t pressed = joypad_get_buttons_pressed(JOYPAD_PORT_1);
-    joypad_buttons_t held = joypad_get_buttons_held(JOYPAD_PORT_1);
-
-    constexpr float stick_max = 80.0f;
-    float move_x = -held_inputs.stick_x / stick_max;
-    float move_y = held_inputs.stick_y / stick_max;
-    const float move_length = std::sqrt((move_x * move_x) + (move_y * move_y));
-    if (move_length > 1.0f) {
-        move_x /= move_length;
-        move_y /= move_length;
-    }
-
-    return {
-        .move = {move_x, move_y},
-        .jump_pressed = pressed.a != 0,
-        .jump_held = held.a != 0,
-        .dash_pressed = pressed.b != 0,
-        .climb_held = held.z != 0,
-    };
+// Build the PlayerInput snapshot from the frame's InputSystem state.
+// Called once per render frame and replayed across all fixed-step ticks so
+// the physics sees one consistent input snapshot (§34: capture raw once).
+PlayerInput ReadPlayerInput(const InputSystem& input_system) {
+    PlayerInput result;
+    const Vec2 move = input_system.MoveValue();
+    result.move = move;
+    result.jump_pressed = input_system.jump.Pressed();
+    result.jump_held = input_system.jump.Down();
+    result.dash_pressed = input_system.dash.Pressed();
+    result.climb_held = input_system.climb.Down();
+    return result;
 }
 
-CameraInput ReadCameraInput() {
-    joypad_buttons_t held = joypad_get_buttons_held(JOYPAD_PORT_1);
-
+// Build the camera input from the InputSystem's Camera action. Camera.X orbits
+// (rotation), Camera.Y zooms (distance) per spec §24-25.
+CameraInput ReadCameraInput(const InputSystem& input_system) {
+    const Vec2 cam = input_system.camera.Value();
     CameraInput input;
-    if (held.c_left) input.orbit -= 1.0f;
-    if (held.c_right) input.orbit += 1.0f;
-    if (held.c_down) input.zoom -= 1.0f;
-    if (held.c_up) input.zoom += 1.0f;
+    input.orbit = cam.x;
+    input.zoom = cam.y;
     return input;
 }
 
@@ -181,6 +173,7 @@ struct GameplayScene::Impl {
     PlayerMotor player_motor;
     RespawnSystem respawn_system{movement_config};
     CameraController camera_controller;
+    InputSystem input_system;
 
     Room room;
     Vec3 checkpoint = {0.0f, 30.0f, 0.0f};
@@ -208,6 +201,9 @@ struct GameplayScene::Impl {
     // Render-only neighbor ring (active cell + its 4 neighbors). Does not
     // affect collision, actors, or respawn — gameplay stays active-only.
     ChunkRingRenderer chunk_ring_;
+    // Two-pass render orchestrator (Inc 2+). In map-pack mode this drives the
+    // arch.md §21 frame order; near pass uses the legacy ring until Inc 3.
+    OpenWorldRenderer open_world_;
 
     // Resolve the active room for query/update/render. Routes to the MapRuntime
     // active room when a map-pack is in use, else the legacy single room.
@@ -404,7 +400,7 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
     // Load the render-only neighbor ring for the start cell.
     const V2RoomSpec* start_spec = map_runtime_.ActiveSpec();
     if (start_spec) {
-        chunk_ring_.Load(map_runtime_.Spec(), *start_spec, nullptr);
+        open_world_.SetCenter(map_runtime_.Spec(), *start_spec, nullptr);
     }
 
     debugf("[mappack] booted %s: %d rooms, start=%s\n",
@@ -434,7 +430,7 @@ bool GameplayScene::Impl::TransitionToRoom(const char* room_id) {
     // Refresh the render-only neighbor ring to the new cell's neighbors.
     const V2RoomSpec* active_spec = map_runtime_.ActiveSpec();
     if (active_spec) {
-        chunk_ring_.Load(map_runtime_.Spec(), *active_spec, nullptr);
+        open_world_.SetCenter(map_runtime_.Spec(), *active_spec, nullptr);
     }
     // Re-dispatch the new active room's entities and re-init cassette.
     actor_world = ActorWorld{};
@@ -497,9 +493,10 @@ void GameplayScene::Init() {
     if (!impl_->cassette_model.Load(kCassetteModelPath))
         debugf("[init] WARNING: cassette model missing\n");
     if (!impl_->madeline_model.Load(kMadelineModelPath))
-        debugf("[init] WARNING: madeline model missing\n");
+        debugf("[init] FATAL: madeline model missing at %s\n", kMadelineModelPath);
     if (!impl_->room_fixture_model.Load("rom:/mdl/room_fixture.t3dm"))
         debugf("[init] WARNING: room fixture model missing\n");
+    impl_->room_fixture_model.UpdateMatrix({0.0f, 40.0f, -120.0f}, 60.0f, 0.0f);
     impl_->room_fixture_model.UpdateMatrix({0.0f, 40.0f, -120.0f}, 60.0f, 0.0f);
 
     // Boot path: if a map-pack was set (SetMapPack), boot the multi-room
@@ -571,15 +568,20 @@ void GameplayScene::Shutdown() {
 void GameplayScene::Update(float delta_seconds) {
     if (impl_ == nullptr) return;
 
+    // Sample the controller once per render frame; same snapshot replayed
+    // across all fixed-step substeps (§34: capture raw input once).
     joypad_poll();
-    const joypad_buttons_t pressed_buttons = joypad_get_buttons_pressed(JOYPAD_PORT_1);
-    if (pressed_buttons.start) {
+    impl_->input_system.Poll();
+
+    // Start (N64) toggles the room fixture overlay (debug aid). The spec maps
+    // Start -> Pause/menu; the fixture toggle is kept as a temporary stand-in
+    // until a full pause menu exists.
+    if (impl_->input_system.pause.Pressed()) {
         impl_->room_fixture_visible_ = !impl_->room_fixture_visible_;
         debugf("[fixture] room fixture %s\n", impl_->room_fixture_visible_ ? "ON" : "OFF");
     }
-    // Input sampled once per render frame; same values replayed across all substeps.
-    const PlayerInput input = ReadPlayerInput();
-    const CameraInput camera_input = ReadCameraInput();
+    const PlayerInput input = ReadPlayerInput(impl_->input_system);
+    const CameraInput camera_input = ReadCameraInput(impl_->input_system);
     const Vec3 camera_forward = {
         impl_->camera.target.x - impl_->camera.position.x,
         impl_->camera.target.y - impl_->camera.position.y,
@@ -627,7 +629,7 @@ void GameplayScene::Update(float delta_seconds) {
         // Controller reads post-motor grounded state for FSM transitions
         PlayerController::StepContext player_step = impl_->player_controller.TimerInputPhase(
             impl_->player, input, camera_forward, FixedStepAccumulator::kTickDt);
-        impl_->player_controller.StatePhase(impl_->player, input, player_step, FixedStepAccumulator::kTickDt);
+        impl_->player_controller.StatePhase(impl_->player, input, player_step, FixedStepAccumulator::kTickDt, &impl_->room);
         impl_->player_controller.LateContactPhase(impl_->player);
 
         if (impl_->respawn_system.Step(impl_->player, impl_->checkpoint, impl_->room, impl_->player_motor, motor_result.death)) {
@@ -723,7 +725,14 @@ void GameplayScene::Update(float delta_seconds) {
 
     {
         const Vec3 interp = impl_->player.InterpolatedPosition(impl_->render_alpha);
-        SetTransform(impl_->player_render, interp, {5.0f, 10.0f, 5.0f});
+        // Camera-at-origin view (see Render): the fallback cube must also be
+        // offset by -camera, otherwise it is drawn at world coordinates and
+        // disappears off-screen when the camera is far from the origin.
+        Vec3 camera_relative = interp;
+        camera_relative.x -= impl_->camera.position.x;
+        camera_relative.y -= impl_->camera.position.y;
+        camera_relative.z -= impl_->camera.position.z;
+        SetTransform(impl_->player_render, camera_relative, {5.0f, 10.0f, 5.0f});
     }
     if (!impl_->baked_level_loaded_) {
         SetTransform(
@@ -765,7 +774,26 @@ void GameplayScene::Render() {
     // up to 1.2 at high horizontal speed).
     const float fov_deg = 45.0f * impl_->camera.fov_multiplier;
     t3d_viewport_set_projection(&impl_->viewport, T3D_DEG_TO_RAD(fov_deg), 20.0f, 800.0f);
-    t3d_viewport_look_at(&impl_->viewport, &camera_position, &camera_target, &camera_up);
+    // CRITICAL camera-at-origin coupling: model matrices are camera-relative
+    // (LvlRoomRenderer::SetCameraPosition translates by render_origin -
+    // camera_position). For the near-pass view to agree with those model
+    // matrices, the view must ALSO be camera-at-origin — origin at zero and
+    // target offset by -camera — otherwise geometry is double-offset by
+    // `-camera` and the world shifts/popps. This coupling is t3d-only and is
+    // validated on device (Ares) with a walk-across-a-seam check.
+    const T3DVec3 view_origin = {{0.0f, 0.0f, 0.0f}};
+    const T3DVec3 view_target = {{
+        camera_target.x - camera_position.x,
+        camera_target.y - camera_position.y,
+        camera_target.z - camera_position.z
+    }};
+    t3d_viewport_look_at(&impl_->viewport, &view_origin, &view_target, &camera_up);
+
+    // Rebase loaded room geometry so it renders camera-relative. Both the
+    // map-pack ring (via the orchestrator) and the legacy single-room renderer
+    // are LvlRoomRenderers.
+    impl_->open_world_.SetCameraPosition(impl_->camera.position);
+    impl_->room_renderer.SetCameraPosition(impl_->camera.position);
 
     rdpq_attach(display_get(), display_get_zbuf());
     t3d_frame_start();
@@ -786,25 +814,40 @@ void GameplayScene::Render() {
         // Uses PRIM*SHADE combiner with per-material primColor set per batch.
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
         rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
-        // In map-pack mode, draw the render-only neighbor ring (active cell +
-        // its 4 neighbors), each rebased to its own render origin. Otherwise
-        // use the legacy single-room renderer.
+        // In map-pack mode, drive the two-pass orchestrator (arch.md §21
+        // order: distant Z-off, low-priority Z-off, high-priority Z-on). Inc 2
+        // keeps the legacy ring as the high-priority near pass (no regression);
+        // Inc 3 swaps it for TileStreamer. Otherwise use the legacy single-room
+        // renderer.
         if (impl_->use_map_pack_) {
-            impl_->chunk_ring_.Draw();
+            const PassCameras cams = BuildPassCameras(
+                impl_->camera.position, impl_->camera.target,
+                fov_deg, 20.0f, 800.0f,
+                /*tile_size=*/impl_->map_runtime_.Spec().chunk_size *
+                    impl_->map_runtime_.Spec().scale,
+                /*lod_scale=*/0.25f);
+            impl_->open_world_.Render(cams);
         } else {
             impl_->room_renderer.Draw();
         }
         if (impl_->room.has_cassette && !impl_->cassette_actor.collected && impl_->cassette_model.IsLoaded()) {
             constexpr float kCassetteScale = 0.18f;
-            impl_->cassette_model.UpdateMatrix(
-                impl_->cassette_actor.position,
-                kCassetteScale,
-                impl_->cassette_actor.SpinYawRadians());
+            const Vec3 cam = impl_->camera.position;
+            Vec3 pos = impl_->cassette_actor.position;
+            pos.x -= cam.x;  // camera-at-origin view: world coords must be offset by -camera
+            pos.y -= cam.y;
+            pos.z -= cam.z;
+            impl_->cassette_model.UpdateMatrix(pos, kCassetteScale, impl_->cassette_actor.SpinYawRadians());
             impl_->cassette_model.Draw();
         }
         constexpr float kStrawberryScale = 0.05f;
         if (StrawberryActor* sa = impl_->actor_world.Get<StrawberryActor>()) {
-            impl_->strawberry_model.UpdateMatrix(sa->position, kStrawberryScale, 0.0f);
+            const Vec3 cam = impl_->camera.position;
+            Vec3 pos = sa->position;
+            pos.x -= cam.x;  // camera-at-origin view: world coords must be offset by -camera
+            pos.y -= cam.y;
+            pos.z -= cam.z;
+            impl_->strawberry_model.UpdateMatrix(pos, kStrawberryScale, 0.0f);
             impl_->strawberry_model.Draw();
         }
     } else {
@@ -822,12 +865,15 @@ void GameplayScene::Render() {
     }
 
     if (impl_->madeline_model.IsLoaded()) {
-        constexpr float kMadelineScale = 0.2f;
-        constexpr float kMadelineYOffset = -10.0f;
+        constexpr float kMadelineScale = 5.0f;  // coin is tiny; scale up
+        constexpr float kMadelineYOffset = 0.0f;
         const Vec3 facing = impl_->player.facing;
         const float yaw = std::atan2(facing.x, facing.z);
         Vec3 draw_pos = impl_->player.InterpolatedPosition(impl_->render_alpha);
         draw_pos.y += kMadelineYOffset;
+        draw_pos.x -= impl_->camera.position.x;
+        draw_pos.y -= impl_->camera.position.y;
+        draw_pos.z -= impl_->camera.position.z;
         impl_->madeline_model.UpdateMatrix(draw_pos, kMadelineScale, yaw);
         impl_->madeline_model.Draw();
     } else {

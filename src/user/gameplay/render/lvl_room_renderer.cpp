@@ -184,6 +184,27 @@ void LvlRoomRenderer::Free() {
     pair_count_ = 0;
 }
 
+void LvlRoomRenderer::SetCameraPosition(const Vec3& camera_pos) {
+    if (!matrix_fp_) return;  // not loaded; no-op
+    // The vertices are packed as (world - render_origin) * kPosScale. To draw
+    // the world camera-relative, translate the matrix by (render_origin -
+    // camera_pos) so that:
+    //   drawn = kInvScale * (world - origin) * kPosScale + (origin - camera)
+    //         = (world - origin) + (origin - camera)
+    //         = world - camera
+    // The near-pass view must be camera-at-origin for this to match.
+    T3DMat4 m;
+    const float s[3] = {kInvScale, kInvScale, kInvScale};
+    const float r[3] = {0, 0, 0};
+    const float p[3] = {
+        render_origin_.x - camera_pos.x,
+        render_origin_.y - camera_pos.y,
+        render_origin_.z - camera_pos.z
+    };
+    t3d_mat4_from_srt_euler(&m, s, r, p);
+    t3d_mat4_to_fixed(matrix_fp_, &m);
+}
+
 // Per-material vertex colors (RGBA8888, same as bake_glb.py MATERIAL_COLORS)
 static uint32_t material_color(uint16_t mat_id) {
     // mat_id 0=rock_1, 1=snow_1, 2=rock_2, 3=metal_floor_1, 4=floor_dirty_concrete

@@ -104,7 +104,7 @@ int main() {
         player.wall_grab_time_remaining = config.wall_grab_time;
 
         PlayerInput grab_input;
-        grab_input.jump_held = true;
+        grab_input.climb_held = true;
         controller.Step(player, grab_input, camera_forward, 1.0f / 60.0f);
         assert(player.wall_grabbing);
         assert(player.velocity.y == -config.wall_slide_speed);
@@ -119,11 +119,13 @@ int main() {
         player.wall_grab_time_remaining = config.wall_grab_time;
 
         PlayerInput grab_input;
-        grab_input.jump_held = true;
+        grab_input.climb_held = true;
         controller.Step(player, grab_input, camera_forward, 1.0f / 60.0f);
         assert(player.wall_grabbing);
 
+        // Hold climb to keep grabbing, press jump to wall-jump away.
         PlayerInput wall_jump_input;
+        wall_jump_input.climb_held = true;
         wall_jump_input.jump_pressed = true;
         wall_jump_input.jump_held = true;
         controller.Step(player, wall_jump_input, camera_forward, 1.0f / 60.0f);
