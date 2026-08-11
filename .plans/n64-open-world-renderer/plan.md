@@ -382,20 +382,9 @@ frame-stage order, pass-camera derivation, and tile-visibility math.
 - Done: the frame runs a documented two-pass order with one camera; no visual
   regression (near pass still draws the ring identically).
 
-### Inc 3 — Near-field tile streaming with top-view frustum + scanline visibility (L)
+### Inc 3 — Near-field tile streaming with top-view frustum + scanline visibility (L) ✅ DONE
 
-**Depends on:** 1, 2
-**Unblocks:** 4, 5 (transitively 6, 7 through the edges)
-**Done criteria:** the renderer computes the camera's top-view visibility
-polygon (`arch.md` §14), scanline-enumerates visible tiles (`arch.md` §15),
-keeps a bounded resident pool of detailed cells (active cell + neighbors)
-with LRU eviction, and never requests more streaming ops than a hard budget.
-A host test asserts the scanline enumerator produces the correct tile footprint
-for simple frusta, that the ring resolves the correct cells for a swept camera
-path, and that the resident pool stays within bounds.
-
-This replaces the fixed-distance `ChunkRingRenderer` with a camera-frustum
-driven tile streamer as specified in `arch.md` §14-17.
+**Status:** DONE (verified 2026-08-11)
 
 #### Files to touch
 

@@ -72,11 +72,13 @@ def test_seam_equivalence():
         cell = pack.chunk_size * pack.scale
         assert cell > 0.0
 
-        from ogworld.chunking import world_cell
+        from ogworld.chunking import resolve_cell_index, world_cell
 
         # Probe seam coordinates at cell boundaries and just off them, plus
         # negative coordinates. For each probe, the bake's world_cell must
-        # equal the runtime formula's cell index.
+        # equal the runtime formula's cell index. `world_cell` delegates to
+        # the canonical `resolve_cell_index`, so this also asserts the
+        # canonical Python helper matches the runtime formula.
         probes = []
         for n in range(-3, 4):
             seam = n * cell
@@ -92,7 +94,14 @@ def test_seam_equivalence():
 
         for (wx, wz) in probes:
             bake_cell = world_cell((wx, 0.0, wz), pack.chunk_size, pack.scale)
+            canonical_cell = resolve_cell_index((wx, 0.0, wz), pack.chunk_size, pack.scale)
             runtime_cell_idx = runtime_cell(wx, wz, cell)
+            assert bake_cell == canonical_cell, (
+                f"world_cell {bake_cell} != canonical resolve_cell_index {canonical_cell}"
+            )
+            assert canonical_cell == runtime_cell_idx, (
+                f"canonical {canonical_cell} != runtime {runtime_cell_idx}"
+            )
             assert bake_cell == runtime_cell_idx, (
                 f"world ({wx:.4f},{wz:.4f}): bake {bake_cell} != runtime "
                 f"{runtime_cell_idx}"

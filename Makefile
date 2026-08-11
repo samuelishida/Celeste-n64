@@ -217,7 +217,6 @@ src = \
 	src/user/gameplay/render/material_catalog.cpp \
 	src/user/gameplay/render/level_renderer.cpp \
 	src/user/gameplay/render/lvl_room_renderer.cpp \
-	src/user/gameplay/render/chunk_ring_renderer.cpp \
 	src/user/gameplay/render/open_world_renderer.cpp \
 	src/user/gameplay/render/tile_streamer.cpp \
 	src/user/gameplay/render/distant_world_renderer.cpp \

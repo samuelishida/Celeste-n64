@@ -19,7 +19,6 @@
 #include "gameplay/input/input_system.hpp"
 #include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/open_world_renderer.hpp"
-#include "gameplay/render/chunk_ring_renderer.hpp"
 #include "gameplay/render/model.hpp"
 #include "gameplay/render/texture.hpp"
 #include "gameplay/world/actor_world.hpp"
@@ -198,11 +197,8 @@ struct GameplayScene::Impl {
     MapRuntime map_runtime_;
     bool use_map_pack_ = false;
     const char* mappack_path_ = nullptr;  // set via SetMapPack before Init
-    // Render-only neighbor ring (active cell + its 4 neighbors). Does not
-    // affect collision, actors, or respawn — gameplay stays active-only.
-    ChunkRingRenderer chunk_ring_;
     // Two-pass render orchestrator (Inc 2+). In map-pack mode this drives the
-    // arch.md §21 frame order; near pass uses the legacy ring until Inc 3.
+    // arch.md §21 frame order; near pass uses the TileStreamer (Inc 3).
     OpenWorldRenderer open_world_;
 
     // Resolve the active room for query/update/render. Routes to the MapRuntime

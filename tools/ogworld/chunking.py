@@ -28,10 +28,30 @@ def world_cell(point, chunk_size: float, scale: float) -> CellKey:
     `point` is already in world space (Y-up). The grid is 2D in world XZ:
     ix = floor(world_x / (chunk_size*scale)), iz = floor(world_z / (chunk_size*scale)).
     """
+    ix, iz = resolve_cell_index(point, chunk_size, scale)
+    return (ix, iz)
+
+
+def resolve_cell_index(world_pos, chunk_size: float, scale: float):
+    """CANONICAL cell-resolution helper — mirrors C++
+    `ResolveCellIndex` (render_origin_math.hpp) and the runtime
+    `MapRuntime::ResolveCellByPosition`. Takes a world-space (Y-up) point and
+    returns the (ix, iz) world-XZ grid indices.
+
+    Grid is 2D in world XZ: ix = floor(world_x / (chunk_size*scale)),
+    iz = floor(world_z / (chunk_size*scale)). world_z is depth (= -map_y),
+    never map_z (the Quake UP axis).
+
+    This is the single canonical Python implementation; `world_cell` and the
+    brush-grid `cell_of` delegate to it so the formula cannot fork a 4th copy.
+    Returns (None, None) if the cell size is non-positive (degenerate grid).
+    """
     cell = chunk_size * scale
+    if cell <= 0.0:
+        return (None, None)
     return (
-        int(math.floor(point[0] / cell)),
-        int(math.floor(point[2] / cell)),
+        int(math.floor(world_pos[0] / cell)),
+        int(math.floor(world_pos[2] / cell)),
     )
 
 

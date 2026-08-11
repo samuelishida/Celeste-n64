@@ -1,26 +1,131 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 #include "gameplay/math_types.hpp"
 #include "gameplay/render/pass_camera_math.hpp"
-#include "gameplay/render/tile_visibility.hpp"  // Mat4
+#include "gameplay/render/render_origin_math.hpp"  // ResolveCellIndex (canonical)
+#include "gameplay/render/tile_visibility.hpp"      // Mat4, ProjectFrustumToGround, ScanlineTileRanges
+#include "gameplay/world/mappack_loader.hpp"        // MapSpecV2, V2RoomSpec
 
 namespace madeline_cube {
 
 class LvlRoomRenderer;
 
-// Render-only near-pass tile streamer (Inc 2: stub; Inc 3: full camera-driven
-// top-view visibility + LRU resident pool).
+// ── Resident-pool constants ──────────────────────────────────────────
+// `kMaxRing` is the near-pass resident capacity: the center cell + its
+// up-to-8 ring neighbors (Chebyshev distance 1 in the 2D XZ grid). This is
+// the same `kMaxVisibleCells` budget the plan caps the near pass at.
+constexpr int kMaxRing = 9;
+
+// Resolve the near-pass resident ring: the center cell plus every manifest
+// room within Chebyshev distance 1 on the 2D XZ grid (|dx|<=1 && |dz|<=1).
+// The center is always `out[0]`; map-edge cells simply have fewer neighbors
+// (never fatal). Returns the count (1..kMaxRing). `out` must have room for
+// `out_capacity` entries. Host-safe — no N64 types.
+inline int ResolveDistanceRing(const MapSpecV2& spec, const V2RoomSpec& center,
+                               const V2RoomSpec* out[], int out_capacity) {
+    if (!out || out_capacity <= 0) return 0;
+    int n = 0;
+    out[n++] = &center;
+    for (int i = 0; i < spec.room_count && n < out_capacity; ++i) {
+        const V2RoomSpec& r = spec.rooms[i];
+        if (r.id[0] == '\0') continue;
+        if (&r == &center) continue;
+        const int dx = r.cell_ix - center.cell_ix;
+        const int dz = r.cell_iz - center.cell_iz;
+        if (dx < -1 || dx > 1 || dz < -1 || dz > 1) continue;
+        out[n++] = &r;
+    }
+    return n;
+}
+
+// Resolve the visible tile set from a top-view frustum projection. Projects
+// the inverse view-projection to a 2D ground polygon, scanline-enumerates the
+// tiles it covers (`arch.md` §14-15), and maps each tile index to a manifest
+// room via the canonical `ResolveCellIndex`. Deduplicates and bounds the
+// output by `out_capacity`. Returns the visible room count.
 //
-// The public API is stable across increments so the orchestrator can call it:
-//   UpdateCamera(camera_pos, inv_view_proj, ground_y)  -> compute visible set
-//   DrawLowPriority(cam)                               -> Z-off subpass
-//   DrawHighPriority(cam)                              -> Z-on main tiles
-//
-// Inc 2 stub: the class exists so `OpenWorldRenderer` can hold it by pointer
-// and exercise the frame order, but it draws nothing and keeps no resident
-// tiles yet. Inc 3 replaces the internal pool with the real streamer.
+// `ground_y` is unused (kept for signature clarity — the XZ projection drops
+// Y); `tile_size` must equal the world cell size (`spec.chunk_size*scale`).
+// Host-safe — no N64 types.
+inline int ResolveVisibleTiles(const MapSpecV2& spec,
+                               const Mat4& inv_view_proj, float ground_y,
+                               float tile_size,
+                               const V2RoomSpec* out[], int out_capacity) {
+    if (!out || out_capacity <= 0) return 0;
+    const float cell = spec.chunk_size * spec.scale;
+    if (cell <= 0.0f) return 0;
+    const Polygon2 poly = ProjectFrustumToGround(inv_view_proj);
+    int n = 0;
+    ScanlineTileRanges(poly, tile_size, -100000, 100000,
+                       [&](int iz, int x_min, int x_max) {
+                           for (int ix = x_min; ix <= x_max && n < out_capacity;
+                                ++ix) {
+                               for (int i = 0; i < spec.room_count; ++i) {
+                                   const V2RoomSpec& r = spec.rooms[i];
+                                   if (r.id[0] == '\0') continue;
+                                   if (r.cell_ix != ix || r.cell_iz != iz) continue;
+                                   bool dup = false;
+                                   for (int k = 0; k < n; ++k) {
+                                       if (out[k] == &r) { dup = true; break; }
+                                   }
+                                   if (!dup) out[n++] = &r;
+                                   break;
+                               }
+                           }
+                       });
+    (void)ground_y;
+    return n;
+}
+
+// Host-safe resident-set bookkeeping + LRU eviction decision. The device
+// `TileStreamer` pairs each entry with a `LvlRoomRenderer*`; this struct holds
+// only the decision data (which cells are resident, last-used frame) so the
+// LRU rules are host-testable via Pattern C tests.
+struct ResidentSet {
+    const V2RoomSpec* spec[kMaxRing] = {};
+    uint32_t last_used[kMaxRing] = {};
+    int count = 0;
+    int capacity = kMaxRing;
+
+    // Index of the given room, or -1 if not resident.
+    int IndexOf(const V2RoomSpec* s) const {
+        for (int i = 0; i < count; ++i) {
+            if (spec[i] == s) return i;
+        }
+        return -1;
+    }
+
+    // Mark a resident as used at `frame`. No-op if not resident.
+    void Touch(const V2RoomSpec* s, uint32_t frame) {
+        const int i = IndexOf(s);
+        if (i >= 0) last_used[i] = frame;
+    }
+
+    // Index of the least-recently-used resident that is NOT the center, or -1
+    // if every resident is the center (nothing evictable).
+    int EvictCandidate(const V2RoomSpec* center) const {
+        int best = -1;
+        uint32_t best_frame = UINT32_MAX;
+        for (int i = 0; i < count; ++i) {
+            if (spec[i] == center) continue;  // never evict the center
+            if (last_used[i] < best_frame) {
+                best_frame = last_used[i];
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    // True if the pool is over capacity (needs eviction).
+    bool OverCapacity() const { return count > capacity; }
+};
+
+// Render-only near-pass tile streamer (Inc 3). Owns a bounded resident pool
+// of `LvlRoomRenderer` instances (the near ring) and stream/evicts cells as
+// the camera moves, never evicting the center. Gameplay stays active-only.
 class TileStreamer {
 public:
     TileStreamer() = default;
@@ -28,25 +133,25 @@ public:
     TileStreamer(const TileStreamer&) = delete;
     TileStreamer& operator=(const TileStreamer&) = delete;
 
-    // Inc 3 fills this in: derive the visibility polygon, scanline-enumerate
-    // visible tiles, request missing blocks, and evict LRU residents.
-    // Inc 2: no-op (no resident pool yet).
+    bool SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
+                   const char* build_dir = nullptr);
+
     void UpdateCamera(const Vec3& camera_pos, const Mat4& inv_view_proj,
                       float ground_y);
 
-    // Inc 5 renders water/background with Z off; Inc 2 stub is a no-op.
-    void DrawLowPriority(const CameraDesc& cam);
+    void SetCameraPosition(const Vec3& camera_pos);
 
-    // Draw all resident detailed tiles with Z on. Inc 2 stub: no-op.
+    void DrawLowPriority(const CameraDesc& cam);
     void DrawHighPriority(const CameraDesc& cam);
 
-    // Number of resident detailed tiles (Inc 2: always 0).
-    int ResidentCount() const { return resident_count_; }
+    int ResidentCount() const { return set_.count; }
+    int EvictedThisFrame() const { return evicted_this_frame_; }
+    const ResidentSet& Set() const { return set_; }
 
 private:
-    LvlRoomRenderer* residents_ = nullptr;
-    int resident_count_ = 0;
-    int resident_capacity_ = 0;
+    ResidentSet set_;
+    LvlRoomRenderer* renderers_[kMaxRing] = {};
+    int evicted_this_frame_ = 0;
 };
 
 }  // namespace madeline_cube

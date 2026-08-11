@@ -59,16 +59,12 @@ inline void OrderedFrameStages(FrameStage out[4]) {
 }
 
 // N64-only renderer types, forward-declared so this header stays host-safe.
-class ChunkRingRenderer;      // near pass (legacy ring; replaced by TileStreamer in Inc 3)
-class TileStreamer;           // near pass (Inc 3 fleshes out)
+class TileStreamer;           // near pass (Inc 3 resident pool)
 class DistantWorldRenderer;   // distant pass (Inc 4 fleshes out)
 
 // Device-only render orchestrator. Owns the near tile streamer and the
 // distant world renderer by pointer (created in the .cpp), so this header
 // never pulls in libdragon/t3d. Drives the `arch.md` §21 frame order.
-//
-// Inc 2 keeps the legacy `ChunkRingRenderer` for the near pass so there is no
-// visual regression; Inc 3 swaps it for `TileStreamer`.
 class OpenWorldRenderer {
 public:
     OpenWorldRenderer();
@@ -91,8 +87,7 @@ public:
     void SetCameraPosition(const Vec3& camera_pos);
 
 private:
-    ChunkRingRenderer* ring_ = nullptr;      // Inc 2 near pass (legacy)
-    TileStreamer* tile_streamer_ = nullptr;  // Inc 3+ near pass
+    TileStreamer* tile_streamer_ = nullptr;  // Inc 3 near pass
     DistantWorldRenderer* distant_ = nullptr;
 };
 

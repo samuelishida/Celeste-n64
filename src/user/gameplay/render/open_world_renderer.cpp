@@ -1,6 +1,5 @@
 #include "gameplay/render/open_world_renderer.hpp"
 
-#include "gameplay/render/chunk_ring_renderer.hpp"
 #include "gameplay/render/distant_world_renderer.hpp"
 #include "gameplay/render/tile_streamer.hpp"
 #include "gameplay/world/mappack_loader.hpp"
@@ -8,14 +7,12 @@
 namespace madeline_cube {
 
 OpenWorldRenderer::OpenWorldRenderer()
-    : ring_(new ChunkRingRenderer()),
-      tile_streamer_(new TileStreamer()),
+    : tile_streamer_(new TileStreamer()),
       distant_(new DistantWorldRenderer()) {}
 
 OpenWorldRenderer::~OpenWorldRenderer() {
     delete distant_;
     delete tile_streamer_;
-    delete ring_;
 }
 
 void OpenWorldRenderer::RenderDistant(const CameraDesc& cam) {
@@ -31,9 +28,7 @@ void OpenWorldRenderer::RenderLowPriority(const CameraDesc& cam) {
 }
 
 void OpenWorldRenderer::RenderHighPriority(const CameraDesc& cam) {
-    // Inc 2: draw the legacy ring (no regression). Inc 3 swaps to
-    // tile_streamer_->DrawHighPriority(cam).
-    if (ring_) ring_->Draw();
+    tile_streamer_->DrawHighPriority(cam);
 }
 
 void OpenWorldRenderer::Render(const PassCameras& cams) {
@@ -47,11 +42,11 @@ void OpenWorldRenderer::Render(const PassCameras& cams) {
 void OpenWorldRenderer::SetCenter(const MapSpecV2& spec,
                                   const V2RoomSpec& center,
                                   const char* build_dir) {
-    if (ring_) ring_->Load(spec, center, build_dir);
+    tile_streamer_->SetCenter(spec, center, build_dir);
 }
 
 void OpenWorldRenderer::SetCameraPosition(const Vec3& camera_pos) {
-    if (ring_) ring_->SetCameraPosition(camera_pos);
+    tile_streamer_->SetCameraPosition(camera_pos);
 }
 
 }  // namespace madeline_cube
