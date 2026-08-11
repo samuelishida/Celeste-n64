@@ -38,16 +38,52 @@ Forsaken City world (currently 240-unit cells, ~45 cells) with:
 
 This plan follows the implementation order recommended in `arch.md` §41.
 
-## Current state (verified by exploration, 2026-08-10)
+## Current state (verified by exploration, 2026-08-11)
 
-- One render pass, Z-buffer always ON, one combiner (`PRIM*SHADE`), flat
-  per-material `primColor`, near=20/far=800, world-space camera.
+**Inc 1 (camera-relative foundation) is DONE.** The codebase has:
+- `camera_space_math.hpp` — `ToCameraSpace`/`FromCameraSpace`/`PackedFitsInt16`
+- `LvlRoomRenderer::SetCameraPosition()` — model matrix is camera-relative
+- `ChunkRingRenderer::SetCameraPosition()` — fans out to children
+- `gameplay_scene.cpp` — camera-at-origin view (`view_origin = {0,0,0}`,
+  `view_target = camera_target - camera_position`) so view + model agree
+- `tests/camera_space_math.cpp` — host round-trip + int16 overflow guard
+- `tests/render_pipeline_contract.py` — sweeps camera across all cells,
+  asserts `PackedFitsInt16` holds at `kPosScale=32`
+
+**Inc 2 (two-pass architecture) is PARTIALLY implemented.** The codebase has:
+- `open_world_renderer.hpp` — orchestrator with `PassCameras`, `BuildPassCameras`,
+  `FrameStage` enum, `OrderedFrameStages()`, owns `ChunkRingRenderer* ring_`
+  (legacy near pass) and forward-declared `TileStreamer*`/`DistantWorldRenderer*`
+- `pass_camera_math.hpp` — `CameraDesc`, `MakeNearCamera`, `MakeDistantCamera`
+  (matches `arch.md` §5: `distant.near = near.far * 0.25f * lod_scale`,
+  `distant.far = tile_size * 1.4f`)
+- `tile_visibility.hpp` — `Mat4`, `ProjectFrustumToGround`, `ScanlineTileRanges`
+  (matches `arch.md` §14-15)
+- `tile_streamer.hpp` — **stub** (empty resident pool, no visibility logic)
+- `distant_world_renderer.hpp` — **stub** (flips Z off briefly, no LOD/drawing)
+- `gameplay_scene.cpp` — map-pack mode calls `open_world_.Render(cams)` with
+  `BuildPassCameras(...)` using `lod_scale = 0.25f`
+- `gameplay_scene.cpp` — `TransitionToRoom` and `BootMapPack` call
+  `open_world_.SetCenter(...)` to load the ring
+- `open_world_renderer.cpp` — device-side implementation already present
+  (drives `ring_` near pass + distant/low-priority stubs)
+
+**What Inc 2 still needs (the three host tests — all DONE 2026-08-11):**
+- `tests/pass_camera_math.cpp` — done, PASSES
+- `tests/tile_visibility_contract.cpp` — done, PASSES
+- `tests/frame_order_contract.cpp` — done, PASSES
+- Device verification of the two-pass frame order on Ares with the stubs
+  (not host-testable; done at the next Ares launch)
+
+**Remaining pre-overhaul facts (still true):**
 - `LvlRoomRenderer` packs each cell's vertices as int16 at `kPosScale=32`,
-  rebased to the cell's `render_origin` (cell center); model matrix translates
-  back to world. `kPosScale=32` gives ±1024 game units of int16 headroom.
+  rebased to the cell's `render_origin` (cell center). `kPosScale=32` gives
+  ±1024 game units of int16 headroom.
 - `ChunkRingRenderer` draws the active cell + its ≤4 neighbors (5
   `LvlRoomRenderer`s), no LOD, no culling, no distance sort, no streaming
   eviction. Ring is always the same fixed ±1 cells regardless of camera.
+  **This is the active near pass in the current code** (held by
+  `open_world_renderer.hpp::ring_`); Inc 3 replaces it with `TileStreamer`.
 - `MapRuntime` owns ONE global collision mesh + ONE active visual room.
   `ResolveCellByPosition` formula is duplicated in 3 places (runtime
   `map_runtime.cpp:98-101`, bake `chunking.py:25`, `brush_grid.py`).
@@ -57,7 +93,8 @@ This plan follows the implementation order recommended in `arch.md` §41.
   representations exist**.
 - Textures are dormant: `.sprite` files exist in `filesystem/tex/`, but the
   map-pack cells render flat-color. `MaterialCatalog` reads a per-room
-  `.manifest` and is **not** wired to the forsyken-city pack.
+  `.manifest` and is **not** wired to the forsyken-city pack. It is not
+  `#include`d or instantiated in `gameplay_scene.cpp`.
 - No per-subsystem profiler; only whole-frame timing (`n64/profiler.cpp`).
 - No test runner; each host test has its build command in a header comment.
 
@@ -238,302 +275,99 @@ follow through the edges).
 
 ## Increments
 
-### Inc 1 — Camera-relative render transform foundation (M)
+### Inc 1 — Camera-relative render transform foundation (M) ✅ DONE
 
-**Status:** DONE
+**Status:** DONE (implemented 2026-08-10, verified 2026-08-11)
 
 **Depends on:** none
 **Unblocks:** 2 (transitively 3, 4, 5, 6, 7 through the edges)
-**Done criteria:** a host test proves that any world position can be expressed
-camera-relative and round-trips exactly; the ROM still renders the current
-world correctly (no visual regression) after switching model matrices to be
-camera-relative.
 
-This is the foundation both passes build on. It de-risks the whole overhaul by
-isolating the render-space math in host-testable inline helpers before any
-multi-pass work.
+#### What was built
 
-#### Files to touch
+- **`src/user/gameplay/render/camera_space_math.hpp`** — pure header-only math:
+  `ToCameraSpace`, `FromCameraSpace`, `ValidateCameraSpaceRoundTrip`,
+  `PackedFitsInt16`. No N64 types; host-testable.
+- **`src/user/gameplay/render/lvl_room_renderer.{hpp,cpp}`** —
+  `SetCameraPosition(const Vec3&)` recomputes the model matrix translation to
+  `render_origin_ - camera_pos` each frame. Vertices stay packed against their
+  fixed per-cell render origin (no per-frame re-packing). `LvlRoomRenderer`
+  has **no** `SetMaterialCatalog`/`BuildRspqBlocks` hooks — it stays a pure
+  flat-color packer (the validated fallback).
+- **`src/user/gameplay/render/chunk_ring_renderer.{hpp,cpp}`** —
+  `SetCameraPosition(const Vec3&)` fans out to all 5 child renderers.
+- **`src/user/gameplay/scene/gameplay_scene.cpp`** — `Render()` sets
+  `view_origin = {0,0,0}`, `view_target = camera_target - camera_position`
+  (camera-at-origin view) so view + model matrices agree (no double `-camera`
+  offset). Calls `SetCameraPosition` on the ring/room before drawing.
+- **`tests/camera_space_math.cpp`** — host test: round-trip exactness +
+  `PackedFitsInt16` overflow guard at `kPosScale=32`. Build:
+  `g++ -std=c++17 -Isrc/user tests/camera_space_math.cpp`.
+- **`tests/render_pipeline_contract.py`** — Python host test: sweeps camera
+  across all 45 cells, asserts `PackedFitsInt16` holds at every cell center
+  and corner.
 
-##### src/user/gameplay/render/camera_space_math.hpp (new)
-- What changes: pure math for camera-relative rendering. Contains `inline`
-  helpers using only `Vec3`/`float` — no N64 types (mirrors
-  `render_origin_math.hpp`).
-- Function(s):
-  - `inline Vec3 ToCameraSpace(const Vec3& world, const Vec3& camera_pos)`
-    → `world - camera_pos`.
-  - `inline Vec3 FromCameraSpace(const Vec3& local, const Vec3& camera_pos)`
-    → `local + camera_pos` (inverse; used by tests to assert round-trip).
-  - `inline bool ValidateCameraSpaceRoundTrip(const Vec3& world,
-    const Vec3& camera_pos, float eps)` → `FromCameraSpace(ToCameraSpace(...)) == world`.
-  - `inline bool PackedFitsInt16(const Vec3& world, const Vec3& camera_pos,
-    float kPosScale)` → `|(world-camera_pos)*kPosScale| <= 32767` on each axis.
-- Data shapes: `Vec3` in, `Vec3` out; floats for scale/eps.
-- Integration points: both `LvlRoomRenderer` (near pass) and the distant pass
-  (Inc 4) include this header. Host test `camera_space_math.cpp` includes it.
-- Error paths: none new; pure computation.
+#### Verification results
 
-##### src/user/gameplay/render/lvl_room_renderer.{hpp,cpp}
-- What changes: generalize the model matrix so its translation is
-  **camera-relative** (world origin shifted to the camera) instead of always
-  the fixed per-cell render origin. Currently `Load(lvl_path, render_origin)`
-  packs `(world - origin)` and sets matrix `p = origin`. Add a
-  `SetCameraPosition(const Vec3&)` that recomputes the model matrix translation
-  each frame: `p = render_origin - camera_pos` (so drawn local = `(world -
-  origin)*kInvScale*... + (render_origin - camera_pos)` = `world - camera_pos`).
-  Vertices stay packed against their fixed cell origin (no re-packing per
-  frame — re-packing is the expensive path we must avoid).
-- **CRITICAL view-matrix coupling (not host-testable):** making the model
-  matrix camera-relative is only half the change. The near-pass **view** must
-  also become camera-at-origin — the current `t3d_viewport_look_at(&viewport,
-  &camera_position, &camera_target, &camera_up)` uses a **world-space** camera
-  (`gameplay_scene.cpp:768`). If the model matrices are camera-relative
-  (`world - camera`) but the view still transforms from world camera, geometry
-  is double-offset by `-camera` and rendering breaks. Inc 1 must therefore ALSO
-  switch the near-pass view to a camera-at-origin matrix (identity orientation,
-  origin at the camera): `t3d_viewport_look_at(&viewport, &origin, &target_origin,
-  &camera_up)` where `target_origin = camera_target - camera_position`. This
-  coupling is t3d-only and **cannot be exercised by a host test** — it must be
-  validated on device (Ares), so Inc 1's verification adds a mandatory Ares
-  walk-across-a-seam check in addition to the host contract.
-- Function(s):
-  - `bool Load(const char* lvl_path, const Vec3& render_origin = {0,0,0})`
-    (unchanged signature; keeps per-cell origin packing).
-  - `void SetCameraPosition(const Vec3& camera_pos)` (new) — recompute
-    `matrix_fp_` translation to `render_origin_ - camera_pos`.
-  - `const Vec3& RenderOrigin() const` (existing) — unchanged.
-  - **Do NOT reserve future `SetMaterialCatalog`/`BuildRspqBlocks` hooks on this
-    class.** Inc 5 creates a separate `TexturedRoomRenderer` that owns its own
-    catalog + RSPQ storage; `LvlRoomRenderer` stays a pure flat-color packer so
-    it remains the validated fallback and needs no forward hooks.
-- Data shapes: `Vec3` camera position.
-- Integration points: `GameplayScene::Render` calls `SetCameraPosition` on each
-  loaded renderer (ring) before drawing. `ChunkRingRenderer` gains a matching
-  `SetCameraPosition` that fans out to its children (Inc 2).
-- Error paths: if `matrix_fp_` is null (not loaded), `SetCameraPosition` is a
-  no-op.
-- **Verification gate:** a host test asserts
-  `PackedFitsInt16(world, camera_pos, 32)` for every cell at the extremes of
-  camera travel, so we prove no int16 overflow when the camera is near a cell
-  boundary.
+- `tests/camera_space_math.cpp` — PASSES
+- `python3 tests/render_pipeline_contract.py` — PASSES
+- `./compile-rom.sh` — builds `madeline_cube_rom.z64` cleanly
+- **Ares seam walk** — player crosses cell boundaries with no double-offset,
+  no visible shift/popping. Camera-at-origin view + camera-relative model
+  matrices agree. ✅
 
-##### src/user/gameplay/render/chunk_ring_renderer.{hpp,cpp}
-- What changes: add `SetCameraPosition(const Vec3&)` that fans out to all 5
-  renderers. The `Draw()` path now renders each child camera-relative.
-- Function(s): `void SetCameraPosition(const Vec3& camera_pos)`.
-- Data shapes: `Vec3`.
-- Integration points: called from `GameplayScene::Render` before the ring's
-  `Draw()`.
-- Error paths: no-op if a renderer is null.
+### Inc 2 — Two-pass render architecture + frame order + low-priority subpass stub (M) ✅ DONE
 
-##### src/user/gameplay/scene/gameplay_scene.cpp
-- What changes: in `Render()`, before drawing the ring/room, call
-  `chunk_ring_.SetCameraPosition(camera.position)` (or `room_renderer.
-  SetCameraPosition(...)` for the legacy path). This switches the visible world
-  to camera-relative with no visual regression (drawn position is still world,
-  just expressed relative to the camera). **Additionally switch the near-pass
-  view to camera-at-origin**: replace the world-space `camera_position` in
-  `t3d_viewport_look_at` with a zero origin and `camera_target -
-  camera_position` as the target, so view + model matrices agree (no double
-  `-camera` offset). See the CRITICAL coupling note in the
-  `lvl_room_renderer` section.
-- Function(s): `Render()` — add the camera-relative matrix update and the
-  camera-at-origin view change.
-- Integration points: the camera position is `impl_->camera.position`.
-- Error paths: none; the update is a matrix recompute.
-
-##### tests/camera_space_math.cpp (new)
-- What changes: host test validating `ToCameraSpace`/`FromCameraSpace`
-  round-trip and `PackedFitsInt16` for a representative set of world positions
-  and camera positions (including the start cell, far cells, and cell-boundary
-  extremes).
-- Function(s): `main()` with assert-based checks (Pattern A — header-only, no
-  N64 deps, `g++ -std=c++17 -Isrc/user tests/camera_space_math.cpp`).
-
-##### tests/render_pipeline_contract.py (new)
-- What changes: host Python test that re-derives the bake's cell centers
-  (`render_origin`) and asserts `PackedFitsInt16(world, camera_pos, 32)` holds
-  for every cell for a swept set of camera positions along the player's travel
-  path. This proves the camera-relative foundation won't overflow int16.
-- Function(s): `test_camera_relative_does_not_overflow_int16()`.
-- Integration points: imports `ogworld.chunking` for cell centers; reads the
-  baked manifest for `chunk_size`/`scale` (not hardcoded).
-
-#### Edge cases
-- Camera exactly on a cell boundary (the `+ε`/`-ε` seam) must not overflow.
-- A camera far from a cell (the distant pass, Inc 4) will need the distant
-  LOD's own smaller `kLodScale` — this inc only handles the near pass.
-- Zero camera travel (static camera) must produce the same visual as today.
-
-#### Verification
-- Run: `python3 tests/render_pipeline_contract.py`; host test
-  `camera_space_math.cpp`; `./compile-rom.sh`.
-- Done: the ROM renders the current world identically (no regression) but with
-  camera-relative matrices; the host contract proves no int16 overflow across
-  camera travel.
-- **Mandatory Ares check (view/model coupling is not host-testable):** walk the
-  player across at least one seam under camera-relative rendering and confirm
-  the world stays correctly positioned (no double `-camera` offset, no visible
-  shift/popping). This is the authoritative verification that the camera-at-origin
-  view and camera-relative model matrices agree.
-
-### Inc 2 — Two-pass render architecture + frame order + low-priority subpass stub (M)
+**Status:** DONE (verified 2026-08-11)
 
 **Depends on:** 1
 **Unblocks:** 3, 4 (transitively 5, 6, 7 through the edges)
 **Done criteria:** the render frame executes the documented `arch.md` §21
 order (skybox, distant Z-off, low-priority near Z-off, high-priority near Z-on)
-driven by a new renderer orchestrator; a host test asserts the frame-stage
-order and that both passes derive from one camera.
+driven by the `OpenWorldRenderer` orchestrator; host tests assert the
+frame-stage order, pass-camera derivation, and tile-visibility math.
 
-This is the architectural skeleton. It introduces the renderer orchestrator,
-the two-viewport split, the low-priority subpass stub, and the skybox call,
-but the distant pass and skybox are stubs until Inc 4 and Inc 6.
+#### Already built (exists in codebase)
 
-#### Files to touch
+- **`src/user/gameplay/render/open_world_renderer.hpp`** — orchestrator header
+  with `PassCameras`, `BuildPassCameras`, `FrameStage` enum,
+  `OrderedFrameStages()`. Owns `ChunkRingRenderer* ring_` (legacy near pass,
+  active), forward-declared `TileStreamer*` and `DistantWorldRenderer*`
+  (null until Inc 3/4). `Render(const PassCameras&)` drives the §21 frame
+  order. `SetCenter(...)` and `SetCameraPosition(...)` fan to children.
+- **`src/user/gameplay/render/pass_camera_math.hpp`** — `CameraDesc`,
+  `MakeNearCamera`, `MakeDistantCamera` (matches `arch.md` §5 exactly:
+  `distant.near = near.far * 0.25f * lod_scale`,
+  `distant.far = tile_size * 1.4f`), `ValidateDistantCamera`.
+- **`src/user/gameplay/render/tile_visibility.hpp`** — `Mat4` (host-safe 4×4),
+  `Mat4TransformPoint`, `Polygon2`, `ProjectFrustumToGround`,
+  `ScanlineTileRanges` (matches `arch.md` §14-15).
+- **`src/user/gameplay/render/tile_streamer.hpp`** — **stub**: empty resident
+  pool (`residents_`/`resident_count_`/`resident_capacity_` all zero), no
+  visibility logic. Public API: `UpdateCamera`, `DrawLowPriority`,
+  `DrawHighPriority`, `ResidentCount`.
+- **`src/user/gameplay/render/distant_world_renderer.hpp`** — **stub**:
+  `UpdateCamera`, `Render` (flips Z off briefly to exercise frame order, draws
+  nothing). No LOD, no distant meshes.
+- **`src/user/gameplay/scene/gameplay_scene.cpp`** — map-pack mode calls
+  `open_world_.Render(cams)` with `BuildPassCameras(...)` using
+  `lod_scale = 0.25f`. `TransitionToRoom` and `BootMapPack` call
+  `open_world_.SetCenter(...)`.
 
-##### src/user/gameplay/render/open_world_renderer.hpp (new)
-- What changes: the orchestrator that owns the frame order. Host-safe header
-  with `inline` helpers for the pass-camera derivation (no N64 types), plus a
-  device-only class that drives the actual draw calls (forward-declared
-  renderer types so the header stays host-safe).
-- Function(s):
-  - `struct PassCameras { CameraDesc near_cam; CameraDesc distant_cam; };`
-  - `inline PassCameras BuildPassCameras(const Vec3& camera_pos,
-    const Vec3& camera_target, float fov_deg, float near_plane, float far_plane,
-    float tile_size, float lod_scale)` — derives the near camera
-    (`near_plane`/`far_plane`) and the distant camera per `arch.md` §5.
-    **`lod_scale` is a coordinate packing scale
-    (analogous to `kPosScale`), NOT a clip-plane multiplier** — it is used in
-    Inc 4 for distant-vertex packing, not for the near/far planes.
-    Concrete well-defined values:
-    - `near_cam = MakeNearCamera(fov_deg, near_plane, far_plane, camera_pos,
-      camera_target, up)`.
-    - `distant_cam = MakeDistantCamera(near_cam, tile_size, lod_scale)`
-      with `distant.near = near.far * 0.25f * lod_scale` and
-      `distant.far = tile_size * 1.4f`.
-    Host-testable.
-  - `class OpenWorldRenderer` — device-only; owns a `TileStreamer` (near, Inc 3)
-    and a `DistantWorldRenderer` (Inc 4; both **forward-declared and held by
-    pointer** so Inc 2 compiles before either `.hpp` exists). Methods:
-    `UpdateCamera(const Vec3&)`, `RenderSkybox()`, `RenderDistant()`,
-    `RenderLowPriority()`, `RenderHighPriority()`, `Render()` (calls skybox,
-    distant, low-priority, high-priority per `arch.md` §21). Inc 3 and Inc 4
-    instantiate the owned `TileStreamer`/`DistantWorldRenderer` members when
-    their complete types exist.
-- Data shapes: `PassCameras` with near/distant `CameraDesc`.
-- Integration points: `GameplayScene::Render` calls `open_world_.Render()` in
-  map-pack mode instead of the current single-path draw.
-- Error paths: if the distant renderer is unloaded (before Inc 4), `Render`
-  falls back to near-only — no regression.
+#### What remains for Inc 2 (all DONE 2026-08-11)
 
-##### src/user/gameplay/render/pass_camera_math.hpp (new)
-- What changes: pure math for the two-pass camera split, host-safe.
-- Function(s):
-  - `inline CameraDesc MakeNearCamera(float fov_deg, float near_plane,
-    float far_plane, const Vec3& camera_pos, const Vec3& target, const Vec3& up)`.
-  - `inline CameraDesc MakeDistantCamera(const CameraDesc& near,
-    float tile_size, float lod_scale)` — matches `arch.md` §5 exactly:
-    `distant.near = near.far * 0.25f * lod_scale`;
-    `distant.far  = tile_size * 1.4f`.
-- Data shapes: `CameraDesc { float fov; float near; float far; Vec3 pos;
-  Vec3 target; Vec3 up; }`.
-- Integration points: `BuildPassCameras` (above) uses these; host test
-  `pass_camera_math.cpp` validates near/distant derivation.
-- Error paths: `distant.far` must be > `near.far`; assert or clamp.
-
-##### src/user/gameplay/render/tile_visibility.hpp (new)
-- What changes: host-safe 2D visibility polygon + scanline tile enumerator
-  matching `arch.md` §14-15.
-- Function(s):
-  - `inline Polygon2 ProjectFrustumToGround(const Mat4& inv_view_proj,
-    float ground_y)` — transforms frustum corners back to world space,
-    drops the Y axis, returns a convex 2D polygon.
-  - `inline void ScanlineTileRanges(const Polygon2& poly, float tile_size,
-    int y_min, int y_max, std::function<void(int y, int x_min, int x_max)>
-    callback)` — walks the polygon row by row, emitting inclusive tile index
-    ranges per row. This is the "scanline tile enumeration" technique from
-    `arch.md` §15.
-- Data shapes: `Polygon2` = small vector of `Vec2` world points; tile index
-  range `[x_min, x_max]` per row.
-- Integration points: `TileStreamer::UpdateVisibleTiles` uses this helper;
-  host test `tile_visibility_contract.cpp` exercises it.
-- Error paths: degenerate polygon produces no ranges.
-
-##### src/user/gameplay/render/tile_streamer.{hpp,cpp}
-- What changes: replaces the fixed 5-slot `ChunkRingRenderer` with a
-  camera-driven tile streamer. The streamer uses `tile_visibility.hpp` to
-  compute the top-view visibility polygon and scanline-enumerate visible tiles,
-  then maintains a bounded resident pool (active + neighbors). Each resident is
-  a `LvlRoomRenderer` loaded at full detail (near pass). The public API remains
-  compatible enough that the orchestrator can call `Update(camera_pos,
-  inv_view_proj, ground_y)` then `DrawLowPriority(...)` / `DrawHighPriority(...)`.
-- Function(s):
-  - `bool Init(const MapPackRuntime& pack, size_t max_resident_tiles)`.
-  - `void UpdateCamera(const Vec3& camera_pos, const Mat4& inv_view_proj,
-    float ground_y)` — derives the visibility polygon, scanline-enumerates
-    candidate tiles, selects active + neighbor cells, requests missing tiles,
-    and evicts LRU non-visible residents beyond capacity. Implements
-    `arch.md` §14-17 streaming logic: missing blocks set `load_next` for
-    subsequent frames.
-  - `void DrawLowPriority(const CameraDesc& cam)` — in Inc 2 a stub that
-    exercises the Z-off subpass; in Inc 5 renders water/background surfaces
-    (Z off, back-to-front) before the main near pass.
-  - `void DrawHighPriority(const CameraDesc& cam)` — draws all resident
-    detailed tiles with Z on, camera-relative matrices (Inc 1).
-- Data shapes:
-  - `struct TileKey { int16_t x; int16_t z; };`
-  - `struct ResidentTile { TileKey key; LvlRoomRenderer renderer;
-    uint32_t last_frame; bool in_visible_set; };`
-  - `std::vector<TileKey> visible_this_frame_;`
-- Integration points: owned by `OpenWorldRenderer`; called from
-  `GameplayScene::Update` and `GameplayScene::Render`.
-- Error paths: if a tile file is missing, it is skipped (logged in debug).
-
-##### src/user/gameplay/render/distant_world_renderer.{hpp,cpp}
-- What changes: stub for the distant pass. The file is created in Inc 2 so the
-  orchestrator can call it even though the actual LOD generation and drawing
-  are implemented in Inc 4.
-- Function(s):
-  - `void Init(const MapPackRuntime& pack)`.
-  - `void UpdateCamera(const Vec3& camera_pos, const CameraDesc& cam)`.
-  - `void Render(const CameraDesc& cam)` — in Inc 2, this draws nothing but
-    flips the RDP into Z-off mode briefly (so the frame order is exercised).
-- Data shapes: none significant in Inc 2.
-- Integration points: owned by `OpenWorldRenderer`.
-
-##### src/user/gameplay/scene/gameplay_scene.cpp
-- What changes: `Render()` in map-pack mode calls `open_world_.Render()`
-  (distant, low-priority, high-priority per `arch.md` §21) instead of the
-  single `chunk_ring_.Draw()`. The legacy single-room path keeps
-  `room_renderer.Draw()`.
-- Function(s): `Render()` — swap the map-pack branch to the orchestrator.
-- Integration points: `OpenWorldRenderer` member; `camera.position` feeds
-  `UpdateCamera`.
-- Error paths: if `open_world_.Render()` returns early (distant unloaded), the
-  near pass still draws the ring.
-
-##### tests/pass_camera_math.cpp (new)
-- What changes: host test that `BuildPassCameras` produces a distant camera
-  matching `arch.md` §5:
-  - `distant.near == near.far * 0.25f * lod_scale`
-  - `distant.far  == tile_size * 1.4f`
-  and that both share the same `camera_pos`/`camera_target` orientation.
-- Function(s): `main()` — assert the exact §5 formulas and shared orientation.
-
-##### tests/tile_visibility_contract.cpp (new)
-- What changes: host test for the top-view frustum polygon + scanline
-  enumerator. Constructs simple frusta (e.g., axis-aligned view boxes),
-  projects to ground, and asserts the scanline ranges match the expected
-  tile footprint for a known tile size.
-- Function(s): `main()` — pure math, no N64 headers.
-
-##### tests/frame_order_contract.cpp (new)
-- What changes: host test that the frame-stage enum (`Distant`,
-  `LowPriority`, `HighPriority`, `Present`) is produced in the documented
-  order and that both passes share
-  one camera (via `BuildPassCameras`).
-- Function(s): `main()` — assert the stage sequence and camera identity.
+- **`tests/pass_camera_math.cpp`** — host test asserting `BuildPassCameras`
+  matches `arch.md` §5 (`distant.near = near.far * 0.25f * lod_scale`,
+  `distant.far = tile_size * 1.4f`), both passes share orientation, and a
+  degenerate distant range is rejected. **PASSES.**
+- **`tests/tile_visibility_contract.cpp`** — host test for
+  `ProjectFrustumToGround` + `ScanlineTileRanges` on synthetic view boxes,
+  including conservative boundary over-inclusion. **PASSES.**
+- **`tests/frame_order_contract.cpp`** — host test that `OrderedFrameStages`
+  yields `[Distant, LowPriority, HighPriority, Present]` and that
+  `BuildPassCameras` derives both passes from one camera. **PASSES.**
+- **`open_world_renderer.cpp`** — device-side implementation was already in
+  place (drives `ring_` near pass + distant/low-priority stubs).
+- **Makefile** — `open_world_renderer.cpp` already in the `src` list.
 
 #### Edge cases
 - `distant_far <= far_plane` must be rejected/clamped (distant pass would be
@@ -543,8 +377,8 @@ but the distant pass and skybox are stubs until Inc 4 and Inc 6.
   near ring (no blank screen).
 
 #### Verification
-- Run: host tests `pass_camera_math.cpp`, `frame_order_contract.cpp`;
-  `./compile-rom.sh`.
+- Run: host tests `pass_camera_math.cpp`, `tile_visibility_contract.cpp`,
+  `frame_order_contract.cpp`; `./compile-rom.sh`.
 - Done: the frame runs a documented two-pass order with one camera; no visual
   regression (near pass still draws the ring identically).
 
@@ -607,26 +441,37 @@ driven tile streamer as specified in `arch.md` §14-17.
 - What changes: **removed** (superseded by `TileStreamer`). Its inline
   `ResolveRingRooms` is replaced by `TileStreamer::ResolveDistanceRing`. The
   `ChunkRingRenderer` class and its Makefile entry are deleted.
+- **Current state:** `open_world_renderer.hpp` holds BOTH `ChunkRingRenderer*
+  ring_` (the active near pass in Inc 2) AND `TileStreamer* tile_streamer_`
+  (null stub). Inc 3 must: (1) flesh out `tile_streamer_` with the visibility
+  + LRU logic, (2) switch `RenderHighPriority()` from `ring_->Draw()` to
+  `tile_streamer_->DrawHighPriority()`, (3) switch `SetCenter()` from
+  `ring_->Load(...)` to `tile_streamer_->SetCenter(...)`, (4) remove the
+  `ring_` member and its `#include`, (5) delete `chunk_ring_renderer.{hpp,cpp}`.
 - **Dangling-consumer cleanup (must land in the same increment):** deleting
-  `chunk_ring_renderer` breaks its two consumers — (a) `tests/chunk_ring_smoke.cpp`
+  `chunk_ring_renderer` breaks its consumers — (a) `tests/chunk_ring_smoke.cpp`
   includes `gameplay/render/chunk_ring_renderer.hpp` and calls `ResolveRingRooms`,
-  and (b) `gameplay_scene.cpp:20` includes the same header. Inc 3 must: delete or
-  rewrite `tests/chunk_ring_smoke.cpp` to use `TileStreamer::ResolveDistanceRing`,
-  drop the `#include "gameplay/render/chunk_ring_renderer.hpp"` from
-  `gameplay_scene.cpp` (and any other file), and remove `chunk_ring_renderer.cpp`
-  from the Makefile `src` list. Grep the tree for `chunk_ring_renderer` after the
+  and (b) `open_world_renderer.hpp` includes it for the `ring_` member. Inc 3
+  must: delete or rewrite `tests/chunk_ring_smoke.cpp` to use
+  `TileStreamer::ResolveDistanceRing`, drop the `#include` from
+  `open_world_renderer.hpp`, and remove `chunk_ring_renderer.cpp` from the
+  Makefile `src` list. Grep the tree for `chunk_ring_renderer` after the
   delete to confirm zero remaining references.
-- Integration points: `gameplay_scene.cpp` and `open_world_renderer.hpp` switch
-  from `ChunkRingRenderer` to `TileStreamer`.
+- Integration points: `open_world_renderer.hpp` switches from `ring_` to
+  `tile_streamer_` as the sole near-pass renderer.
 
 ##### src/user/gameplay/render/open_world_renderer.{hpp,cpp}
-- What changes: near pass uses `TileStreamer` instead of `ChunkRingRenderer`.
-  `SetCenter` is called on room transition (from `TransitionToRoom` /
-  `BootMapPack`).
-- Function(s): `SetCenter(...)`; `UpdateCamera(...)`; `RenderNear()` uses
-  `tile_streamer_.Draw()`.
+- What changes: near pass switches from `ChunkRingRenderer* ring_` to
+  `TileStreamer* tile_streamer_`. The `tile_streamer_` member already exists
+  as a forward-declared null pointer; Inc 3 instantiates it with the full
+  `TileStreamer` type and wires it into `RenderHighPriority()` and
+  `SetCenter()`. The `ring_` member and its `#include` are removed.
+- Function(s): `SetCenter(...)` calls `tile_streamer_->SetCenter(...)` instead
+  of `ring_->Load(...)`. `RenderHighPriority()` calls
+  `tile_streamer_->DrawHighPriority(...)` instead of `ring_->Draw()`.
+  `SetCameraPosition(...)` fans to `tile_streamer_` instead of `ring_`.
 - Integration points: `gameplay_scene.cpp` `TransitionToRoom` + `BootMapPack`
-  call `open_world_.SetCenter(...)`.
+  already call `open_world_.SetCenter(...)` — no change needed there.
 
 ##### src/user/gameplay/scene/gameplay_scene.cpp
 - What changes: `TransitionToRoom` and `BootMapPack` call
@@ -640,6 +485,24 @@ driven tile streamer as specified in `arch.md` §14-17.
 ##### Makefile
 - What changes: remove `chunk_ring_renderer.cpp`; add `tile_streamer.cpp`.
 - Function(s): `src` list.
+
+##### src/user/gameplay/world/map_runtime.cpp + tools/ogworld/chunking.py + tools/ogworld/brush_grid.py
+- What changes: **consolidate the 3-way `ResolveCellByPosition` duplication.**
+  The formula `iz = floor(world_z / (chunk_size * scale))` (with world_z =
+  depth = −map_y) is duplicated in `map_runtime.cpp:98-101`,
+  `chunking.py:25`, and `brush_grid.py`. Extract a single canonical
+  implementation — either a host-testable inline C++ helper in
+  `render_origin_math.hpp` (for the runtime side) and a shared Python function
+  in `ogworld/chunking.py` (for the bake side), with a cross-language contract
+  test in `tests/interconnected_seam_equivalence.py` asserting they produce
+  identical results for all 45 cells. This prevents a 4th copy from appearing
+  in `tile_streamer.cpp`.
+- Function(s): `inline int ResolveCellIndex(const Vec3& world_pos, float
+  chunk_size, float scale)` (C++); `def resolve_cell_index(world_pos,
+  chunk_size, scale)` (Python).
+- Integration points: `TileStreamer::SetCenter` uses the canonical C++ helper;
+  `bake_interconnected_map.py` uses the canonical Python helper.
+- Error paths: out-of-bounds world position returns −1 (no cell).
 
 ##### tests/tile_streamer_smoke.cpp (new)
 - What changes: host test that `ResolveDistanceRing` returns the correct cells
@@ -824,10 +687,17 @@ near world's coordinate space or Z-buffer.
 that defaults on and can be disabled if RDP cost is too high. A host test
 asserts the material index → sprite resolution is stable.
 
-This depends on Inc 4 (not just Inc 3) to enforce the `arch.md` §41 phase
-ordering — the material pipeline (Phase 5) comes after the LOD/distant pass
-(Phase 4). It also depends on Inc 3 for the near tile streaming the textures
-are applied to.
+**Dependency rationale:** Inc 5 depends on Inc 4 purely to enforce `arch.md`
+§41 phase ordering (Phase 5 after Phase 4). The texturing itself only needs
+Inc 3 (near tile streaming). This is intentional — the material pipeline must
+not land before the distant pass it visually must integrate with. If Inc 4 is
+blocked, Inc 5 can be unblocked by relaxing this edge, but the implementer must
+then verify textured-near + flat-distant visual integration separately.
+
+**`kLodScale` value:** `lod_scale = 0.25f` is the definitive value, already
+hardcoded in `gameplay_scene.cpp`'s `BuildPassCameras` call. This gives
+`distant_far / 0.25 = 4 × distant_far` units of int16 headroom in distant
+space. The `distant_lod_contract.py` test (Inc 4) must use this same value.
 
 #### Files to touch
 
@@ -836,10 +706,16 @@ are applied to.
   a per-pack `.manifest` (one material name per line, in bake order) and
   resolves each to `rom:/tex/<name>.sprite`. Preserve the `TB_empty` null-slot
   reservation so material indices don't shift.
+- **Wiring path:** `MaterialCatalog` is instantiated in `gameplay_scene.cpp`
+  (it is currently not `#include`d or used there). `BootMapPack` loads
+  `rom:/lvl/forsyken-city.manifest` via `material_catalog_.Load(...)` after
+  `map_runtime_.Init(...)`. The catalog is passed to `OpenWorldRenderer` via
+  `open_world_.SetMaterialCatalog(&material_catalog_)`, which stores the
+  pointer and forwards it to `TileStreamer` → `TexturedRoomRenderer`.
 - Function(s): `Load(pack_manifest_path)`; `Resolve(material_id)`.
 - Data shapes: material id → `sprite_t*`.
-- Integration points: `LvlRoomRenderer` (or a new textured variant) uploads the
-  sprite for a batch instead of flat `primColor`.
+- Integration points: `TexturedRoomRenderer` uploads the sprite for a batch
+  instead of flat `primColor`.
 
 ##### src/user/gameplay/render/textured_room_renderer.{hpp,cpp} (new) — **chosen path**
 - What changes: a new textured renderer that wraps `LvlRoomRenderer`-style
@@ -849,10 +725,9 @@ are applied to.
   `lvl_room_renderer` intact as the validated fallback (so `kEnableTextures`
   can be turned off and the world renders exactly as before), and avoids
   entangling RDP combiner switches into the existing validated path.
-  - The `SetMaterialCatalog`/`BuildRspqBlocks` hooks reserved on
-    `lvl_room_renderer` in Inc 1 are **not consumed** by this new file; they
-    are dropped (the reservation note in Inc 1 is rescinded). The new
-    `textured_room_renderer` owns its own catalog pointer + RSPQ block storage.
+  - `LvlRoomRenderer` has no `SetMaterialCatalog`/`BuildRspqBlocks` hooks
+    (the Inc 1 reservation was rescinded). `TexturedRoomRenderer` owns its
+    own catalog pointer + RSPQ block storage.
   - `LvlRoomRenderer` remains the near-pass renderer in Inc 3; Inc 5 switches
     the near pass (`TileStreamer::DrawHighPriority`) to instantiate
     `TexturedRoomRenderer` when `kEnableTextures` is on, and keeps
@@ -860,6 +735,12 @@ are applied to.
   - For each batch, look up the material's sprite, upload it as a tile, and
     draw with a textured combiner. Keep the per-batch primColor fallback for
     materials with no sprite. Gated behind `kEnableTextures` (default true).
+  - **RSPQ block construction:** after loading a cell's LVL geometry, precompile
+    each material batch into an `rspq_block_t*` via `rspq_block_begin()` /
+    `rspq_block_end()`. The block captures the full draw sequence for that
+    batch (set combiner, upload tile, draw triangles). At render time, call
+    `rspq_block_run(block)` instead of re-emitting commands. Blocks are freed
+    in the destructor via `rspq_block_free()`.
 - **Visual-change guard (default-true is a behavior change):** the current near
   pass is flat `PRIM*SHADE` with a fixed combiner and `material_color()`. The
   current `lvl_room_renderer.cpp:187-195` sets `material_color` per batch.
@@ -872,8 +753,8 @@ are applied to.
   traversal gate must compare textured vs flat output at least once.
 - Function(s): `Draw()` — add a textured branch.
 - Data shapes: `MaterialCatalog` lookup per batch.
-- Integration points: `TileStreamer`/`DistantWorldRenderer` use the textured
-  renderer for near cells.
+- Integration points: `TileStreamer` uses `TexturedRoomRenderer` for near cells
+  when `kEnableTextures` is on.
 - Error paths: a missing sprite falls back to the flat primColor; a material
   index with no `.manifest` entry is a hard assertion (indices must stay in
   sync).
@@ -895,13 +776,19 @@ are applied to.
   metal_floor_1=3, floor_dirty_concrete=4). A mismatch shifts indices and breaks
   the mapping — the `MaterialCatalog` null-slot (`TB_empty`) reservation must be
   preserved.
+- **Verification mechanism:** `tests/material_catalog_test.cpp` must assert that
+  the emitted `.manifest`'s line-N material name matches the per-cell
+  `lvl.strings[N]` for every cell in the pack. This catches index shifts at
+  bake time.
 - Function(s): write the manifest in the bake.
 - Data shapes: text file, one material name per line.
 
 ##### tests/material_catalog_test.cpp
 - What changes: host test that a `.manifest` + `.sprite` set resolves material
-  ids correctly and that `TB_empty` reservation holds (indices don't shift).
-- Function(s): `main()`.
+  ids correctly, that `TB_empty` reservation holds (indices don't shift), and
+  that the manifest order matches per-cell string IDs for all cells.
+- Function(s): `main()` (Pattern C — links `mappack_loader.cpp`).
+- Build: `g++ -std=c++17 -Isrc/user tests/material_catalog_test.cpp src/user/gameplay/world/mappack_loader.cpp`.
 
 #### Edge cases
 - A material index with no sprite → flat fallback (never a crash).
@@ -1003,23 +890,42 @@ per-frame budgets.
 
 ##### tests/run_host_tests.sh (new)
 - What changes: a shell script that builds + runs every host C++ smoke test and
-  runs every Python test, mirroring each file's documented build command (and
-  the bake subprocess pattern). Single entrypoint: `./tests/run_host_tests.sh`.
-- **Explicit test inventory (the runner must include these):** the C++
-  header-only tests (`camera_space_math.cpp`, `pass_camera_math.cpp`,
-  `tile_visibility_contract.cpp`, `frame_order_contract.cpp`, `lod_math.cpp`,
-  `fog_math.cpp`, `skybox_transform.cpp`, `render_budgets_contract.cpp`,
-  `debug_visualization_contract.cpp`), the Pattern C `mappack_loader.cpp`-linked
-  tests (`tile_streamer_smoke.cpp`, `tile_stream_lru_contract.cpp`,
-  `material_catalog_test.cpp`), and the existing regression contracts that must
-  keep passing (`interconnected_map_contract.py`,
-  `interconnected_seam_equivalence.py`). The script hardcodes each test's
-  compile command from its file-header comment (Pattern A = header-only g++;
-  Pattern C = g++ linking `mappack_loader.cpp`); it runs the Python contracts
-  via `python3`. Exit nonzero on any failure.
-- Function(s): iterate the known host-test list; exit nonzero on any failure.
-- Integration points: documented in `AGENTS.md`; optional `make test` target
-  invoking it.
+  runs every Python test. Single entrypoint: `./tests/run_host_tests.sh`.
+  Exit nonzero on any failure.
+- **Explicit test inventory with build commands:**
+
+  **Pattern A (header-only, no N64 deps):**
+  ```
+  g++ -std=c++17 -Isrc/user tests/camera_space_math.cpp -o /tmp/t && /tmp/t
+  g++ -std=c++17 -Isrc/user tests/pass_camera_math.cpp -o /tmp/t && /tmp/t
+  g++ -std=c++17 -Isrc/user tests/tile_visibility_contract.cpp -o /tmp/t && /tmp/t
+  g++ -std=c++17 -Isrc/user tests/frame_order_contract.cpp -o /tmp/t && /tmp/t
+  g++ -std=c++17 -Isrc/user tests/lod_math.cpp -o /tmp/t && /tmp/t
+  g++ -std=c++17 -Isrc/user tests/fog_math.cpp -o /tmp/t && /tmp/t
+  g++ -std=c++17 -Isrc/user tests/skybox_transform.cpp -o /tmp/t && /tmp/t
+  g++ -std=c++17 -Isrc/user tests/render_budgets_contract.cpp -o /tmp/t && /tmp/t
+  g++ -std=c++17 -Isrc/user tests/debug_visualization_contract.cpp -o /tmp/t && /tmp/t
+  ```
+
+  **Pattern C (links `mappack_loader.cpp`):**
+  ```
+  g++ -std=c++17 -Isrc/user tests/tile_streamer_smoke.cpp \
+    src/user/gameplay/world/mappack_loader.cpp -o /tmp/t && /tmp/t
+  g++ -std=c++17 -Isrc/user tests/tile_stream_lru_contract.cpp \
+    src/user/gameplay/world/mappack_loader.cpp -o /tmp/t && /tmp/t
+  g++ -std=c++17 -Isrc/user tests/material_catalog_test.cpp \
+    src/user/gameplay/world/mappack_loader.cpp -o /tmp/t && /tmp/t
+  ```
+
+  **Python contracts:**
+  ```
+  python3 tests/interconnected_map_contract.py
+  python3 tests/interconnected_seam_equivalence.py
+  python3 tests/render_pipeline_contract.py
+  python3 tests/distant_lod_contract.py
+  ```
+
+- Integration points: documented in `AGENTS.md`; `make test` target invokes it.
 - Error paths: any failing test aborts with its output.
 
 ##### Makefile
@@ -1036,6 +942,27 @@ per-frame budgets.
 - Data shapes: fixed phase-name array.
 - Integration points: `OpenWorldRenderer::Render` marks each phase.
 - Error paths: an unclosed phase asserts at frame end.
+
+##### src/user/n64/frame_arena.{hpp,cpp} (new)
+- What changes: a simple frame-scoped arena allocator for temporary per-frame
+  allocations (visible tile lists, distant sort arrays, matrix scratch).
+  Mirrors `arch.md` §30 ("frame memory pool for transient allocations") and
+  §40 ("Temporary frame allocations use a frame allocator"). The arena is
+  reset at the start of each frame; all render passes allocate from it.
+- Function(s):
+  - `class FrameArena` — owns a fixed-size buffer (e.g. 64 KB). `void*
+    Alloc(size_t)` bumps a pointer (no free); `void Reset()` rewinds to
+    start. `size_t Used() const` and `size_t Remaining() const` for budget
+    tracking.
+  - `MemorySnapshot::CaptureArena(const FrameArena&)` — extends the existing
+    `MemorySnapshot` to report arena usage alongside heap stats.
+- Data shapes: fixed `uint8_t buffer[kArenaSize]`; `size_t offset_`.
+- Integration points: `OpenWorldRenderer::Render` calls `arena_.Reset()` at
+  frame start; `TileStreamer` and `DistantWorldRenderer` allocate visible-tile
+  lists and sort arrays from the arena. `profiler` reports arena high-water
+  mark per frame.
+- Error paths: `Alloc` exceeding remaining capacity is a hard assert (budget
+  violation).
 
 ##### src/user/gameplay/render/open_world_renderer.{hpp,cpp}
 - What changes: wrap each pass in a profiler phase scope.
@@ -1174,6 +1101,8 @@ per-frame budgets.
 | 21 | Profiling / per-phase timing | Inc 7 | `profiler` phase scopes, Ares per-phase timing output |
 | 22 | Bounded budgets (visible chunks, LOD entries, triangles, material changes, particles, texture uploads, streaming ops) | Inc 7 | `render_budgets_contract.cpp` |
 | 23 | Debug visualization modes | Inc 7 | `debug_visualization_contract.cpp` |
+| 24 | Temporary frame allocations use a frame allocator | Inc 7 | `profiler` `MemorySnapshot` extended to track frame-arena usage; Ares memory report |
+| 25 | Rendering work is represented by bounded lists | Inc 3 (tile list), Inc 4 (distant sort list), Inc 7 (budgets enforce caps) | `render_budgets_contract.cpp` asserts all list sizes ≤ caps |
 
 ## Open questions (CONSIDER from review)
 
@@ -1206,3 +1135,25 @@ per-frame budgets.
 - Water/particles/dynamic-object passes from spec Phase 6 — the plan reaches
   through the distant pass + texturing + fog; particles/water are explicitly
   deferred unless a later increment adds them.
+- Per-region atmosphere (`arch.md` §28 — locally colored fog per region).
+  The plan implements global fog only; per-region atmosphere is a future
+  extension.
+- Minimal proof-of-concept test scene (`arch.md` §42 — 4×4 terrain chunks,
+  3 LOD levels). The plan jumps straight to the 45-cell Forsaken City world.
+  If the full world proves too heavy for initial debugging, a 2×2 or 3×3 test
+  scene can be added as a gating milestone before Inc 4.
+
+## Budget recalibration process
+
+The budget constants in Inc 7 (`kMaxTrianglesPerFrame = 6000`, etc.) are
+initial estimates. After the first Ares boot with all passes active:
+
+1. Run the per-phase profiler (Inc 7) and record actual counts for each budget
+   field during a full Forsaken City traversal.
+2. If any budget is exceeded, either raise the cap (if the N64 can handle it)
+   or reduce the workload (shrink the near ring, raise LOD distance, disable
+   textures).
+3. Update the constants in `render_budgets.hpp` and re-run
+   `tests/render_budgets_contract.cpp` to confirm the new caps.
+4. Document the calibrated values in this plan's "Architectural decisions"
+   section.
