@@ -185,9 +185,28 @@ Current smoke coverage:
 
 ## ROM testing notes
 
-Known local result:
+Known local results:
 
 - `mupen64plus` successfully recognized and launched `madeline_cube_rom.z64`
+- Ares (snap install) launches the ROM via CLI; verified output:
+  `Loaded madeline_cube_rom` / `Vulkan Enabled: using paraLLEl-RDP`
+
+Ares CLI launch (from the repo root):
+
+```sh
+LD_LIBRARY_PATH=/snap/ares-emulator/current/usr/lib/x86_64-linux-gnu \
+  /snap/ares-emulator/current/usr/bin/ares madeline_cube_rom.z64
+```
+
+Notes:
+
+- run the snap binary through its own runtime with `LD_LIBRARY_PATH` pointing at
+  the snap's bundled lib dir (`librashader.so` lives there); calling the raw
+  binary without it fails with `cannot open shared object file`
+- `/snap/ares-emulator/current` is a symlink to the active revision (e.g. `41`),
+  so the command survives snap updates
+- Ares is GUI-only: it opens the emulator window and stays running; there is no
+  run-and-exit CLI mode
 
 Recommended validation habit:
 

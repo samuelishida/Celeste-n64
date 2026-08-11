@@ -7,6 +7,7 @@
 #include <t3d/t3d.h>
 #include <t3d/t3dmath.h>
 
+#include "gameplay/render/open_world_renderer.hpp"  // RenderCounters (Inc 1 / D7)
 #include "gameplay/world/entity_ids.hpp"
 
 namespace madeline_cube {
@@ -146,6 +147,26 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
     // as its own fan. Material state changes are cheap enough for now.
     // Faces that exceed the batch cap are counted as discarded (must be 0
     // for a validated artifact) rather than silently truncated.
+    //
+    // Inc 5 / D6: heap-allocate the batch array sized to the face count
+    // (clamped to kMaxBatches) instead of an embedded 16 KB array (~720 KB
+    // across 45 distant cells). Free any previous array first (streaming
+    // re-loads / SetCenter call Load repeatedly and would leak otherwise).
+    // Allocation failure → Load returns false (caller keeps old state).
+    FreeBatches();
+    {
+        const int batch_cap = static_cast<int>(face_count) < kMaxBatches
+            ? static_cast<int>(face_count) : kMaxBatches;
+        if (batch_cap > 0) {
+            batches_ = static_cast<Batch*>(malloc(sizeof(Batch) * batch_cap));
+            if (!batches_) {
+                free(faces);
+                free(lvl_verts);
+                debugf("[lvlroom] batch alloc FAILED\n");
+                return false;
+            }
+        }
+    }
     batch_count_ = 0;
     discarded_faces_ = 0;
     for (uint32_t fi = 0; fi < face_count; ++fi) {
@@ -156,6 +177,37 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
             continue;
         }
         batches_[batch_count_++] = {lf.vs, lf.vc, lf.vc - 2, lf.mid};
+    }
+
+    // Build the coalesced material runs (Inc 3 / D3). Adjacent same-material
+    // faces merge into runs capped at `kMaxRunSpan` loaded vertices; each face
+    // keeps its own fan origin (RunFace.offset) so triangulation never crosses
+    // a face boundary. Runs are heap-allocated sized to the face count. On any
+    // failure (allocation or capacity) we fall back to the per-face batch path
+    // (run_count_ stays 0) — never a silent truncation.
+    FreeRuns();
+    {
+        FaceSpec* specs = static_cast<FaceSpec*>(malloc(sizeof(FaceSpec) * batch_count_));
+        if (specs) {
+            for (int s = 0; s < batch_count_; ++s) {
+                specs[s] = {batches_[s].first_vertex, batches_[s].vertex_count,
+                            batches_[s].tri_count, batches_[s].material_id};
+            }
+            const int alloc = batch_count_ > 0 ? batch_count_ : 1;
+            runs_ = static_cast<BatchRun*>(malloc(sizeof(BatchRun) * alloc));
+            run_faces_ = static_cast<RunFace*>(malloc(sizeof(RunFace) * alloc));
+            if (runs_ && run_faces_ && batch_count_ > 0) {
+                run_count_ = CoalesceBatches(specs, batch_count_, runs_,
+                                             batch_count_, run_faces_,
+                                             batch_count_, kMaxRunSpan);
+                if (run_count_ <= 0) {  // coalescing failed — fall back
+                    FreeRuns();
+                }
+            } else {
+                FreeRuns();
+            }
+            free(specs);
+        }
     }
 
     free(faces);
@@ -185,9 +237,21 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
 void LvlRoomRenderer::Free() {
     if (verts_) { free_uncached(verts_); verts_ = nullptr; }
     if (matrix_fp_) { free_uncached(matrix_fp_); matrix_fp_ = nullptr; }
-    batch_count_ = 0;
+    FreeBatches();
+    FreeRuns();
     vert_count_ = 0;
     pair_count_ = 0;
+}
+
+void LvlRoomRenderer::FreeBatches() {
+    if (batches_) { free(batches_); batches_ = nullptr; }
+    batch_count_ = 0;
+}
+
+void LvlRoomRenderer::FreeRuns() {
+    if (runs_) { free(runs_); runs_ = nullptr; }
+    if (run_faces_) { free(run_faces_); run_faces_ = nullptr; }
+    run_count_ = 0;
 }
 
 void LvlRoomRenderer::SetCameraPosition(const Vec3& camera_pos) {
@@ -229,31 +293,80 @@ void LvlRoomRenderer::Draw() const {
 
     t3d_matrix_push(matrix_fp_);
 
-    for (int b = 0; b < batch_count_; ++b) {
-        const Batch& batch = batches_[b];
-        if (batch.tri_count == 0) continue;
+    // Coalesced material runs (Inc 3 / D3): one primColor + one vert_load +
+    // one tri_sync per run, but EACH FACE FANS FROM ITS OWN ORIGIN
+    // (RunFace.offset + base_offset) — a run-wide fan crosses face boundaries
+    // and renders garbage (MUST-FIX #1). Adjacent-only merging preserves the
+    // back-to-front face order the distant (Z-off) pass relies on.
+    if (run_count_ > 0 && runs_ && run_faces_) {
+        for (int r = 0; r < run_count_; ++r) {
+            const BatchRun& run = runs_[r];
+            if (run.face_count == 0 || run.vertex_count == 0) continue;
+            // Inc 1 / D7: count near-pass batches (one per run).
+            if (counters_) ++counters_->near_batches;
 
-        // Set per-material primColor
-        uint32_t color = material_color(batch.material_id);
-        rdpq_set_prim_color(RGBA32(
-            (uint8_t)(color >> 24),
-            (uint8_t)(color >> 16),
-            (uint8_t)(color >> 8),
-            (uint8_t)(color)
-        ));
+            // Set per-material primColor once per run.
+            uint32_t color = material_color(run.material_id);
+            rdpq_set_prim_color(RGBA32(
+                (uint8_t)(color >> 24),
+                (uint8_t)(color >> 16),
+                (uint8_t)(color >> 8),
+                (uint8_t)(color)
+            ));
 
-        // Load vertex pairs for this batch.
-        // The base_vertex accounts for odd/even alignment in the pair-packed format.
-        uint32_t base_vertex = batch.first_vertex & 1u;
-        uint32_t load_count = ((base_vertex + batch.vertex_count + 1u) / 2u) * 2u;
-        if (load_count > 70) load_count = 70;  // RSP DMEM limit per load
-        t3d_vert_load(verts_ + batch.first_vertex / 2, 0, load_count);
+            // Load the run span once (≤ kMaxRunSpan vertices, pair-aligned).
+            // CoalesceBatches guarantees (first_vertex & 1) + vertex_count
+            // ≤ kMaxRunSpan, so load_count never exceeds the RSP cap.
+            const uint32_t base_offset = run.first_vertex & 1u;
+            uint32_t load_count = ((base_offset + run.vertex_count + 1u) / 2u) * 2u;
+            if (load_count > 70) load_count = 70;  // safety net
+            t3d_vert_load(verts_ + run.first_vertex / 2, 0, load_count);
+            if (counters_) ++counters_->vert_loads;  // Inc 1 / D7
 
-        // Fan triangulation
-        for (uint32_t t = 0; t < batch.tri_count; ++t) {
-            t3d_tri_draw(base_vertex, base_vertex + t + 1, base_vertex + t + 2);
+            // Each face fans from its own origin (offset + base_offset).
+            for (uint32_t f = 0; f < run.face_count; ++f) {
+                const RunFace& rf = run_faces_[run.first_face + f];
+                const uint32_t base = rf.offset + base_offset;
+                for (uint32_t t = 0; t < rf.tri_count; ++t) {
+                    t3d_tri_draw(base, base + t + 1, base + t + 2);
+                }
+            }
+            t3d_tri_sync();
+            if (counters_) ++counters_->syncs;  // Inc 1 / D7
         }
-        t3d_tri_sync();
+    } else if (batches_) {
+        // Fallback: per-face batches (coalescing failed or unbuilt). Same
+        // geometry as the run path (each face fans from its own first_vertex).
+        for (int b = 0; b < batch_count_; ++b) {
+            const Batch& batch = batches_[b];
+            if (batch.tri_count == 0) continue;
+            // Inc 1 / D7: count near-pass batches.
+            if (counters_) ++counters_->near_batches;
+
+            // Set per-material primColor
+            uint32_t color = material_color(batch.material_id);
+            rdpq_set_prim_color(RGBA32(
+                (uint8_t)(color >> 24),
+                (uint8_t)(color >> 16),
+                (uint8_t)(color >> 8),
+                (uint8_t)(color)
+            ));
+
+            // Load vertex pairs for this batch.
+            // The base_vertex accounts for odd/even alignment in the pair-packed format.
+            uint32_t base_vertex = batch.first_vertex & 1u;
+            uint32_t load_count = ((base_vertex + batch.vertex_count + 1u) / 2u) * 2u;
+            if (load_count > 70) load_count = 70;  // RSP DMEM limit per load
+            t3d_vert_load(verts_ + batch.first_vertex / 2, 0, load_count);
+            if (counters_) ++counters_->vert_loads;
+
+            // Fan triangulation
+            for (uint32_t t = 0; t < batch.tri_count; ++t) {
+                t3d_tri_draw(base_vertex, base_vertex + t + 1, base_vertex + t + 2);
+            }
+            t3d_tri_sync();
+            if (counters_) ++counters_->syncs;
+        }
     }
 
     t3d_matrix_pop(1);

@@ -12,6 +12,7 @@
 #include <t3d/t3dmodel.h>
 
 #include "gameplay/runtime/timing.hpp"
+#include "gameplay/debug_flags.hpp"
 #include "gameplay/player/camera_controller.hpp"
 #include "gameplay/world/collectible.hpp"
 #include "gameplay/debug_hud.hpp"
@@ -25,6 +26,7 @@
 #include "gameplay/render/material_catalog.hpp"
 #include "gameplay/render/model.hpp"
 #include "gameplay/render/texture.hpp"
+#include "gameplay/render/tile_visibility.hpp"  // Mat4, Mat4Invert (Inc 4 / D4)
 #include "gameplay/world/actor_world.hpp"
 #include "gameplay/world/entity_dispatch.hpp"
 #include "gameplay/actor/cassette_actor.hpp"
@@ -628,8 +630,13 @@ void GameplayScene::Update(float delta_seconds) {
 
     // Fixed-step physics loop.
     const int n_ticks = impl_->fixed_step.BeginFrame(delta_seconds);
-    debugf("[update] frame start: coll_mesh=%p n_ticks=%d\n",
-           (void*)impl_->room.coll_mesh, n_ticks);
+    // Inc 1 / D5: per-frame serial debugf is gated behind kVerboseFrameLogging
+    // (default false) — USB output blocks the RSP and is a hidden per-frame
+    // cost. Boot/init logs and the profiler report stay ungated.
+    if (kVerboseFrameLogging) {
+        debugf("[update] frame start: coll_mesh=%p n_ticks=%d\n",
+               (void*)impl_->room.coll_mesh, n_ticks);
+    }
     impl_->player.prev_position = impl_->player.position;
 
     // Multi-room: check if the player crossed a chunk boundary this frame and
@@ -657,11 +664,13 @@ void GameplayScene::Update(float delta_seconds) {
         motor_input.wants_dash_refill = impl_->player.dash_reset_cooldown_remaining <= 0.0f;
         AdvanceMovingSurfaces(impl_->room, FixedStepAccumulator::kTickDt);
         was_grounded_pre_motor = impl_->player.contact.was_grounded;
-        debugf("[tick%d] pre-step: coll_mesh=%p vel=(%.1f,%.1f,%.1f)\n",
-               tick, (void*)impl_->room.coll_mesh,
-               (double)impl_->player.velocity.x,
-               (double)impl_->player.velocity.y,
-               (double)impl_->player.velocity.z);
+        if (kVerboseFrameLogging) {  // Inc 1 / D5: gated (see [update] above)
+            debugf("[tick%d] pre-step: coll_mesh=%p vel=(%.1f,%.1f,%.1f)\n",
+                   tick, (void*)impl_->room.coll_mesh,
+                   (double)impl_->player.velocity.x,
+                   (double)impl_->player.velocity.y,
+                   (double)impl_->player.velocity.z);
+        }
         motor_result = impl_->player_motor.Step(impl_->player, impl_->room, motor_input, FixedStepAccumulator::kTickDt);
 
         // Controller reads post-motor grounded state for FSM transitions
@@ -787,8 +796,11 @@ void GameplayScene::Update(float delta_seconds) {
         ((impl_->room.has_cassette && !impl_->cassette_actor.collected) ? 1 : 0);
     impl_->debug_hud.Update(counters);
 
-    // Print telemetry every 60 frames (~1 second) to avoid serial spam
-    if (impl_->telemetry.frame_index % 60 == 0) {
+    // Print telemetry every 60 frames (~1 second) to avoid serial spam.
+    // Inc 1 / D5: gated behind kVerboseFrameLogging — the burst is diagnostics
+    // and can spike one frame on the USB serial path. The 60-frame profiler
+    // report is NOT gated (it is the on-device measurement).
+    if (kVerboseFrameLogging && impl_->telemetry.frame_index % 60 == 0) {
         impl_->telemetry.PrintLine();
     }
 }
@@ -860,6 +872,40 @@ void GameplayScene::Render() {
         if (impl_->use_map_pack_) {
             // Reset the frame-scoped arena + profiler phases (Inc 7).
             impl_->open_world_.BeginFrame();
+
+            // Inc 4 / D4: drive the near-pass visibility culling from the
+            // WORLD-SPACE near camera. `ResolveVisibleTiles` projects NDC
+            // corners back to WORLD XZ tile indices, so inv_view_proj MUST be
+            // the world-space view/proj (real camera pos/target, planes
+            // 20..800) — NOT the camera-at-origin view used for drawing (that
+            // would cull in a camera-relative frame and drop the wrong cells).
+            {
+                const T3DVec3 eye = {{
+                    impl_->camera.position.x, impl_->camera.position.y,
+                    impl_->camera.position.z}};
+                const T3DVec3 target = {{
+                    impl_->camera.target.x, impl_->camera.target.y,
+                    impl_->camera.target.z}};
+                const T3DVec3 up = {{0.0f, 1.0f, 0.0f}};
+                T3DMat4 view, proj, camproj;
+                t3d_mat4_look_at(&view, &eye, &target, &up);
+                t3d_mat4_perspective(&proj, T3D_DEG_TO_RAD(fov_deg),
+                                     /*aspect=*/4.0f / 3.0f, 20.0f, 800.0f);
+                t3d_mat4_mul(&camproj, &proj, &view);
+                // Copy to the host-safe Mat4 (column-major, same layout as
+                // fm_mat4_t.m[col][row]) and invert. On a singular matrix
+                // (shouldn't happen), skip culling this frame — draw all, never
+                // a black screen.
+                Mat4 world = Mat4::Identity();
+                for (int c = 0; c < 4; ++c) {
+                    for (int r = 0; r < 4; ++r) world.m[c * 4 + r] = camproj.m[c][r];
+                }
+                if (Mat4Invert(world)) {
+                    impl_->open_world_.UpdateCamera(impl_->camera.position,
+                                                    world, 0.0f);
+                }
+            }
+
             const PassCameras cams = BuildPassCameras(
                 impl_->camera.position, impl_->camera.target,
                 fov_deg, 20.0f, 800.0f,

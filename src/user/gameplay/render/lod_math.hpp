@@ -10,6 +10,47 @@ namespace madeline_cube {
 // which a higher-detail child representation is retained.
 inline constexpr float kLevel2MinDistance = 500.0f;
 
+// Pi for degree->radian conversions (no global constant in math_types.hpp).
+inline constexpr float kLodPi = 3.14159265358979f;
+
+// Returns true if `origin` (a cell center in world XZ) is inside the camera's
+// horizontal view cone AND depth range [near_d, far_d]. `hfov_deg` is the
+// horizontal FULL field of view in degrees (e.g. computed from the vertical
+// FOV + 4:3 aspect: hfov = 2·atan(tan(vfov/2)·(4/3))). `margin` widens the
+// cone (>1 = wider) so horizon cells don't pop at the exact screen edge.
+// A degenerate facing (camera at target), empty depth range (near >= far), or
+// cell at the camera's own position are treated as not-visible (safe).
+inline bool CellInDistantFrustum(const Vec3& cam_pos, const Vec3& cam_target,
+                                 float hfov_deg, float near_d, float far_d,
+                                 const Vec3& origin, float margin = 1.15f) {
+    if (near_d >= far_d) return false;          // empty frustum
+    if (far_d <= 0.0f) return false;
+    if (margin < 1.0f) margin = 1.0f;
+
+    // Horizontal facing direction (camera -> target, XZ plane).
+    const float fx = cam_target.x - cam_pos.x;
+    const float fz = cam_target.z - cam_pos.z;
+    const float flen2 = fx * fx + fz * fz;
+    if (flen2 < 1e-6f) return false;            // degenerate facing — cull
+    const float inv_flen = 1.0f / std::sqrt(flen2);
+    const float fdx = fx * inv_flen;
+    const float fdz = fz * inv_flen;
+
+    // Delta from camera to the cell center (XZ plane).
+    const float dx = origin.x - cam_pos.x;
+    const float dz = origin.z - cam_pos.z;
+    const float dist = std::sqrt(dx * dx + dz * dz);
+    if (dist < near_d || dist > far_d) return false;  // depth range
+
+    // Angular test: the cell is inside the cone when the angle between the
+    // facing and the cell direction is within the (margined) half-FOV.
+    const float inv_dist = dist > 1e-6f ? 1.0f / dist : 0.0f;
+    const float dot = (dx * fdx + dz * fdz) * inv_dist;
+    const float half_rad = (hfov_deg * 0.5f) * (kLodPi / 180.0f) * margin;
+    const float cos_half = std::cos(half_rad);
+    return dot >= cos_half;
+}
+
 // Per-direction mesh index (arch.md §11-12). A distant LOD entry can hold up
 // to 4 directional meshes (N/S/E/W). This returns the index for a given
 // relative direction vector.

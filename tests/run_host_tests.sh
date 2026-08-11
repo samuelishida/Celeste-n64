@@ -70,6 +70,11 @@ run_cpp fog_math tests/fog_math.cpp
 run_cpp skybox_transform tests/skybox_transform.cpp
 run_cpp render_budgets_contract tests/render_budgets_contract.cpp
 run_cpp debug_visualization_contract tests/debug_visualization_contract.cpp
+run_cpp debug_flags_contract tests/debug_flags_contract.cpp
+run_cpp distant_cull_contract tests/distant_cull_contract.cpp
+run_cpp batch_coalesce_contract tests/batch_coalesce_contract.cpp
+run_cpp near_visibility_contract tests/near_visibility_contract.cpp
+run_cpp renderer_memory_contract tests/renderer_memory_contract.cpp
 
 # ── Pattern C (links mappack_loader.cpp) ─────────────────────────────
 # These need a baked map-pack fixture. Use the repo's baked staging dir if

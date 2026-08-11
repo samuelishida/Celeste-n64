@@ -1,17 +1,23 @@
 #include "gameplay/render/distant_world_renderer.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <algorithm>
 
 #include <rdpq.h>
 #include <rdpq_mode.h>
 
 #include "gameplay/render/lvl_room_renderer.hpp"
+#include "gameplay/render/open_world_renderer.hpp"  // RenderCounters (Inc 1 / D7)
 
 namespace madeline_cube {
 
 namespace {
+
+// Frustum-cull cone margin (Inc 2 / D2). >1 widens the cone so horizon cells
+// don't pop at the exact screen edge. Tuned in Inc 6.
+constexpr float kCullMargin = 1.15f;
 
 // Localize a "rom:/lvl/<pack>/<chunk>_distant.lvl" path to a filesystem path
 // "<build_dir>/<chunk>_distant.lvl" for host-side loading. On device the
@@ -27,30 +33,30 @@ const char* LocalizePath(const char* rom_path, const char* build_dir) {
 
 }  // namespace
 
+// Free every loaded distant mesh. All four directional `meshes[d]` slots point
+// at the SAME loaded mesh (Inc 2 / D1), so only slot 0 is freed — freeing all
+// four would double-free the same pointer (pre-existing UB). If future
+// directional variants hold distinct meshes, this must be revisited.
 DistantWorldRenderer::~DistantWorldRenderer() {
     for (int i = 0; i < entry_count_; ++i) {
         DistantLodEntry& en = entries_[i];
-        for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
-            if (en.meshes[d]) {
-                en.meshes[d]->Free();
-                delete en.meshes[d];
-                en.meshes[d] = nullptr;
-            }
+        if (en.meshes[0]) {
+            en.meshes[0]->Free();
+            delete en.meshes[0];
+            en.meshes[0] = nullptr;
         }
     }
     entry_count_ = 0;
 }
 
 bool DistantWorldRenderer::Load(const MapSpecV2& spec, const char* build_dir) {
-    // Free any existing distant meshes.
+    // Free any existing distant meshes (slot 0 only — see destructor comment).
     for (int i = 0; i < entry_count_; ++i) {
         DistantLodEntry& en = entries_[i];
-        for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
-            if (en.meshes[d]) {
-                en.meshes[d]->Free();
-                delete en.meshes[d];
-                en.meshes[d] = nullptr;
-            }
+        if (en.meshes[0]) {
+            en.meshes[0]->Free();
+            delete en.meshes[0];
+            en.meshes[0] = nullptr;
         }
     }
     entry_count_ = 0;
@@ -66,10 +72,12 @@ bool DistantWorldRenderer::Load(const MapSpecV2& spec, const char* build_dir) {
         std::strncpy(distant_path, rs.lvl_path, sizeof(distant_path) - 1);
         char* dot = std::strrchr(distant_path, '.');
         if (dot) {
-            // Shift the extension right by the length of "_distant".
+            // Shift the extension right by 8 so it sits directly after the
+            // 8-char "_distant" insert: "<chunk>_distant.lvl". (Shifting by
+            // 9 leaves the old NUL at dot+8, truncating the ".lvl" suffix.)
             const char* ext = dot;
             const size_t ext_len = std::strlen(ext);
-            std::memmove(dot + 9, dot, ext_len + 1);  // +9 for "_distant" + NUL
+            std::memmove(dot + 8, dot, ext_len + 1);
             std::memcpy(dot, "_distant", 8);
         }
 
@@ -119,10 +127,28 @@ void DistantWorldRenderer::SetFog(const FogParams& fog) {
 }
 
 void DistantWorldRenderer::Render(const CameraDesc& cam) {
-    // Build the render list, culled + distance-ordered (arch.md §8).
-    DistantRenderItem order[64];
-    const int n = BuildDistantRenderList(camera_pos_, entries_, entry_count_,
-                                         order, 64);
+    // Inc 2 / D2: horizontal full FOV from the vertical FOV + 4:3 aspect
+    // (hfov = 2·atan(tan(vfov/2)·(4/3))). The cull depth range is the DISTANT
+    // pass clip range (cam.near/cam.far), not the near camera's — cells behind
+    // the near far-plane must still be drawn here.
+    const float vfov_rad = cam.fov_deg * 0.5f * (kLodPi / 180.0f);
+    const float hfov_deg = 2.0f * std::atan(std::tan(vfov_rad) * (4.0f / 3.0f)) *
+                           (180.0f / kLodPi);
+
+    // Build the render list, culled + distance-ordered (arch.md §8, Inc 2/D2).
+    // Inc 5 / D6: allocate the list from the frame-scoped arena (reset each
+    // frame); fall back to a small stack buffer if the arena is absent or
+    // exhausted (64 KB is ample for ≤ 64 items — the fallback is a safety net).
+    DistantRenderItem stack_order[64];
+    DistantRenderItem* order = stack_order;
+    if (arena_) {
+        DistantRenderItem* buf = static_cast<DistantRenderItem*>(
+            arena_->Alloc(sizeof(DistantRenderItem) * 64));
+        if (buf) order = buf;
+    }
+    const int n = BuildDistantRenderListCulled(
+        camera_pos_, cam.target, entries_, entry_count_, order, 64,
+        hfov_deg, cam.near, cam.far, kCullMargin);
 
     // arch.md §7-8: Z off, draw farthest first, then restore Z.
     rdpq_sync_pipe();
@@ -139,8 +165,8 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
         t3d_fog_set_enabled(true);
     }
 
-    // Sort back-to-front: BuildDistantRenderList sets priority = distance², so
-    // descending priority draws far cells first.
+    // Sort back-to-front: BuildDistantRenderListCulled sets priority =
+    // distance², so descending priority draws far cells first.
     std::sort(order, order + n,
               [](const DistantRenderItem& a, const DistantRenderItem& b) {
                   return a.priority > b.priority;
@@ -149,9 +175,13 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
     for (int i = 0; i < n; ++i) {
         const int e = order[i].cell_index;
         if (e < 0 || e >= entry_count_) continue;
-        for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
-            if (entries_[e].meshes[d]) entries_[e].meshes[d]->Draw();
-        }
+        // Inc 1 / D7: count cells drawn (once per cell).
+        if (counters_) ++counters_->distant_cells;
+        // Inc 2 / D1: draw meshes[0] only — all four directional slots point
+        // at the SAME loaded distant mesh, so the old 4-slot loop drew every
+        // cell 4× (45 → 180 mesh draws). The 4-slot data shape stays for
+        // future per-direction variants.
+        if (entries_[e].meshes[0]) entries_[e].meshes[0]->Draw();
     }
 
     // Tear down fog + Z before the near pass.
@@ -161,7 +191,6 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
     }
     rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
-    (void)cam;
 }
 
 }  // namespace madeline_cube
