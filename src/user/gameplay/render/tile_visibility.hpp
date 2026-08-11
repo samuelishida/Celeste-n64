@@ -107,9 +107,6 @@ inline void ScanlineTileRanges(const Polygon2& poly, float tile_size,
     const int z1 = iz1 < y_max ? iz1 : y_max;
 
     for (int iz = z0; iz <= z1; ++iz) {
-        // World X span for this row (tile row z in [iz*tile, (iz+1)*tile)).
-        const float rz0 = iz * tile_size;
-        const float rz1 = rz0 + tile_size;
         // A tile intersects if its z-range overlaps [wmin_z, wmax_z]; since we
         // already restrict rows to [iz0, iz1], every row in range overlaps the
         // polygon's Z. The X span of the polygon is [wmin_x, wmax_x], so the

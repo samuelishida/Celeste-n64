@@ -48,4 +48,25 @@ inline bool ValidateRenderOriginTransform(const Vec3& world, const Vec3& origin,
            std::fabs(drawn.z - world.z) < eps;
 }
 
+// Resolve the world-XZ grid cell (ix, iz) for a world-space position. This is
+// the CANONICAL C++ implementation of the cell-resolution formula shared by
+// the runtime (`MapRuntime::ResolveCellByPosition`), the bake
+// (`tools/ogworld/chunking.py::world_cell`), and the brush grid
+// (`tools/ogmap_lib/brush_grid.py::cell_of`). It must NOT be forked again.
+//
+// The grid is 2D in world XZ: ix = floor(world_x / cell),
+// iz = floor(world_z / cell), cell = chunk_size * scale. world_z is depth
+// (= -map_y) — never map_z (the Quake UP axis).
+//
+// `out_ix`/`out_iz` receive the cell indices. Returns false if `cell` is
+// non-positive (degenerate grid). Host-safe — no N64 types.
+inline bool ResolveCellIndex(const Vec3& world_pos, float chunk_size,
+                             float scale, int& out_ix, int& out_iz) {
+    const float cell = chunk_size * scale;
+    if (cell <= 0.0f) return false;
+    out_ix = static_cast<int>(std::floor(world_pos.x / cell));
+    out_iz = static_cast<int>(std::floor(world_pos.z / cell));
+    return true;
+}
+
 }  // namespace madeline_cube

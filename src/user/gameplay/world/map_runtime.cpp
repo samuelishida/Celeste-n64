@@ -7,6 +7,7 @@
 
 #include "gameplay/world/level_loader.hpp"  // LoadLevelInto
 #include "gameplay/physics/coll_mesh.hpp"
+#include "gameplay/render/render_origin_math.hpp"  // ResolveCellIndex (canonical)
 
 #ifdef __mips__
 #include <libdragon.h>
@@ -89,14 +90,12 @@ void MapRuntime::Reset() {
 
 const char* MapRuntime::ResolveCellByPosition(const Vec3& pos) const {
     if (spec_.room_count == 0) return "";
-    // NOTE: This formula MUST stay in sync with the bake's world_cell
-    // (tools/ogworld/chunking.py) and the seam-equivalence test
-    // (tests/interconnected_seam_equivalence.py). If you change it, update
-    // both. Grid is 2D in world XZ: ix = floor(world_x / cell),
+    // Canonical cell-resolution formula (see `render_origin_math.hpp` and the
+    // cross-language contract test tests/interconnected_seam_equivalence.py).
+    // Grid is 2D in world XZ: ix = floor(world_x / cell),
     // iz = floor(world_z / cell), cell = chunk_size * scale.
-    const float cell = spec_.chunk_size * spec_.scale;
-    const int ix = static_cast<int>(std::floor(pos.x / cell));
-    const int iz = static_cast<int>(std::floor(pos.z / cell));
+    int ix = 0, iz = 0;
+    if (!ResolveCellIndex(pos, spec_.chunk_size, spec_.scale, ix, iz)) return "";
     for (int i = 0; i < spec_.room_count; ++i) {
         if (spec_.rooms[i].cell_ix == ix && spec_.rooms[i].cell_iz == iz) {
             return spec_.rooms[i].id;
