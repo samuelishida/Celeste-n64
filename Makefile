@@ -223,6 +223,7 @@ src = \
 	src/user/gameplay/render/open_world_renderer.cpp \
 	src/user/gameplay/render/tile_streamer.cpp \
 	src/user/gameplay/render/distant_world_renderer.cpp \
+	src/user/gameplay/render/skybox.cpp \
 	src/user/gameplay/render/t3dm_room_renderer.cpp \
 	src/user/gameplay/world/level_loader.cpp \
 	src/user/gameplay/world/mappack_loader.cpp \

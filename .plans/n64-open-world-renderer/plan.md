@@ -778,13 +778,9 @@ space. The `distant_lod_contract.py` test (Inc 4) must use this same value.
 - Done: near-pass cells are textured; distant cells stay flat; the flag can
   disable textures.
 
-### Inc 6 — Fog + skybox + atmospheric fade (M)
+### Inc 6 — Fog + skybox + atmospheric fade (M) ✅ DONE
 
-**Depends on:** 2, 4
-**Unblocks:** 7
-**Done criteria:** the distant pass blends into configurable fog, hiding the
-   distant/near transition; a skybox is drawn before both passes (`arch.md` §27);
-   a host test asserts the fog parameter math and skybox transform.
+**Status:** DONE (verified 2026-08-11)
 
 Note: this depends on Inc 4 because fog is applied in `DistantWorldRenderer`,
 which is created in Inc 4. It also depends on Inc 2 for the two-pass frame

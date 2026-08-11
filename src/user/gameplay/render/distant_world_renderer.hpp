@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "gameplay/math_types.hpp"
+#include "gameplay/render/fog_math.hpp"
 #include "gameplay/render/pass_camera_math.hpp"
 #include "gameplay/world/mappack_loader.hpp"  // MapSpecV2, V2RoomSpec
 
@@ -89,6 +90,10 @@ public:
     // compressed scale.
     void SetCameraPosition(const Vec3& camera_pos);
 
+    // Set the fog applied to the distant pass (Inc 6). Fog is configured
+    // before the distant cells and torn down before the near pass.
+    void SetFog(const FogParams& fog);
+
     // Render the distant pass: Z off, back-to-front by priority, Z on after.
     void Render(const CameraDesc& cam);
 
@@ -107,6 +112,7 @@ private:
     DistantLodEntry entries_[64];       // one per cell (kMaxRooms cap)
     int entry_count_ = 0;
     Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};
+    FogParams fog_;
 };
 
 }  // namespace madeline_cube

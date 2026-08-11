@@ -61,6 +61,7 @@ inline void OrderedFrameStages(FrameStage out[4]) {
 // N64-only renderer types, forward-declared so this header stays host-safe.
 class TileStreamer;           // near pass (Inc 3 resident pool)
 class DistantWorldRenderer;   // distant pass (Inc 4 fleshes out)
+class Skybox;                 // skybox (Inc 6)
 
 // Device-only render orchestrator. Owns the near tile streamer and the
 // distant world renderer by pointer (created in the .cpp), so this header
@@ -90,9 +91,13 @@ public:
     // to the tile streamer. The catalog is owned by the caller.
     void SetMaterialCatalog(const class MaterialCatalog* catalog);
 
+    // Set the fog applied to the distant pass (Inc 6).
+    void SetFog(const class FogParams& fog);
+
 private:
     TileStreamer* tile_streamer_ = nullptr;  // Inc 3 near pass
     DistantWorldRenderer* distant_ = nullptr;
+    Skybox* skybox_ = nullptr;
     Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};
 };
 
