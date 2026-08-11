@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "gameplay/render/lvl_room_renderer.hpp"
+#include "gameplay/render/textured_room_renderer.hpp"
 
 namespace madeline_cube {
 
@@ -30,18 +31,32 @@ TileStreamer::~TileStreamer() {
             delete renderers_[i];
             renderers_[i] = nullptr;
         }
+        if (textured_renderers_[i]) {
+            textured_renderers_[i]->Free();
+            delete textured_renderers_[i];
+            textured_renderers_[i] = nullptr;
+        }
     }
     set_.count = 0;
 }
 
+void TileStreamer::SetMaterialCatalog(const MaterialCatalog* catalog) {
+    catalog_ = catalog;
+}
+
 bool TileStreamer::SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
                              const char* build_dir) {
-    // Free all current residents.
+    // Free all current residents (both flat and textured).
     for (int i = 0; i < set_.count; ++i) {
         if (renderers_[i]) {
             renderers_[i]->Free();
             delete renderers_[i];
             renderers_[i] = nullptr;
+        }
+        if (textured_renderers_[i]) {
+            textured_renderers_[i]->Free();
+            delete textured_renderers_[i];
+            textured_renderers_[i] = nullptr;
         }
     }
     set_.count = 0;
@@ -53,18 +68,24 @@ bool TileStreamer::SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
 
     for (int i = 0; i < count; ++i) {
         const V2RoomSpec& rs = *ring[i];
-        LvlRoomRenderer* r = new LvlRoomRenderer();
         const char* path = LocalizePath(rs.lvl_path, build_dir);
-        if (!r->Load(path, rs.render_origin)) {
-            delete r;
-            if (i == 0) {
-                // Center failure is fatal.
-                set_.count = 0;
-                return false;
+        if (kEnableTextures && catalog_) {
+            TexturedRoomRenderer* tr = new TexturedRoomRenderer();
+            if (!tr->Load(path, rs.render_origin, catalog_)) {
+                delete tr;
+                if (i == 0) { set_.count = 0; return false; }
+                continue;
             }
-            continue;  // neighbor failure is skipped (non-fatal)
+            textured_renderers_[set_.count] = tr;
+        } else {
+            LvlRoomRenderer* r = new LvlRoomRenderer();
+            if (!r->Load(path, rs.render_origin)) {
+                delete r;
+                if (i == 0) { set_.count = 0; return false; }
+                continue;
+            }
+            renderers_[set_.count] = r;
         }
-        renderers_[set_.count] = r;
         set_.spec[set_.count] = &rs;
         set_.last_used[set_.count] = 0;
         ++set_.count;
@@ -90,10 +111,16 @@ void TileStreamer::UpdateCamera(const Vec3&, const Mat4&, float) {
                 delete renderers_[victim];
                 renderers_[victim] = nullptr;
             }
+            if (textured_renderers_[victim]) {
+                textured_renderers_[victim]->Free();
+                delete textured_renderers_[victim];
+                textured_renderers_[victim] = nullptr;
+            }
             for (int k = victim; k < set_.count - 1; ++k) {
                 set_.spec[k] = set_.spec[k + 1];
                 set_.last_used[k] = set_.last_used[k + 1];
                 renderers_[k] = renderers_[k + 1];
+                textured_renderers_[k] = textured_renderers_[k + 1];
             }
             --set_.count;
             ++evicted_this_frame_;
@@ -104,6 +131,7 @@ void TileStreamer::UpdateCamera(const Vec3&, const Mat4&, float) {
 void TileStreamer::SetCameraPosition(const Vec3& camera_pos) {
     for (int i = 0; i < set_.count; ++i) {
         if (renderers_[i]) renderers_[i]->SetCameraPosition(camera_pos);
+        if (textured_renderers_[i]) textured_renderers_[i]->SetCameraPosition(camera_pos);
     }
 }
 
@@ -114,7 +142,8 @@ void TileStreamer::DrawLowPriority(const CameraDesc&) {
 
 void TileStreamer::DrawHighPriority(const CameraDesc&) {
     for (int i = 0; i < set_.count; ++i) {
-        if (renderers_[i]) renderers_[i]->Draw();
+        if (textured_renderers_[i]) textured_renderers_[i]->Draw();
+        else if (renderers_[i]) renderers_[i]->Draw();
     }
 }
 

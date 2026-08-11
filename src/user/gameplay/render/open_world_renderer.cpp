@@ -58,4 +58,8 @@ void OpenWorldRenderer::SetCameraPosition(const Vec3& camera_pos) {
     distant_->SetCameraPosition(camera_pos);
 }
 
+void OpenWorldRenderer::SetMaterialCatalog(const MaterialCatalog* catalog) {
+    tile_streamer_->SetMaterialCatalog(catalog);
+}
+
 }  // namespace madeline_cube

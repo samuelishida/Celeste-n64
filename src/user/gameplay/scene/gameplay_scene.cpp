@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 
 #include <libdragon.h>
 #include <rdpq.h>
@@ -19,6 +21,7 @@
 #include "gameplay/input/input_system.hpp"
 #include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/open_world_renderer.hpp"
+#include "gameplay/render/material_catalog.hpp"
 #include "gameplay/render/model.hpp"
 #include "gameplay/render/texture.hpp"
 #include "gameplay/world/actor_world.hpp"
@@ -200,6 +203,9 @@ struct GameplayScene::Impl {
     // Two-pass render orchestrator (Inc 2+). In map-pack mode this drives the
     // arch.md §21 frame order; near pass uses the TileStreamer (Inc 3).
     OpenWorldRenderer open_world_;
+    // Material catalog for the textured near pass (Inc 5). Loaded from the
+    // map-pack's `.manifest`; owned by this Impl.
+    MaterialCatalog material_catalog_;
 
     // Resolve the active room for query/update/render. Routes to the MapRuntime
     // active room when a map-pack is in use, else the legacy single room.
@@ -356,6 +362,33 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
         return false;
     }
     use_map_pack_ = true;
+
+    // Load the material catalog for the textured near pass (Inc 5). The
+    // manifest path is rom:/lvl/<pack>/<pack>.manifest (the bake emits it
+    // alongside the .mappack). A missing manifest is non-fatal — the near
+    // pass falls back to flat-color.
+    material_catalog_.Unload();
+    {
+        // Derive the pack name from the mappack path: "rom:/lvl/<pack>/<pack>.mappack".
+        const char* slash = std::strrchr(mappack_path, '/');
+        const char* fname = slash ? slash + 1 : mappack_path;
+        char pack_name[64] = {};
+        std::strncpy(pack_name, fname, sizeof(pack_name) - 1);
+        char* dot = std::strrchr(pack_name, '.');
+        if (dot) *dot = '\0';
+        // MaterialCatalog::Load expects "rom:/lvl/<name>.manifest"; the pack
+        // manifest lives at rom:/lvl/<pack>/<pack>.manifest, so pass the
+        // "<pack>/<pack>" form.
+        char manifest_key[128] = {};
+        std::snprintf(manifest_key, sizeof(manifest_key), "%s/%s", pack_name, pack_name);
+        if (material_catalog_.Load(manifest_key)) {
+            open_world_.SetMaterialCatalog(&material_catalog_);
+        } else {
+            debugf("[mappack] material catalog load FAILED for %s — flat-color near pass\n",
+                   manifest_key);
+            open_world_.SetMaterialCatalog(nullptr);
+        }
+    }
 
     const ActiveRoomView* active = map_runtime_.Active();
     if (!active) {
@@ -544,6 +577,7 @@ void GameplayScene::Shutdown() {
     // Free the multi-room map-pack runtime (frees the global collision mesh +
     // active room renderer). Safe to call when not using a map-pack (no-op).
     impl_->map_runtime_.Reset();
+    impl_->material_catalog_.Unload();
 
     if (impl_->room.coll_mesh) {
         physics::FreeCollMesh(impl_->room.coll_mesh);

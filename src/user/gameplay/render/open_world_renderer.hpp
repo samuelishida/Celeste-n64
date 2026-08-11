@@ -86,6 +86,10 @@ public:
                    const char* build_dir);
     void SetCameraPosition(const Vec3& camera_pos);
 
+    // Set the material catalog for the textured near pass (Inc 5). Forwarded
+    // to the tile streamer. The catalog is owned by the caller.
+    void SetMaterialCatalog(const class MaterialCatalog* catalog);
+
 private:
     TileStreamer* tile_streamer_ = nullptr;  // Inc 3 near pass
     DistantWorldRenderer* distant_ = nullptr;

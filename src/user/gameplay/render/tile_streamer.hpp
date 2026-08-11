@@ -12,6 +12,14 @@
 namespace madeline_cube {
 
 class LvlRoomRenderer;
+class TexturedRoomRenderer;
+class MaterialCatalog;
+
+// Texturing gate (Inc 5). When true, the near pass uses `TexturedRoomRenderer`
+// (per-material sprites); when false, it uses the flat-color `LvlRoomRenderer`
+// (the validated fallback). Defaults ON; can be disabled if RDP state-change
+// cost is too high.
+inline constexpr bool kEnableTextures = true;
 
 // ── Resident-pool constants ──────────────────────────────────────────
 // `kMaxRing` is the near-pass resident capacity: the center cell + its
@@ -136,6 +144,11 @@ public:
     bool SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
                    const char* build_dir = nullptr);
 
+    // Set the material catalog used by the textured near pass (Inc 5). The
+    // catalog is owned by the caller (GameplayScene) and must outlive the
+    // streamer. Pass nullptr to force the flat-color fallback.
+    void SetMaterialCatalog(const MaterialCatalog* catalog);
+
     void UpdateCamera(const Vec3& camera_pos, const Mat4& inv_view_proj,
                       float ground_y);
 
@@ -151,6 +164,8 @@ public:
 private:
     ResidentSet set_;
     LvlRoomRenderer* renderers_[kMaxRing] = {};
+    TexturedRoomRenderer* textured_renderers_[kMaxRing] = {};
+    const MaterialCatalog* catalog_ = nullptr;
     int evicted_this_frame_ = 0;
 };
 
