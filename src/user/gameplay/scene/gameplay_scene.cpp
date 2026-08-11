@@ -21,6 +21,7 @@
 #include "gameplay/input/input_system.hpp"
 #include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/open_world_renderer.hpp"
+#include "gameplay/render/fog_math.hpp"
 #include "gameplay/render/material_catalog.hpp"
 #include "gameplay/render/model.hpp"
 #include "gameplay/render/texture.hpp"
@@ -388,6 +389,13 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
                    manifest_key);
             open_world_.SetMaterialCatalog(nullptr);
         }
+    }
+
+    // Configure the distant-pass fog (Inc 6). The horizon fades into a
+    // blue-grey atmosphere to hide the distant/near transition.
+    {
+        FogParams fog = MakeFog(300.0f, 1200.0f, {120.0f, 150.0f, 180.0f});
+        open_world_.SetFog(fog);
     }
 
     const ActiveRoomView* active = map_runtime_.Active();

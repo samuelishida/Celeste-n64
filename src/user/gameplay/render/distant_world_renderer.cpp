@@ -114,6 +114,10 @@ void DistantWorldRenderer::UpdateCamera(const Vec3& camera_pos,
     camera_pos_ = camera_pos;
 }
 
+void DistantWorldRenderer::SetFog(const FogParams& fog) {
+    fog_ = fog;
+}
+
 void DistantWorldRenderer::Render(const CameraDesc& cam) {
     // Build the render list, culled + distance-ordered (arch.md §8).
     DistantRenderItem order[64];
@@ -123,6 +127,17 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
     // arch.md §7-8: Z off, draw farthest first, then restore Z.
     rdpq_sync_pipe();
     rdpq_mode_zbuf(false, false);
+
+    // Fog (Inc 6): configure the RDP fog mode + color/range for the distant
+    // pass so the horizon fades into the atmosphere. Torn down after.
+    if (fog_.enabled && ValidateFogRange(fog_)) {
+        rdpq_mode_fog(RDPQ_FOG_STANDARD);
+        rdpq_set_fog_color((color_t){
+            (uint8_t)fog_.color.x, (uint8_t)fog_.color.y,
+            (uint8_t)fog_.color.z, 0xFF});
+        t3d_fog_set_range(fog_.min, fog_.max);
+        t3d_fog_set_enabled(true);
+    }
 
     // Sort back-to-front: BuildDistantRenderList sets priority = distance², so
     // descending priority draws far cells first.
@@ -139,6 +154,11 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
         }
     }
 
+    // Tear down fog + Z before the near pass.
+    if (fog_.enabled) {
+        t3d_fog_set_enabled(false);
+        rdpq_mode_fog(0);
+    }
     rdpq_sync_pipe();
     rdpq_mode_zbuf(true, true);
     (void)cam;
