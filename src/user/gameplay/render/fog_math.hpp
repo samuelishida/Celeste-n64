@@ -13,8 +13,11 @@ struct FogParams {
 };
 
 // The maximum allowed fog min-distance (arch.md §27 clamps excessively high
-// values because they can cause RDP problems).
-inline constexpr float kFogMaxMinDistance = 1000.0f;
+// values because they can cause RDP problems). Raised from 1000 to 4000 so the
+// fog onset can track the distant projection's far plane (full map diagonal,
+// ~2700 for Forsaken City) — the z-split fix widened the distant far, and the
+// old 1000 clamp would silently cap the fog start.
+inline constexpr float kFogMaxMinDistance = 4000.0f;
 
 // Build fog params, clamping `min_dist` to a sane maximum (arch.md §27).
 inline FogParams MakeFog(float min_dist, float max_dist, const Vec3& color) {

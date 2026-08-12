@@ -1,11 +1,37 @@
 #include "gameplay/render/open_world_renderer.hpp"
 
+#include <t3d/t3d.h>
+
 #include "gameplay/render/distant_world_renderer.hpp"
 #include "gameplay/render/skybox.hpp"
 #include "gameplay/render/tile_streamer.hpp"
 #include "gameplay/world/mappack_loader.hpp"
 
 namespace madeline_cube {
+
+namespace {
+
+// Attach a viewport with the given projection (camera-at-origin look_at).
+// The camera-at-origin coupling is load-bearing: model matrices are
+// camera-relative (LvlRoomRenderer::SetCameraPosition rebases by
+// render_origin - camera_pos), so the view must ALSO be camera-at-origin —
+// origin at zero, target offset by -camera — or geometry double-offsets and
+// pops (see gameplay_scene.cpp:830-840). The switch order is mandatory:
+// set_projection → look_at → attach (attach unconditionally emits both
+// matrices; skipping look_at pushes the new projection with a stale camera).
+void AttachCameraAtOriginViewport(T3DViewport* viewport, const CameraDesc& cam) {
+    t3d_viewport_set_projection(viewport, T3D_DEG_TO_RAD(cam.fov_deg),
+                                cam.near, cam.far);
+    const T3DVec3 origin = {{0.0f, 0.0f, 0.0f}};
+    const T3DVec3 target = {{cam.target.x - cam.pos.x,
+                             cam.target.y - cam.pos.y,
+                             cam.target.z - cam.pos.z}};
+    const T3DVec3 up = {{0.0f, 1.0f, 0.0f}};
+    t3d_viewport_look_at(viewport, &origin, &target, &up);
+    t3d_viewport_attach(viewport);
+}
+
+}  // namespace
 
 OpenWorldRenderer::OpenWorldRenderer()
     : tile_streamer_(new TileStreamer()),
@@ -32,6 +58,13 @@ OpenWorldRenderer::~OpenWorldRenderer() {
 }
 
 void OpenWorldRenderer::RenderDistant(const CameraDesc& cam) {
+    // Inc 2 / z-split: switch to the distant projection (near=ring edge,
+    // far=map diagonal) so distant cells past the near far-plane (800) actually
+    // rasterize instead of clipping. The skybox draws under this projection
+    // (Z-off, no near/far dependence — safe).
+    if (viewport_) {
+        AttachCameraAtOriginViewport(static_cast<T3DViewport*>(viewport_), cam);
+    }
     // Inc 6: the skybox is drawn first (rotation-only transform), then the
     // distant cells with fog.
     skybox_->Draw(cam);
@@ -41,10 +74,19 @@ void OpenWorldRenderer::RenderDistant(const CameraDesc& cam) {
 
 void OpenWorldRenderer::RenderLowPriority(const CameraDesc& cam) {
     // Inc 2 stub: tile_streamer_ low-priority is a no-op. Inc 5 fills it in.
+    // NOTE: this pass currently runs under the DISTANT projection (the switch
+    // back to near happens in RenderHighPriority). When this pass draws water,
+    // it must re-attach the near projection first — see z-split plan.
     tile_streamer_->DrawLowPriority(cam);
 }
 
 void OpenWorldRenderer::RenderHighPriority(const CameraDesc& cam) {
+    // Inc 2 / z-split: restore the near projection (20..800) so the detailed
+    // ring renders under the gameplay clip planes. Intra-frame only — the top
+    // of the next frame re-attaches near in GameplayScene::Render.
+    if (viewport_) {
+        AttachCameraAtOriginViewport(static_cast<T3DViewport*>(viewport_), cam);
+    }
     tile_streamer_->DrawHighPriority(cam);
 }
 

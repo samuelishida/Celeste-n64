@@ -129,8 +129,9 @@ void DistantWorldRenderer::SetFog(const FogParams& fog) {
 void DistantWorldRenderer::Render(const CameraDesc& cam) {
     // Inc 2 / D2: horizontal full FOV from the vertical FOV + 4:3 aspect
     // (hfov = 2·atan(tan(vfov/2)·(4/3))). The cull depth range is the DISTANT
-    // pass clip range (cam.near/cam.far), not the near camera's — cells behind
-    // the near far-plane must still be drawn here.
+    // pass clip range (cam.near/cam.far) in WORLD-SPACE units — near = just
+    // past the resident ring, far = full map diagonal (see MakeDistantCamera).
+    // Cells behind the near far-plane must still be drawn here.
     const float vfov_rad = cam.fov_deg * 0.5f * (kLodPi / 180.0f);
     const float hfov_deg = 2.0f * std::atan(std::tan(vfov_rad) * (4.0f / 3.0f)) *
                            (180.0f / kLodPi);

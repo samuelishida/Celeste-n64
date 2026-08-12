@@ -32,9 +32,9 @@ int main() {
 
     // Clamp: an excessively high min is clamped to kFogMaxMinDistance.
     {
-        const FogParams f = MakeFog(5000.0f, 1200.0f, {120.0f, 150.0f, 180.0f});
+        const FogParams f = MakeFog(5000.0f, 6000.0f, {120.0f, 150.0f, 180.0f});
         expect(f.min == kFogMaxMinDistance, "excessive min clamped to max");
-        // After clamping, min (1000) < max (1200) still holds.
+        // After clamping, min (4000) < max (6000) still holds.
         expect(ValidateFogRange(f), "clamped range still valid");
     }
 
