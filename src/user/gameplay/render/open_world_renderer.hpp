@@ -2,7 +2,6 @@
 
 #include "gameplay/math_types.hpp"
 #include "gameplay/render/pass_camera_math.hpp"
-#include "gameplay/render/tile_visibility.hpp"  // Mat4, Mat4Invert (Inc 4 / D4)
 #include "n64/frame_arena.hpp"
 #include "n64/profiler.hpp"
 
@@ -106,14 +105,12 @@ public:
                    const char* build_dir);
     void SetCameraPosition(const Vec3& camera_pos);
 
-    // Inc 4 / D4: per-frame near-pass visibility update. `inv_view_proj` is
-    // the inverse of the WORLD-SPACE near view-projection (pos/target/fov,
-    // planes 20..800) — NOT the camera-at-origin view used for drawing, since
-    // `ResolveVisibleTiles` projects NDC corners back to WORLD XZ tile indices.
-    // `ground_y` is the Y plane at which the frustum is intersected (unused by
-    // the XZ projection; kept for signature clarity).
-    void UpdateCamera(const Vec3& camera_pos, const Mat4& inv_view_proj,
-                      float ground_y);
+    // Inc 4 / D4: per-frame near-pass update. The near pass draws ALL
+    // residents every frame (the pool is bounded to the center + Chebyshev-1
+    // ring, ≤9 cells), so this only runs the over-capacity eviction safety net
+    // — no frustum visibility resolution (cell-level culling would cut
+    // geometry that overflows a cell boundary).
+    void UpdateCamera();
 
     // Set the material catalog for the textured near pass (Inc 5). Forwarded
     // to the tile streamer. The catalog is owned by the caller.

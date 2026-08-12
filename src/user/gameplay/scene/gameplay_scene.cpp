@@ -26,7 +26,6 @@
 #include "gameplay/render/material_catalog.hpp"
 #include "gameplay/render/model.hpp"
 #include "gameplay/render/texture.hpp"
-#include "gameplay/render/tile_visibility.hpp"  // Mat4, Mat4Invert (Inc 4 / D4)
 #include "gameplay/world/actor_world.hpp"
 #include "gameplay/world/entity_dispatch.hpp"
 #include "gameplay/actor/cassette_actor.hpp"
@@ -883,38 +882,11 @@ void GameplayScene::Render() {
             // Reset the frame-scoped arena + profiler phases (Inc 7).
             impl_->open_world_.BeginFrame();
 
-            // Inc 4 / D4: drive the near-pass visibility culling from the
-            // WORLD-SPACE near camera. `ResolveVisibleTiles` projects NDC
-            // corners back to WORLD XZ tile indices, so inv_view_proj MUST be
-            // the world-space view/proj (real camera pos/target, planes
-            // 20..800) — NOT the camera-at-origin view used for drawing (that
-            // would cull in a camera-relative frame and drop the wrong cells).
-            {
-                const T3DVec3 eye = {{
-                    impl_->camera.position.x, impl_->camera.position.y,
-                    impl_->camera.position.z}};
-                const T3DVec3 target = {{
-                    impl_->camera.target.x, impl_->camera.target.y,
-                    impl_->camera.target.z}};
-                const T3DVec3 up = {{0.0f, 1.0f, 0.0f}};
-                T3DMat4 view, proj, camproj;
-                t3d_mat4_look_at(&view, &eye, &target, &up);
-                t3d_mat4_perspective(&proj, T3D_DEG_TO_RAD(fov_deg),
-                                     /*aspect=*/4.0f / 3.0f, 20.0f, 800.0f);
-                t3d_mat4_mul(&camproj, &proj, &view);
-                // Copy to the host-safe Mat4 (column-major, same layout as
-                // fm_mat4_t.m[col][row]) and invert. On a singular matrix
-                // (shouldn't happen), skip culling this frame — draw all, never
-                // a black screen.
-                Mat4 world = Mat4::Identity();
-                for (int c = 0; c < 4; ++c) {
-                    for (int r = 0; r < 4; ++r) world.m[c * 4 + r] = camproj.m[c][r];
-                }
-                if (Mat4Invert(world)) {
-                    impl_->open_world_.UpdateCamera(impl_->camera.position,
-                                                    world, 0.0f);
-                }
-            }
+            // Inc 4 / D4: the near pass draws ALL residents every frame (the
+            // pool is bounded to the center + Chebyshev-1 ring), so there is no
+            // per-frame frustum visibility culling to drive here. The hook
+            // only runs the over-capacity eviction safety net.
+            impl_->open_world_.UpdateCamera();
 
             const MapSpecV2& spec = impl_->map_runtime_.Spec();
             const AABB world_bounds = UnionRoomsAABB(spec.rooms, spec.room_count);

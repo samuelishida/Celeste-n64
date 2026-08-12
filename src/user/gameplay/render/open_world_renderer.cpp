@@ -46,8 +46,7 @@ OpenWorldRenderer::OpenWorldRenderer()
     tile_streamer_->SetProfiler(&profiler_);
     distant_->SetCounters(&counters_);
     // Inc 5 / D6: forward the frame-scoped arena so the distant render list
-    // and the near-pass visible snapshot are allocated per-frame from it.
-    tile_streamer_->SetArena(&arena_);
+    // is allocated per-frame from it.
     distant_->SetArena(&arena_);
 }
 
@@ -140,12 +139,10 @@ void OpenWorldRenderer::SetCameraPosition(const Vec3& camera_pos) {
     distant_->SetCameraPosition(camera_pos);
 }
 
-void OpenWorldRenderer::UpdateCamera(const Vec3& camera_pos,
-                                     const Mat4& inv_view_proj,
-                                     float ground_y) {
-    // Inc 4 / D4: forward the world-space inverse view-projection to the near
-    // pass so it can resolve which residents are actually visible this frame.
-    tile_streamer_->UpdateCamera(camera_pos, inv_view_proj, ground_y);
+void OpenWorldRenderer::UpdateCamera() {
+    // Inc 4 / D4: forward to the near pass. The near pass draws ALL residents
+    // every frame (bounded ring), so this only runs the eviction safety net.
+    tile_streamer_->UpdateCamera();
 }
 
 void OpenWorldRenderer::SetMaterialCatalog(const MaterialCatalog* catalog) {

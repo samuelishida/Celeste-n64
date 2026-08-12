@@ -164,15 +164,7 @@ public:
     // upload cost is measured separately from the high-priority pass total.
     void SetProfiler(n64::FrameProfiler* profiler);
 
-    // Attach the frame-scoped arena (Inc 5 / D6). The per-frame visible-tile
-    // snapshot (`ResolveVisibleTiles` output) is allocated from it; a
-    // null/empty arena falls back to a small stack buffer. The resident ring
-    // + renderers stay persistent member state — never the arena (it resets
-    // every frame; putting the ring there would thrash streaming).
-    void SetArena(n64::FrameArena* arena);
-
-    void UpdateCamera(const Vec3& camera_pos, const Mat4& inv_view_proj,
-                      float ground_y);
+    void UpdateCamera();
 
     void SetCameraPosition(const Vec3& camera_pos);
 
@@ -190,18 +182,7 @@ private:
     const MaterialCatalog* catalog_ = nullptr;
     RenderCounters* counters_ = nullptr;      // per-frame draw counters (Inc 1 / D7)
     n64::FrameProfiler* profiler_ = nullptr;  // per-phase profiler (Inc 1 / D7)
-    n64::FrameArena* arena_ = nullptr;        // frame-scoped arena (Inc 5 / D6)
     int evicted_this_frame_ = 0;
-
-    // The map-pack spec (Inc 4 / D4). Stored as a pointer from the last
-    // `SetCenter` — the caller (MapRuntime) owns the spec for the map lifetime,
-    // and the resident set already stores `const V2RoomSpec*` pointers into it.
-    const MapSpecV2* spec_ = nullptr;
-
-    // Per-frame near-pass visibility mask (Inc 4 / D4). Index 0 (center) is
-    // ALWAYS true (transition/respawn safety — never a black frame). Filled by
-    // `UpdateCamera` from `ResolveVisibleTiles`; read by `DrawHighPriority`.
-    bool visible_[kMaxRing] = {};
 };
 
 }  // namespace madeline_cube
