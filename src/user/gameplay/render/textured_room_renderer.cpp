@@ -275,6 +275,12 @@ void TexturedRoomRenderer::Draw() const {
             if (sprite) {
                 t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH));
                 rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+                // RDPQ_COMBINER_TEX_FLAT = (TEX0,0,PRIM,0) = TEX0 * PRIM, so
+                // primColor MUST be white here or the texture is tinted by
+                // whatever primColor the distant pass (or a flat run) last
+                // left — which changes with camera angle and makes colors
+                // shift as the camera rotates.
+                rdpq_set_prim_color(RGBA32(0xFF, 0xFF, 0xFF, 0xFF));
                 rdpq_sprite_upload(TILE0, sprite, NULL);
                 if (counters_) ++counters_->texture_uploads;  // Inc 1 / D7
             } else {
@@ -322,6 +328,10 @@ void TexturedRoomRenderer::Draw() const {
             if (sprite) {
                 t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH));
                 rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+                // Same primColor-to-white requirement as the run path (see
+                // above): TEX_FLAT = TEX0 * PRIM, so a stale primColor from the
+                // distant pass would tint this textured batch.
+                rdpq_set_prim_color(RGBA32(0xFF, 0xFF, 0xFF, 0xFF));
                 rdpq_sprite_upload(TILE0, sprite, NULL);
                 if (counters_) ++counters_->texture_uploads;  // Inc 1 / D7
             } else {
