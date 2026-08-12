@@ -178,13 +178,17 @@ def main() -> int:
             # No renderable geometry — remove any stale distant file.
             if distant_path.exists():
                 distant_path.unlink()
-        # Render origin = the cell's world-space CENTER (XZ), Y=0. Using the
-        # center keeps every vertex within ±cell_w/2 of the origin, so the
-        # int16 kPosScale packing never overflows even for far cells.
-        cell_w = args.chunk_size * args.scale
-        render_origin = ((k[0] + 0.5) * cell_w, 0.0, (k[1] + 0.5) * cell_w)
         # World AABB from the cell's polygons.
         amin, amax = _chunk_world_aabb(c)
+        # Render origin = the cell's world-space CENTER (XZ) and the center of
+        # the cell's height AABB (Y). Using the center keeps every vertex
+        # within ±cell_w/2 in X/Z and ±(amax[1]-amin[1])/2 in Y of the origin,
+        # so the int16 kPosScale packing never overflows even for far cells or
+        # tall mountain geometry. (Y=0 would overflow once |world.y| > ~1024.)
+        cell_w = args.chunk_size * args.scale
+        render_origin = ((k[0] + 0.5) * cell_w,
+                         (amin[1] + amax[1]) * 0.5,
+                         (k[1] + 0.5) * cell_w)
         # Spawn records for this cell.
         spawns = []
         for s in c.spawns:

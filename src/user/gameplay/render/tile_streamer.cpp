@@ -60,18 +60,10 @@ void TileStreamer::SetProfiler(n64::FrameProfiler* profiler) {
     profiler_ = profiler;
 }
 
-void TileStreamer::SetArena(n64::FrameArena* arena) {
-    arena_ = arena;
-}
-
 bool TileStreamer::SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
                              const char* build_dir) {
-    // Inc 4 / D4: remember the spec for per-frame visibility resolution, and
-    // reset the visibility mask so only the center draws until the next
-    // `UpdateCamera` (transition/respawn safety — no black frame).
-    spec_ = &spec;
-    for (int i = 0; i < kMaxRing; ++i) visible_[i] = false;
-    visible_[0] = true;
+    // Inc 4 / D4: the near pass draws ALL residents every frame, so there is
+    // no per-frame visibility mask to reset here.
 
     // Free all current residents (both flat and textured).
     for (int i = 0; i < set_.count; ++i) {
@@ -122,14 +114,16 @@ bool TileStreamer::SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
     return set_.count > 0;
 }
 
-void TileStreamer::UpdateCamera(const Vec3&, const Mat4& inv_view_proj,
-                                float ground_y) {
+void TileStreamer::UpdateCamera() {
     // The ring is kept fresh by `SetCenter`, which the orchestrator calls on
     // every cross-cell transition (GameplayScene::TransitionToRoom / BootMapPack).
-    // This per-frame hook resolves the scanline-visibility set (arch.md §15)
-    // so DrawHighPriority draws only the visible residents (Inc 4 / D4).
-    // The existing eviction/over-capacity branch runs independently of the
-    // visibility mask and is preserved.
+    // The near pass draws ALL residents every frame (the pool is bounded to the
+    // center + Chebyshev-1 ring, ≤9 cells), so there is no per-frame frustum
+    // visibility resolution: a brush is assigned to a cell by its center and
+    // can overflow into a neighbor cell, so cell-level culling would cut
+    // geometry at the cell boundary when the camera rotates. This hook only
+    // runs the over-capacity eviction safety net (currently unreachable — the
+    // ring never exceeds kMaxRing — but preserved for streaming robustness).
     evicted_this_frame_ = 0;
     if (set_.OverCapacity()) {
         while (set_.count > set_.capacity) {
@@ -155,32 +149,6 @@ void TileStreamer::UpdateCamera(const Vec3&, const Mat4& inv_view_proj,
             ++evicted_this_frame_;
         }
     }
-
-    // Inc 4 / D4: mark the center always visible, then resolve which residents
-    // the near camera actually sees (top-view frustum projection to world XZ).
-    for (int i = 0; i < kMaxRing; ++i) visible_[i] = false;
-    visible_[0] = true;  // center always drawn (transition/respawn safety)
-    if (set_.count <= 0 || !spec_) return;
-    const float tile_size = spec_->chunk_size * spec_->scale;
-    if (tile_size <= 0.0f) return;
-
-    // Inc 5 / D6: allocate the per-frame visible-tile snapshot from the
-    // frame-scoped arena (reset each frame). kMaxRing pointers is a few
-    // hundred bytes — 64 KB is ample. Fall back to a small stack buffer if the
-    // arena is absent or exhausted (a mis-accounted frame must not crash).
-    const V2RoomSpec* stack_visible[kMaxRing] = {};
-    const V2RoomSpec** visible = stack_visible;
-    if (arena_) {
-        const V2RoomSpec** buf = static_cast<const V2RoomSpec**>(
-            arena_->Alloc(sizeof(const V2RoomSpec*) * kMaxRing));
-        if (buf) visible = buf;
-    }
-    const int n = ResolveVisibleTiles(*spec_, inv_view_proj, ground_y,
-                                      tile_size, visible, kMaxRing);
-    for (int v = 0; v < n; ++v) {
-        const int idx = set_.IndexOf(visible[v]);
-        if (idx >= 0 && idx < kMaxRing) visible_[idx] = true;
-    }
 }
 
 void TileStreamer::SetCameraPosition(const Vec3& camera_pos) {
@@ -196,11 +164,17 @@ void TileStreamer::DrawLowPriority(const CameraDesc&) {
 }
 
 void TileStreamer::DrawHighPriority(const CameraDesc&) {
+    // Inc 4 / D4 + z-split fix: draw ALL residents every frame. The resident
+    // pool is already bounded to the near ring (center + Chebyshev-1, ≤9
+    // cells), so drawing them all has no memory/streaming cost. The per-frame
+    // frustum visibility gate was removed because it culls by whole grid cell,
+    // but a brush is assigned to a cell by its center and can visually
+    // overflow into a neighbor cell — so a neighbor's geometry can still be on
+    // screen even when the frustum-on-ground polygon stops touching that
+    // cell's grid index, producing a straight cut at the cell boundary when
+    // the camera rotates. Drawing the whole (small) ring eliminates the cut
+    // with negligible cost.
     for (int i = 0; i < set_.count; ++i) {
-        // Inc 4 / D4: draw only visible residents. Index 0 (center) is ALWAYS
-        // drawn — if UpdateCamera hasn't run this frame (or culled everything),
-        // only the center draws, so there is never a black frame.
-        if (i != 0 && (i >= kMaxRing || !visible_[i])) continue;
         if (textured_renderers_[i]) {
             // Inc 1 / D7: measure the textured near-pass draw (which includes
             // the TMEM sprite uploads) under kPhaseTextureUpload so the upload
