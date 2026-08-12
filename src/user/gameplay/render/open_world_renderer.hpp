@@ -18,18 +18,21 @@ struct PassCameras {
 
 // Derive both pass cameras from one world-space camera. `tile_size` is the
 // world tile/cell size; `lod_scale` is the coordinate packing scale for the
-// distant pass (used in Inc 4), NOT a clip-plane multiplier.
+// distant pass (used in Inc 4), NOT a clip-plane multiplier. `world_bounds` is
+// the union of all room AABBs (nullable → distant far falls back to a default).
 // Host-testable — no N64 types.
 inline PassCameras BuildPassCameras(const Vec3& camera_pos,
                                     const Vec3& camera_target,
                                     float fov_deg, float near_plane,
                                     float far_plane, float tile_size,
-                                    float lod_scale) {
+                                    float lod_scale,
+                                    const AABB* world_bounds = nullptr) {
     const Vec3 up = {0.0f, 1.0f, 0.0f};
     PassCameras p;
     p.near_cam = MakeNearCamera(fov_deg, near_plane, far_plane,
                                 camera_pos, camera_target, up);
-    p.distant_cam = MakeDistantCamera(p.near_cam, tile_size, lod_scale);
+    p.distant_cam = MakeDistantCamera(p.near_cam, tile_size, lod_scale,
+                                      world_bounds);
     return p;
 }
 
@@ -119,6 +122,14 @@ public:
     // Set the fog applied to the distant pass (Inc 6).
     void SetFog(const class FogParams& fog);
 
+    // Set the viewport used to switch projections between the distant and near
+    // passes (Inc 2 / z-split). The distant pass attaches its own projection
+    // (near=ring edge, far=map diagonal); the near pass restores 20..800.
+    // Set once from GameplayScene; null disables the switch (host tests).
+    // Stored as void* so this header stays host-safe (T3DViewport is a t3d
+    // typedef; the .cpp casts to the real type).
+    void SetViewport(void* viewport) { viewport_ = viewport; }
+
     // Reset the frame-scoped arena at the start of each frame (Inc 7).
     void BeginFrame();
 
@@ -136,6 +147,7 @@ private:
     TileStreamer* tile_streamer_ = nullptr;  // Inc 3 near pass
     DistantWorldRenderer* distant_ = nullptr;
     Skybox* skybox_ = nullptr;
+    void* viewport_ = nullptr;  // Inc 2 / z-split projection switch (T3DViewport*)
     Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};
     n64::FrameArena arena_;  // frame-scoped transient allocations
     n64::FrameProfiler profiler_;  // per-phase timing

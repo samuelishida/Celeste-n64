@@ -153,6 +153,34 @@ int main() {
                "null entries returns 0");
     }
 
+    // World-space convention (Inc 1): near = ring edge (1.5 × tile_size),
+    // far = full map diagonal. A cell inside the ring diagonal is culled; a
+    // cell just past the ring edge is kept; a far cell near the map diagonal
+    // is kept; a cell beyond far is culled.
+    {
+        const float tile_size = 240.0f;
+        const float near_d = tile_size * 1.5f;  // 360 (ring edge)
+        const AABB world_bounds = {{-840.0f, 0.0f, -840.0f}, {840.0f, 0.0f, 840.0f}};
+        const float far_d = MapFarClipDistance(&world_bounds, 1.15f);
+
+        // Cell inside the ring diagonal (dist 240 < near 360): culled.
+        expect(!CellInDistantFrustum(origin, target_px, 60.0f, near_d, far_d,
+                                     {240.0f, 0.0f, 0.0f}),
+               "cell inside ring diagonal is culled (dist < near)");
+        // Cell just past the ring edge (dist 480 > near 360): kept.
+        expect(CellInDistantFrustum(origin, target_px, 60.0f, near_d, far_d,
+                                    {480.0f, 0.0f, 0.0f}),
+               "cell just past ring edge is kept");
+        // Far cell near the map diagonal (straight ahead, within cone): kept.
+        expect(CellInDistantFrustum(origin, target_px, 60.0f, near_d, far_d,
+                                    {far_d * 0.8f, 0.0f, 0.0f}),
+               "far cell near map diagonal is kept");
+        // Cell beyond far: culled.
+        expect(!CellInDistantFrustum(origin, target_px, 60.0f, near_d, far_d,
+                                     {far_d + 100.0f, 0.0f, 0.0f}),
+               "cell beyond far is culled");
+    }
+
     if (failures == 0) {
         std::printf("distant_cull_contract: all checks passed\n");
         return 0;

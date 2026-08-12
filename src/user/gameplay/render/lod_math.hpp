@@ -1,8 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 
 #include "gameplay/math_types.hpp"
+#include "gameplay/world/mappack_loader.hpp"  // AABB, V2RoomSpec
 
 namespace madeline_cube {
 
@@ -12,6 +14,35 @@ inline constexpr float kLevel2MinDistance = 500.0f;
 
 // Pi for degree->radian conversions (no global constant in math_types.hpp).
 inline constexpr float kLodPi = 3.14159265358979f;
+
+// Worst-case camera→cell distance = full map diagonal × margin. Used as the
+// distant pass far clip (cull + projection). Covers a camera at any map corner
+// seeing the opposite corner. Returns 0 if `bounds` is null (caller falls back
+// to a default far).
+inline float MapFarClipDistance(const AABB* bounds, float margin = 1.15f) {
+    if (!bounds) return 0.0f;
+    const float cx = (bounds->min.x + bounds->max.x) * 0.5f;
+    const float cz = (bounds->min.z + bounds->max.z) * 0.5f;
+    const float dx = std::max(std::fabs(bounds->min.x - cx),
+                              std::fabs(bounds->max.x - cx));
+    const float dz = std::max(std::fabs(bounds->min.z - cz),
+                              std::fabs(bounds->max.z - cz));
+    return 2.0f * std::sqrt(dx * dx + dz * dz) * margin;  // diameter × margin
+}
+
+// Union of room AABBs (world XZ extent). Returns an empty AABB if count==0.
+inline AABB UnionRoomsAABB(const V2RoomSpec* rooms, int count) {
+    AABB u = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    if (!rooms || count <= 0) return u;
+    u = rooms[0].world_aabb;
+    for (int i = 1; i < count; ++i) {
+        u.min.x = std::min(u.min.x, rooms[i].world_aabb.min.x);
+        u.min.z = std::min(u.min.z, rooms[i].world_aabb.min.z);
+        u.max.x = std::max(u.max.x, rooms[i].world_aabb.max.x);
+        u.max.z = std::max(u.max.z, rooms[i].world_aabb.max.z);
+    }
+    return u;
+}
 
 // Returns true if `origin` (a cell center in world XZ) is inside the camera's
 // horizontal view cone AND depth range [near_d, far_d]. `hfov_deg` is the

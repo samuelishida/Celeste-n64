@@ -1,16 +1,19 @@
 #pragma once
 
 #include "gameplay/math_types.hpp"
+#include "gameplay/render/lod_math.hpp"  // MapFarClipDistance, AABB
 
 namespace madeline_cube {
 
 // Pure two-pass camera derivation math, shared between the N64 renderer and
-// host tests. Mirrors `arch.md` §5 exactly:
+// host tests. Mirrors `arch.md` §5:
 //   near_cam    : normal gameplay clip planes.
-//   distant_cam : near = near_cam.far * 0.25f * lod_scale;
-//                 far  = tile_size * 1.4f.
+//   distant_cam : near = just past the resident ring (world-space);
+//                 far  = full map diagonal (world-space).
 // `lod_scale` is a coordinate packing scale (analogous to kPosScale) used for
-// compressed distant vertices in Inc 4 — it is NOT a clip-plane multiplier.
+// compressed distant vertices — it is NOT a clip-plane multiplier and no
+// longer affects the distant near plane (retained in the signature for future
+// compressed-coordinate projection work).
 // This header uses only `Vec3` and `float` — no N64 types.
 
 struct CameraDesc {
@@ -36,18 +39,25 @@ inline CameraDesc MakeNearCamera(float fov_deg, float near_plane,
     return c;
 }
 
-// Build the distant-pass camera from the near camera per `arch.md` §5:
-//   distant.near = near.far * 0.25f * lod_scale
-//   distant.far  = tile_size * 1.4f
+// Build the distant-pass camera with world-space cull distances:
+//   distant.near = tile_size * near_margin   (just past the resident ring)
+//   distant.far  = MapFarClipDistance(world_bounds, far_margin)  (full map)
 // The distant camera shares the near camera's position/target/up orientation.
-// Returns a camera with `far <= near` (invalid) if the inputs produce an
-// empty range — the caller must clamp/reject (distant pass would be empty).
+// `world_bounds` is the union of all room AABBs; if null or zero-extent, `far`
+// falls back to `tile_size * 16.0f`. Returns a camera with `far <= near`
+// (invalid) if the inputs produce an empty range — the caller must
+// clamp/reject (distant pass would be empty).
 inline CameraDesc MakeDistantCamera(const CameraDesc& near,
-                                    float tile_size, float lod_scale) {
+                                    float tile_size, float lod_scale,
+                                    const AABB* world_bounds,
+                                    float near_margin = 1.5f,
+                                    float far_margin = 1.15f) {
+    (void)lod_scale;  // retained for future compressed-coordinate projection
     CameraDesc c;
     c.fov_deg = near.fov_deg;
-    c.near = near.far * 0.25f * lod_scale;
-    c.far = tile_size * 1.4f;
+    c.near = tile_size * near_margin;  // world-space ring edge
+    c.far = MapFarClipDistance(world_bounds, far_margin);
+    if (c.far <= 0.0f) c.far = tile_size * 16.0f;  // fallback (null/zero bounds)
     c.pos = near.pos;
     c.target = near.target;
     c.up = near.up;

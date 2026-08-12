@@ -45,6 +45,13 @@ All are compile-time constants, tuned after measuring on device:
 - `kCullMargin` (`src/user/gameplay/render/distant_world_renderer.cpp`): distant
   frustum cone margin. 1.15× current; too tight pops horizon cells, too wide
   draws the whole map. Adjust ±0.05 and re-check a 360° turn.
+- **Distant projection (z-split fix):** the distant pass now uses its own
+  viewport projection — `near` = just past the resident ring (`1.5 × tile_size`),
+  `far` = full map diagonal (`MapFarClipDistance(world_bounds, 1.15)`). The near
+  pass restores 20..800. Fog is derived from the distant far plane
+  (`far*0.4` → `far*0.9`) because `t3d_fog_set_range` operates in the
+  projection's depth space, not world distance. `kFogMaxMinDistance` (4000) is
+  high enough to not clamp the fog onset.
 - `kMaxRing` (`src/user/gameplay/render/tile_streamer.hpp`): near resident pool
   (9). Can grow now that Inc 5 freed the ~720 KB embedded batch arrays, but
   only if memory report (`[memory] used=`) has headroom; visibility culling

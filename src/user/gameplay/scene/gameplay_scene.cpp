@@ -394,9 +394,19 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
     }
 
     // Configure the distant-pass fog (Inc 6). The horizon fades into a
-    // blue-grey atmosphere to hide the distant/near transition.
+    // blue-grey atmosphere to hide the distant/near transition. The fog range
+    // is derived from the distant projection's far plane (full map diagonal)
+    // because t3d_fog_set_range operates in the projection's depth space, not
+    // world distance. Static-by-design (derived from static world_bounds); if
+    // the map ever becomes dynamic, move this into the per-frame distant render.
     {
-        FogParams fog = MakeFog(300.0f, 1200.0f, {120.0f, 150.0f, 180.0f});
+        const MapSpecV2& spec = map_runtime_.Spec();
+        const AABB world_bounds = UnionRoomsAABB(spec.rooms, spec.room_count);
+        const float distant_far = MapFarClipDistance(&world_bounds, 1.15f);
+        // Fog starts at 40% of the distant far and completes at 90% (before the
+        // clip). kFogMaxMinDistance (4000) is high enough to not clamp.
+        FogParams fog = MakeFog(distant_far * 0.4f, distant_far * 0.9f,
+                                {120.0f, 150.0f, 180.0f});
         open_world_.SetFog(fog);
     }
 
@@ -906,12 +916,17 @@ void GameplayScene::Render() {
                 }
             }
 
+            const MapSpecV2& spec = impl_->map_runtime_.Spec();
+            const AABB world_bounds = UnionRoomsAABB(spec.rooms, spec.room_count);
             const PassCameras cams = BuildPassCameras(
                 impl_->camera.position, impl_->camera.target,
                 fov_deg, 20.0f, 800.0f,
-                /*tile_size=*/impl_->map_runtime_.Spec().chunk_size *
-                    impl_->map_runtime_.Spec().scale,
-                /*lod_scale=*/0.25f);
+                /*tile_size=*/spec.chunk_size * spec.scale,
+                /*lod_scale=*/0.25f,
+                /*world_bounds=*/spec.room_count > 0 ? &world_bounds : nullptr);
+            // Inc 2 / z-split: hand the viewport to the orchestrator so it can
+            // switch projections between the distant and near passes.
+            impl_->open_world_.SetViewport(&impl_->viewport);
             impl_->open_world_.Render(cams);
         } else {
             impl_->room_renderer.Draw();
