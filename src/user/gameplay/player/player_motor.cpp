@@ -6,12 +6,7 @@
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/world/world.hpp"
 
-#ifdef __mips__
-#include <libdragon.h>
-#define PM_LOG debugf
-#else
-#define PM_LOG printf
-#endif
+
 
 namespace madeline_cube {
 namespace {
@@ -187,12 +182,16 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
             const float probe = -step_vec.y + kGroundSkin;
             // Use sphere sweep for floor probe to catch platform edges
             GroundHit floor;
-            PM_LOG("[pm] room=%p coll=%p &coll=%p\n",
-                   (void*)&room, (void*)room.coll_mesh, (void*)&room.coll_mesh);
             if (room.coll_mesh) {
                 using namespace physics;
                 const Vec3 probe_origin = {feet_origin.x, feet_origin.y + config_.radius, feet_origin.z};
-                SweepSphereHit sweep = SweepSphereMesh(*room.coll_mesh, probe_origin, {0.0f, -1.0f, 0.0f}, config_.radius, probe);
+                uint32_t nodes = 0;
+                uint32_t* nodes_ptr = room.query_counters ? &nodes : nullptr;
+                SweepSphereHit sweep = SweepSphereMesh(*room.coll_mesh, probe_origin, {0.0f, -1.0f, 0.0f}, config_.radius, probe, nodes_ptr);
+                if (room.query_counters) {
+                    ++room.query_counters->sphere_sweeps;
+                    room.query_counters->bvh_nodes_touched += nodes;
+                }
                 if (sweep.hit) {
                     floor = SweepToGroundHit(room, sweep, probe);
                 } else {

@@ -72,9 +72,15 @@ run_cpp render_budgets_contract tests/render_budgets_contract.cpp
 run_cpp debug_visualization_contract tests/debug_visualization_contract.cpp
 run_cpp debug_flags_contract tests/debug_flags_contract.cpp
 run_cpp distant_cull_contract tests/distant_cull_contract.cpp
+run_cpp distant_distance_contract tests/distant_distance_contract.cpp
 run_cpp batch_coalesce_contract tests/batch_coalesce_contract.cpp
+run_cpp material_sort_contract tests/material_sort_contract.cpp
+run_cpp distant_sort_contract tests/distant_sort_contract.cpp
 run_cpp near_visibility_contract tests/near_visibility_contract.cpp
 run_cpp renderer_memory_contract tests/renderer_memory_contract.cpp
+run_cpp render_counters_contract tests/render_counters_contract.cpp
+run_cpp distant_cellstats_contract tests/distant_cellstats_contract.cpp
+run_cpp input_system_smoke tests/input_system_smoke.cpp
 
 # ── Pattern C (links mappack_loader.cpp) ─────────────────────────────
 # These need a baked map-pack fixture. Use the repo's baked staging dir if
