@@ -243,9 +243,15 @@ inline bool AabbInflated(const AABB& box, const Vec3& qmin, const Vec3& qmax) {
 // RaycastMesh
 // ---------------------------------------------------------------------------
 
-RayHit RaycastMesh(const CollMesh& mesh,
-                   Vec3 origin, Vec3 dir, float max_t,
-                   BackfaceCull cull)
+namespace {
+
+// Shared raycast traversal body; 'visitor' receives each leaf and returns true
+// when it updates the best hit (so callers can track bvh_nodes_touched).
+template <typename LeafVisitor>
+RayHit RaycastMeshGeneric(const CollMesh& mesh,
+                          Vec3 origin, Vec3 dir, float max_t,
+                          BackfaceCull cull, LeafVisitor visitor,
+                          uint32_t* out_nodes_touched)
 {
     if (mesh.header->bvh_node_count == 0) return {};
 
@@ -255,19 +261,13 @@ RayHit RaycastMesh(const CollMesh& mesh,
         std::fabs(dir.z) > 1e-7f ? 1.f / dir.z : 1e30f,
     };
 
-    // Segment endpoint p1 = origin + dir * max_t
     Vec3 p1 = { origin.x + dir.x * max_t,
                 origin.y + dir.y * max_t,
                 origin.z + dir.z * max_t };
 
     RayHit best;
-    // best_world_t is in the same units as RayAabb (world-space distance along
-    // dir).  SegmentTriangle returns t ∈ [0,1] (fraction of segment p0→p1
-    // whose length is max_t world units), so h.t * max_t gives world distance.
-    // Keeping two separate variables avoids the unit-mismatch that would let
-    // RayAabb prune valid nodes prematurely.
-    float best_world_t = max_t + 1.f;  // world units; used by RayAabb
-    float best_t = 2.f;                // segment param [0,1]; used for comparison
+    float best_world_t = max_t + 1.f;
+    float best_t = 2.f;
 
     uint16_t stack[64];
     int top = 0;
@@ -277,47 +277,129 @@ RayHit RaycastMesh(const CollMesh& mesh,
         uint16_t idx = stack[--top];
         const CollBvhNode& node = mesh.bvh_nodes[idx];
         AABB aabb = DequantAabb(mesh, node.aabb_min, node.aabb_max);
+        if (out_nodes_touched) ++(*out_nodes_touched);
 
         if (!RayAabb(origin, inv_dir, aabb, best_world_t)) continue;
 
         if (node.count_or_zero > 0) {
-            // Leaf — test triangles
             int first = node.left_or_first;
             int count = node.count_or_zero;
-            for (int ti = first; ti < first + count; ++ti) {
-                const CollTriangle& ct = mesh.triangles[ti];
-                const Vec3& a = mesh.world_verts[ct.i0];
-                const Vec3& b = mesh.world_verts[ct.i1];
-                const Vec3& c = mesh.world_verts[ct.i2];
-                TriHit h = SegmentTriangle(origin, p1, a, b, c, cull);
-                if (h.hit && h.t < best_t) {
-                    best_world_t   = h.t * max_t;
-                    best_t         = h.t;
-                    best.hit       = true;
-                    best.t         = h.t;
-                    best.point     = h.point;
-                    // normalize and ensure normal faces ray origin
-                    Vec3 n = h.normal;
-                    float len = std::sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
-                    if (len > 1e-7f) { n.x /= len; n.y /= len; n.z /= len; }
-                    float nd = n.x*dir.x + n.y*dir.y + n.z*dir.z;
-                    if (nd > 0.f) { n.x = -n.x; n.y = -n.y; n.z = -n.z; }
-                    best.normal    = n;
-                    best.face_id   = (int)ct.face_id;
-                    best.material  = ct.material;
-                }
+            if (visitor(mesh, origin, p1, dir, cull, first, count, max_t, best, best_world_t, best_t)) {
+                // best updated by visitor
             }
         } else {
-            // Internal — push right then left (left is processed first = LIFO)
-            {
-                uint16_t right_child = (uint16_t)(idx + node.left_or_first);
-                uint16_t left_child  = (uint16_t)(idx + 1);
-                if (top + 2 <= 64
-                    && right_child < mesh.header->bvh_node_count
-                    && left_child  < mesh.header->bvh_node_count) {
-                    stack[top++] = right_child;  // right
-                    stack[top++] = left_child;   // left
-                }
+            uint16_t right_child = (uint16_t)(idx + node.left_or_first);
+            uint16_t left_child  = (uint16_t)(idx + 1);
+            if (top + 2 <= 64
+                && right_child < mesh.header->bvh_node_count
+                && left_child  < mesh.header->bvh_node_count) {
+                stack[top++] = right_child;
+                stack[top++] = left_child;
+            }
+        }
+    }
+    return best;
+}
+
+inline bool RaycastLeafTriangles(const CollMesh& mesh,
+                                 const Vec3& origin, const Vec3& p1, const Vec3& dir,
+                                 BackfaceCull cull,
+                                 int first, int count, float max_t,
+                                 RayHit& best, float& best_world_t, float& best_t)
+{
+    bool updated = false;
+    for (int ti = first; ti < first + count; ++ti) {
+        const CollTriangle& ct = mesh.triangles[ti];
+        const Vec3& a = mesh.world_verts[ct.i0];
+        const Vec3& b = mesh.world_verts[ct.i1];
+        const Vec3& c = mesh.world_verts[ct.i2];
+        TriHit h = SegmentTriangle(origin, p1, a, b, c, cull);
+        if (h.hit && h.t < best_t) {
+            // The segment length is |dir| * max_t, so h.t * max_t is world distance.
+            best_world_t = h.t * max_t;
+            best_t         = h.t;
+            best.hit       = true;
+            best.t         = h.t;
+            best.point     = h.point;
+            Vec3 n = h.normal;
+            float len = std::sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
+            if (len > 1e-7f) { n.x /= len; n.y /= len; n.z /= len; }
+            float nd = n.x*dir.x + n.y*dir.y + n.z*dir.z;
+            if (nd > 0.f) { n.x = -n.x; n.y = -n.y; n.z = -n.z; }
+            best.normal    = n;
+            best.face_id   = (int)ct.face_id;
+            best.material  = ct.material;
+            updated = true;
+        }
+    }
+    return updated;
+}
+
+}  // namespace
+
+RayHit RaycastMesh(const CollMesh& mesh,
+                   Vec3 origin, Vec3 dir, float max_t,
+                   BackfaceCull cull,
+                   uint32_t* out_nodes_touched)
+{
+    return RaycastMeshGeneric(mesh, origin, dir, max_t, cull,
+                              RaycastLeafTriangles, out_nodes_touched);
+}
+
+// ---------------------------------------------------------------------------
+// RaycastMeshVertical
+// ---------------------------------------------------------------------------
+
+RayHit RaycastMeshVertical(const CollMesh& mesh,
+                           Vec3 origin, float dir_y, float max_t,
+                           BackfaceCull cull,
+                           uint32_t* out_nodes_touched)
+{
+    if (mesh.header->bvh_node_count == 0) return {};
+    if (std::fabs(dir_y) < 1e-7f) return {};
+
+    const float inv_dir_y = 1.f / dir_y;
+    const float p1_y = origin.y + dir_y * max_t;
+    const float oy = origin.y;
+
+    RayHit best;
+    float best_world_t = max_t + 1.f;
+    float best_t = 2.f;
+
+    uint16_t stack[64];
+    int top = 0;
+    stack[top++] = 0;
+
+    while (top > 0) {
+        uint16_t idx = stack[--top];
+        const CollBvhNode& node = mesh.bvh_nodes[idx];
+        if (out_nodes_touched) ++(*out_nodes_touched);
+        // Fast X/Z AABB rejection; Y slab handled after.
+        AABB aabb = DequantAabb(mesh, node.aabb_min, node.aabb_max);
+        if (origin.x < aabb.min.x || origin.x > aabb.max.x ||
+            origin.z < aabb.min.z || origin.z > aabb.max.z) {
+            continue;
+        }
+        float t1 = (aabb.min.y - oy) * inv_dir_y;
+        float t2 = (aabb.max.y - oy) * inv_dir_y;
+        if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+        if (t1 < 0.f) t1 = 0.f;
+        if (t2 > best_world_t || t1 > t2) continue;
+
+        if (node.count_or_zero > 0) {
+            int first = node.left_or_first;
+            int count = node.count_or_zero;
+            Vec3 p1 = { origin.x, p1_y, origin.z };
+            Vec3 dir = { 0.0f, dir_y, 0.0f };
+            RaycastLeafTriangles(mesh, origin, p1, dir, cull, first, count, max_t, best, best_world_t, best_t);
+        } else {
+            uint16_t right_child = (uint16_t)(idx + node.left_or_first);
+            uint16_t left_child  = (uint16_t)(idx + 1);
+            if (top + 2 <= 64
+                && right_child < mesh.header->bvh_node_count
+                && left_child  < mesh.header->bvh_node_count) {
+                stack[top++] = right_child;
+                stack[top++] = left_child;
             }
         }
     }
@@ -330,7 +412,8 @@ RayHit RaycastMesh(const CollMesh& mesh,
 
 SweepSphereHit SweepSphereMesh(const CollMesh& mesh,
                                 const Vec3& origin, const Vec3& dir,
-                                float radius, float max_dist)
+                                float radius, float max_dist,
+                                uint32_t* out_nodes_touched)
 {
     if (mesh.header->bvh_node_count == 0) return {};
 
@@ -362,6 +445,7 @@ SweepSphereHit SweepSphereMesh(const CollMesh& mesh,
     while (top > 0) {
         uint16_t idx = stack[--top];
         const CollBvhNode& node = mesh.bvh_nodes[idx];
+        if (out_nodes_touched) ++(*out_nodes_touched);
         AABB aabb = DequantAabb(mesh, node.aabb_min, node.aabb_max);
 
         if (!AabbInflated(aabb, qmin, qmax)) continue;
@@ -432,7 +516,8 @@ SweepSphereHit SweepSphereMesh(const CollMesh& mesh,
 // ---------------------------------------------------------------------------
 
 int OverlapAabbMesh(const CollMesh& mesh, const AABB& query,
-                    int* out_face_ids, int max_out)
+                    int* out_face_ids, int max_out,
+                    uint32_t* out_nodes_touched)
 {
     if (mesh.header->bvh_node_count == 0) return 0;
 
@@ -444,6 +529,7 @@ int OverlapAabbMesh(const CollMesh& mesh, const AABB& query,
     while (top > 0 && count < max_out) {
         uint16_t idx = stack[--top];
         const CollBvhNode& node = mesh.bvh_nodes[idx];
+        if (out_nodes_touched) ++(*out_nodes_touched);
         AABB aabb = DequantAabb(mesh, node.aabb_min, node.aabb_max);
 
         if (!AABBOverlap(aabb, query)) continue;

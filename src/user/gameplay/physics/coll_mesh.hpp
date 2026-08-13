@@ -104,20 +104,37 @@ struct SweepSphereHit {
 
 // Raycast from 'origin' in direction 'dir' (NOT normalized; t is in [0, max_t]).
 // Returns nearest hit with t <= max_t.
+// 'out_nodes_touched' is optional; when non-null it receives the number of BVH
+// nodes visited during traversal.
 RayHit RaycastMesh(const CollMesh& mesh,
                    Vec3 origin, Vec3 dir, float max_t,
-                   BackfaceCull cull = BackfaceCull::Ignore);
+                   BackfaceCull cull = BackfaceCull::Ignore,
+                   uint32_t* out_nodes_touched = nullptr);
+
+// Axis-aligned vertical raycast fast path for floor/ceiling queries.
+// Direction must be exactly +Y or -Y.  Avoids the generic slab setup and
+// traverses fewer BVH nodes because the X/Z origin is fixed.
+RayHit RaycastMeshVertical(const CollMesh& mesh,
+                           Vec3 origin, float dir_y, float max_t,
+                           BackfaceCull cull = BackfaceCull::Ignore,
+                           uint32_t* out_nodes_touched = nullptr);
 
 // Sweep sphere of 'radius' from 'origin' along 'dir' (dir is normalised, distance <= max_dist).
 // Returns nearest hit.
+// 'out_nodes_touched' is optional; when non-null it receives the number of BVH
+// nodes visited during traversal.
 SweepSphereHit SweepSphereMesh(const CollMesh& mesh,
                                 const Vec3& origin, const Vec3& dir,
-                                float radius, float max_dist);
+                                float radius, float max_dist,
+                                uint32_t* out_nodes_touched = nullptr);
 
 // Returns face_ids of all triangles whose AABB overlaps 'query'.
 // Writes at most 'max_out' face_ids to 'out_face_ids'. Returns count written.
+// 'out_nodes_touched' is optional; when non-null it receives the number of BVH
+// nodes visited during traversal.
 int OverlapAabbMesh(const CollMesh& mesh, const AABB& query,
-                    int* out_face_ids, int max_out);
+                    int* out_face_ids, int max_out,
+                    uint32_t* out_nodes_touched = nullptr);
 
 // Binary search over sorted SurfaceLink[].
 // Returns INVALID_OWNER if face_id is not a moving surface.

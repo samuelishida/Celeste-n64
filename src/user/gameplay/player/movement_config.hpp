@@ -37,19 +37,6 @@ struct MovementConfig {
     float climb_hop_up_speed = 80.0f;
     float climb_hop_forward_speed = 40.0f;
 
-    // Skid state (OG Celeste64 §16): running fast and pushing opposite.
-    float skid_dot_threshold = -0.7f;
-    float skid_start_accel = 300.0f;
-    float skid_accel = 500.0f;
-    float end_skid_speed = 51.2f;  // MaxSpeed * 0.8
-
-    // Slope speed multiplier (§42): scale ground speed by ground_normal.
-    float slope_downhill_mult = 1.25f;
-    float slope_uphill_mult = 0.75f;
-
-    // Ice (§): low-friction ground multiplier.
-    float ice_friction_mult = 0.1f;
-
     // Stamina drain rates (OG Celeste64 values)
     float stamina_hold_drain = 10.0f;      // per second while holding wall (idle)
     float stamina_up_drain = 20.0f;        // per second while climbing upward
@@ -85,26 +72,5 @@ struct MovementProfile {
 
     float climb_speed = 40.0f;
 };
-
-// Derive a MovementProfile from a MovementConfig. Only fields that have a
-// MovementConfig source are overridden; profile-only fields keep their
-// hardcoded defaults. MovementConfig is the source of truth for tuning.
-inline MovementProfile ToProfile(const MovementConfig& config) {
-    MovementProfile profile;
-    profile.run_max_speed = config.run_speed;
-    profile.ground_acceleration = config.acceleration;
-    profile.air_acceleration = config.acceleration;
-    profile.air_turn_acceleration = config.acceleration;
-    profile.ground_deceleration = config.friction;
-    profile.past_max_decel = config.past_max_deceleration;
-    profile.dash_speed = config.dash_speed;
-    profile.dash_active_time = config.dash_duration;
-    profile.dash_cooldown = config.dash_cooldown;
-    profile.dash_long_jump_speed = config.dash_jump_speed;
-    profile.wall_jump_horizontal_speed = config.wall_jump_speed_x;
-    profile.wall_jump_vertical_speed = config.wall_jump_speed_y;
-    profile.climb_speed = config.climb_speed;
-    return profile;
-}
 
 }  // namespace madeline_cube

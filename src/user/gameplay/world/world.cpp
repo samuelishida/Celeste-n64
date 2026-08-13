@@ -138,9 +138,16 @@ static GroundHit RaycastRoomMesh(const Room& room, const physics::CollMesh& mesh
                                   const Vec3& origin, const Vec3& direction,
                                   float max_distance, BackfacePolicy backface) {
     using namespace physics;
+    RayHit h;
+    uint32_t nodes = 0;
+    uint32_t* nodes_ptr = room.query_counters ? &nodes : nullptr;
     // Always use Ignore so inverted-winding triangles are found; apply the same
     // dot-product filter as legacy RaycastRoomSource to respect BackfacePolicy.
-    RayHit h = RaycastMesh(mesh, origin, direction, max_distance, BackfaceCull::Ignore);
+    h = RaycastMesh(mesh, origin, direction, max_distance, BackfaceCull::Ignore, nodes_ptr);
+    if (room.query_counters) {
+        ++room.query_counters->raycasts;
+        room.query_counters->bvh_nodes_touched += nodes;
+    }
     if (!h.hit) return GroundHit{};
     if (backface == BackfacePolicy::Ignore) {
         const float dot = h.normal.x*direction.x + h.normal.y*direction.y + h.normal.z*direction.z;
@@ -167,7 +174,13 @@ static int QueryWallsMesh(const Room& room, const physics::CollMesh& mesh,
         { point.x + radius, point.y + radius, point.z + radius },
     };
     int candidates[256];
-    int n = OverlapAabbMesh(mesh, q, candidates, 256);
+    uint32_t nodes = 0;
+    uint32_t* nodes_ptr = room.query_counters ? &nodes : nullptr;
+    int n = OverlapAabbMesh(mesh, q, candidates, 256, nodes_ptr);
+    if (room.query_counters) {
+        ++room.query_counters->overlap_queries;
+        room.query_counters->bvh_nodes_touched += nodes;
+    }
 
     int count = 0;
     for (int i = 0; i < n && count < max_hits; ++i) {
@@ -568,15 +581,24 @@ void WorldCollision::Reset() {
     }
 }
 
+static Room MakeCounterRoom(const physics::CollMesh* mesh, CollisionQueryCounters* counters) {
+    Room r{};
+    r.coll_mesh = const_cast<physics::CollMesh*>(mesh);
+    r.query_counters = counters;
+    return r;
+}
+
 GroundHit WorldCollision::QueryFloor(const Vec3& origin, float max_distance) const {
     if (!mesh_) return GroundHit{};
-    return RaycastRoomMesh(Room{}, *mesh_, origin, {0.0f, -1.0f, 0.0f},
+    Room r = MakeCounterRoom(mesh_, const_cast<CollisionQueryCounters*>(&counters_));
+    return RaycastRoomMesh(r, *mesh_, origin, {0.0f, -1.0f, 0.0f},
                            max_distance, BackfacePolicy::Ignore);
 }
 
 CeilingHit WorldCollision::QueryCeiling(const Vec3& origin, float max_distance) const {
     if (!mesh_) return CeilingHit{};
-    GroundHit ground = RaycastRoomMesh(Room{}, *mesh_, origin, {0.0f, 1.0f, 0.0f},
+    Room r = MakeCounterRoom(mesh_, const_cast<CollisionQueryCounters*>(&counters_));
+    GroundHit ground = RaycastRoomMesh(r, *mesh_, origin, {0.0f, 1.0f, 0.0f},
                                        max_distance, BackfacePolicy::Ignore);
     if (!ground.hit) return CeilingHit{};
     return CeilingHit{
@@ -593,7 +615,8 @@ CeilingHit WorldCollision::QueryCeiling(const Vec3& origin, float max_distance) 
 int WorldCollision::QueryWalls(const Vec3& point, float radius,
                                WallHit* out_hits, int max_hits) const {
     if (!mesh_) return 0;
-    return QueryWallsMesh(Room{}, *mesh_, point, radius, out_hits, max_hits);
+    Room r = MakeCounterRoom(mesh_, const_cast<CollisionQueryCounters*>(&counters_));
+    return QueryWallsMesh(r, *mesh_, point, radius, out_hits, max_hits);
 }
 
 WallHit WorldCollision::QueryWallNearest(const Vec3& point, float radius) const {

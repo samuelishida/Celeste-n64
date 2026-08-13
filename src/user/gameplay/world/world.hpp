@@ -3,7 +3,11 @@
 #include <cstdint>
 
 #include "gameplay/math_types.hpp"
-#include "gameplay/player/player_state.hpp"
+
+// Forward-declare PlayerState so headers that only need world query types don't
+// pull the full player state enum set.
+namespace madeline_cube { struct PlayerState; }
+
 
 namespace madeline_cube {
 
@@ -92,6 +96,17 @@ struct CollisionQueryDiagnostics {
     int wall_candidate_hits = 0;
 };
 
+// Aggregate counters surfaced to ROM telemetry.  All queries against static
+// world geometry (the global CollMesh) increment these once per frame.
+struct CollisionQueryCounters {
+    uint32_t raycasts = 0;
+    uint32_t sphere_sweeps = 0;
+    uint32_t overlap_queries = 0;
+    uint32_t bvh_nodes_touched = 0;
+
+    void Reset() { raycasts = sphere_sweeps = overlap_queries = bvh_nodes_touched = 0; }
+};
+
 // Backface policy for raycasts: ignore faces whose normal points away from the ray.
 enum class BackfacePolicy : uint8_t {
     Ignore = 0,
@@ -147,6 +162,12 @@ struct Room {
     // Triangle mesh collision for static world geometry. Set by level_loader
     // when .colmesh sidecar exists. All static queries use this path.
     physics::CollMesh* coll_mesh = nullptr;
+
+    // Optional counter sink for diagnostic telemetry.  When non-null, static
+    // query helpers increment it for every raycast/sweep/overlap issued against
+    // this room's coll_mesh.  Owned by the caller (usually WorldCollision).
+    // mutable so const Room& query methods can update it.
+    mutable CollisionQueryCounters* query_counters = nullptr;
 };
 
 // Source-shaped surface lookup. Returns null when no surface exists for owner_id.
@@ -212,8 +233,13 @@ public:
     int QueryWalls(const Vec3& point, float radius, WallHit* out_hits, int max_hits) const;
     WallHit QueryWallNearest(const Vec3& point, float radius) const;
 
+    CollisionQueryCounters& Counters() { return counters_; }
+    const CollisionQueryCounters& Counters() const { return counters_; }
+    void ResetCounters() { counters_.Reset(); }
+
 private:
     physics::CollMesh* mesh_ = nullptr;
+    mutable CollisionQueryCounters counters_;
 };
 
 }  // namespace madeline_cube
