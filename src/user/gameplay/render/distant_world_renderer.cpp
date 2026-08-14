@@ -16,39 +16,49 @@ namespace madeline_cube {
 
 namespace {
 
-// Frustum-cull cone margin (Inc 2 / D2). >1 widens the cone so horizon cells
-// don't pop at the exact screen edge. Tuned in Inc 6.
-constexpr float kCullMargin = 1.15f;
-
 // Direction-selection close threshold (Inc 4 / compressed-LOD): when the
 // camera is within this distance of a cell center (XZ), use the camera's own
 // facing instead of the cell→camera delta to avoid unstable directional
 // selection (Lambert §12). ≈ 0.5 × cell size (cells are 240 world units).
 constexpr float kDirectionCloseThreshold = 120.0f;
 
+// Free one entry's distinct directional meshes (Inc 2 / double-free fix):
+// dedupe the shared-slot pointers, Free() + delete each distinct mesh once,
+// then null all slots. Idempotent. Shared by `FreeEntries` and the
+// `StreamToCenter` eviction path so the cleanup can't drift.
+void FreeEntryMeshes(DistantLodEntry& en) {
+    LvlRoomRenderer* distinct[DistantLodEntry::kMaxDirMeshes] = {};
+    const int n = CollectDistinctMeshes(en, distinct);
+    for (int k = 0; k < n; ++k) {
+        distinct[k]->Free();
+        delete distinct[k];
+    }
+    for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
+        en.meshes[d] = nullptr;
+    }
+}
+
 }  // namespace
 
 // Free every loaded distant mesh. All four directional `meshes[d]` slots may
-// hold DISTINCT meshes (Inc 4 / compressed-LOD), so every non-null slot is
-// freed exactly once. Idempotent.
+// hold DISTINCT meshes (Inc 4 / compressed-LOD), but a single-direction
+// `.dlod` path can put the SAME pointer in all 4 slots — so we dedupe
+// distinct pointers per entry and free each exactly once (Inc 2 / double-free
+// fix). Idempotent.
 void DistantWorldRenderer::FreeEntries() {
     for (int i = 0; i < entry_count_; ++i) {
-        DistantLodEntry& en = entries_[i];
-        for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
-            if (en.meshes[d]) {
-                en.meshes[d]->Free();
-                delete en.meshes[d];
-                en.meshes[d] = nullptr;
-            }
-        }
+        FreeEntryMeshes(entries_[i]);
     }
     entry_count_ = 0;
 }
 
 DistantWorldRenderer::~DistantWorldRenderer() {
     FreeEntries();
+    if (shared_matrix_fp_) {
+        free_uncached(shared_matrix_fp_);
+        shared_matrix_fp_ = nullptr;
+    }
 }
-
 bool DistantWorldRenderer::Load(const MapSpecV2& spec, const char* build_dir) {
     // Free any existing distant meshes (all directional slots).
     FreeEntries();
@@ -57,62 +67,122 @@ bool DistantWorldRenderer::Load(const MapSpecV2& spec, const char* build_dir) {
     for (int i = 0; i < spec.room_count; ++i) {
         const V2RoomSpec& rs = spec.rooms[i];
         if (rs.id[0] == '\0') continue;
+        LoadCell(rs, build_dir);
+    }
+    return entry_count_ > 0;
+}
 
-        // Distant geometry: prefer the compact `.dlod` (Inc 3 / compressed-LOD),
-        // falling back to the `*_distant.lvl` when the `.dlod` is absent
-        // (rollback-safe until Inc 5 removes the LVL2 distant path). The cell
-        // id is the room id (e.g. "cell_00_00"); the pack dir is extracted
-        // from the room's lvl_path (rom:/lvl/<pack>/<chunk>.lvl).
-        char pack_dir[V2RoomSpec::kPathLen] = {};
-        {
-            const char* p = rs.lvl_path;
-            // Skip "rom:/lvl/".
-            const char* start = std::strstr(p, "lvl/");
-            if (start) start += 4;
-            else start = p;
-            const char* slash = std::strchr(start, '/');
-            size_t len = slash ? static_cast<size_t>(slash - start)
-                               : std::strlen(start);
-            if (len >= sizeof(pack_dir)) len = sizeof(pack_dir) - 1;
-            std::memcpy(pack_dir, start, len);
-            pack_dir[len] = '\0';
-        }
+bool DistantWorldRenderer::LoadCell(const V2RoomSpec& rs,
+                                    const char* build_dir) {
+    // Distant geometry: the compact `.dlod` (Inc 3 / compressed-LOD). The cell
+    // id is the room id (e.g. "cell_00_00"); the pack dir is extracted from
+    // the room's lvl_path (rom:/lvl/<pack>/<chunk>.lvl).
+    char pack_dir[V2RoomSpec::kPathLen] = {};
+    {
+        const char* p = rs.lvl_path;
+        // Skip "rom:/lvl/".
+        const char* start = std::strstr(p, "lvl/");
+        if (start) start += 4;
+        else start = p;
+        const char* slash = std::strchr(start, '/');
+        size_t len = slash ? static_cast<size_t>(slash - start)
+                           : std::strlen(start);
+        if (len >= sizeof(pack_dir)) len = sizeof(pack_dir) - 1;
+        std::memcpy(pack_dir, start, len);
+        pack_dir[len] = '\0';
+    }
 
-        // Load the .dlod (all 4 directions) or fall back to the .lvl.
-        LvlRoomRenderer* meshes[DistantLodEntry::kMaxDirMeshes] = {};
-        int loaded = LoadDistantCellDlodAll(pack_dir, rs.id, rs.render_origin,
-                                            kLodScale, build_dir, meshes);
-        if (loaded <= 0) {
-            // A cell with no distant geometry (no renderable geometry) is
-            // skipped.
-            continue;
-        }
+    // Load the .dlod (all 4 directions).
+    LvlRoomRenderer* meshes[DistantLodEntry::kMaxDirMeshes] = {};
+    Vec3 shared_origin = {0.0f, 0.0f, 0.0f};
+    int loaded = LoadDistantCellDlodAll(pack_dir, rs.id, kLodScale, build_dir,
+                                        meshes, &shared_origin);
+    if (loaded <= 0) {
+        // A cell with no distant geometry (no renderable geometry) is skipped.
+        return false;
+    }
+    // Inc 3 / D2: the DLOD header origin is the SHARED map-center origin (the
+    // source of truth for packing). Store it once (all cells share it) so the
+    // pass can build ONE camera-relative matrix.
+    shared_origin_ = shared_origin;
 
-        DistantLodEntry& en = entries_[entry_count_];
-        en = DistantLodEntry{};
-        en.lod_scale = kLodScale;
-        en.priority = 1;
-        en.cell_ix = rs.cell_ix;
-        en.cell_iz = rs.cell_iz;
-        en.origin = rs.render_origin;
-        en.child_count = 0;
-        for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
-            en.meshes[d] = meshes[d];
+    DistantLodEntry& en = entries_[entry_count_];
+    en = DistantLodEntry{};
+    en.lod_scale = kLodScale;
+    en.priority = 1;
+    en.cell_ix = rs.cell_ix;
+    en.cell_iz = rs.cell_iz;
+    en.origin = rs.render_origin;
+    // Inc 4 / D3: the cell's world XZ AABB (from the manifest) for the
+    // extent-aware distant cull.
+    en.aabb = rs.world_aabb;
+    en.child_count = 0;
+    for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
+        en.meshes[d] = meshes[d];
+        // Inc 3 / D2: distant meshes draw under the pass-shared matrix — mark
+        // them so SetCameraPosition is a no-op and DrawBlockOnly is the draw
+        // path.
+        if (meshes[d]) meshes[d]->SetExternalMatrixOwner();
+    }
+    ++entry_count_;
+    return true;
+}
+
+bool DistantWorldRenderer::StreamToCenter(const MapSpecV2& spec,
+                                          const V2RoomSpec& center,
+                                          const char* build_dir) {
+    // Inc 6 / D5: stream the distant tier by camera cell. Compute the target
+    // resident set (cells within kDistantStreamRadius Chebyshev of `center`),
+    // evict entries outside it (via the Inc 2 dedupe), load missing in-radius
+    // cells. Runs in SetCenter (Update phase, before the frame's Render builds
+    // its draw list) — no eviction between list-build and draw (use-after-free
+    // guard).
+    if (spec.room_count > 64) return false;  // entries_ cap + rooms[] bounds
+
+    // 1. Evict entries outside the radius. Walk backwards so removals don't
+    //    shift unvisited indices.
+    for (int i = entry_count_ - 1; i >= 0; --i) {
+        DistantLodEntry& en = entries_[i];
+        const int cheb = ChebyshevCellDistance(en.cell_ix, en.cell_iz,
+                                               center.cell_ix, center.cell_iz);
+        if (cheb > kDistantStreamRadius) {
+            FreeEntryMeshes(en);
+            // Shift the tail down.
+            for (int j = i; j < entry_count_ - 1; ++j) {
+                entries_[j] = entries_[j + 1];
+            }
+            --entry_count_;
         }
-        ++entry_count_;
+    }
+
+    // 2. Load missing in-radius cells.
+    for (int i = 0; i < spec.room_count; ++i) {
+        const V2RoomSpec& rs = spec.rooms[i];
+        if (rs.id[0] == '\0') continue;
+        const int cheb = ChebyshevCellDistance(rs.cell_ix, rs.cell_iz,
+                                               center.cell_ix, center.cell_iz);
+        if (cheb > kDistantStreamRadius) continue;
+        // Already resident?
+        bool resident = false;
+        for (int e = 0; e < entry_count_; ++e) {
+            if (entries_[e].cell_ix == rs.cell_ix &&
+                entries_[e].cell_iz == rs.cell_iz) {
+                resident = true;
+                break;
+            }
+        }
+        if (resident) continue;
+        if (entry_count_ >= 64) break;  // entries_ cap
+        LoadCell(rs, build_dir);
     }
     return entry_count_ > 0;
 }
 
 void DistantWorldRenderer::SetCameraPosition(const Vec3& camera_pos) {
+    // Inc 3 / D2: store the camera position only. The shared pass matrix is
+    // rebuilt once per frame in Render() (from shared_origin_ - camera_pos_),
+    // so there is no per-mesh matrix rebuild storm.
     camera_pos_ = camera_pos;
-    for (int i = 0; i < entry_count_; ++i) {
-        for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
-            if (entries_[i].meshes[d]) {
-                entries_[i].meshes[d]->SetCameraPosition(camera_pos);
-            }
-        }
-    }
 }
 
 void DistantWorldRenderer::UpdateCamera(const Vec3& camera_pos,
@@ -174,10 +244,44 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
                   return a.priority > b.priority;
               });
 
+    // Inc 3 / D2: build ONE shared camera-relative matrix for the whole
+    // distant pass (all verts pack against shared_origin_ at kLodScale) and
+    // push it once. Every cell's block draws under it via DrawBlockOnly (no
+    // per-cell push/pop, no per-mesh matrix rebuild). No cells loaded → no-op.
+    // The matrix lives in UNCACHED memory (the RSP DMAs it at command-execution
+    // time, so a cached stack local would be read stale).
+    if (n > 0) {
+        if (!shared_matrix_fp_) {
+            shared_matrix_fp_ = malloc_uncached(sizeof(T3DMat4FP));
+        }
+        if (shared_matrix_fp_) {
+            T3DMat4FP* mat_fp = static_cast<T3DMat4FP*>(shared_matrix_fp_);
+            const float s[3] = {1.0f / kLodScale, 1.0f / kLodScale,
+                                1.0f / kLodScale};
+            const float r[3] = {0, 0, 0};
+            const float p[3] = {shared_origin_.x - camera_pos_.x,
+                                shared_origin_.y - camera_pos_.y,
+                                shared_origin_.z - camera_pos_.z};
+            t3d_mat4fp_from_srt_euler(mat_fp, s, r, p);
+            t3d_matrix_push(mat_fp);
+        }
+    }
+
     for (int i = 0; i < n; ++i) {
         const int e = order[i].cell_index;
         if (e < 0 || e >= entry_count_) continue;
         DistantLodEntry& en = entries_[e];
+        // Inc 5 / D4: skip the exact cells the near pass will draw (overlap
+        // handoff) so no cell is drawn by both passes. The near-draw set is
+        // computed once per frame by the orchestrator.
+        bool in_near_set = false;
+        for (int k = 0; k < near_count_; ++k) {
+            if (en.cell_ix == near_ix_[k] && en.cell_iz == near_iz_[k]) {
+                in_near_set = true;
+                break;
+            }
+        }
+        if (in_near_set) continue;
         // Inc 4 / compressed-LOD: select the directional mesh facing the
         // camera. Near the cell center, use the camera's own facing to avoid
         // unstable selection (Lambert §12). Fall back to meshes[0] if the
@@ -192,7 +296,8 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
         if (!mesh) continue;
         // Inc 1 / D7: count cells drawn (once per cell).
         if (counters_) ++counters_->distant_cells;
-        mesh->Draw();
+        // Inc 3 / D2: draw under the shared pass matrix (no per-cell push).
+        mesh->DrawBlockOnly();
 
         // Inc 2 / instrumentation: attribute this cell's draw cost. The active
         // path (runs vs per-face batches) mirrors Draw()'s own gate exactly, so
@@ -215,6 +320,11 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
             st.verts = mesh->VertexCount();
             st.distance_sq = order[i].distance;
         }
+    }
+
+    // Pop the shared pass matrix (only if we pushed it).
+    if (n > 0 && shared_matrix_fp_) {
+        t3d_matrix_pop(1);
     }
 
     // Tear down fog + Z before the near pass.

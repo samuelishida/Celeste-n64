@@ -183,6 +183,22 @@ def main() -> int:
     v2_rooms: List[V2Room] = []
     # Per-cell distant stats (faces/verts/bytes) for the Inc 1 audit report.
     distant_stats_by_cell: dict = {}
+
+    # Inc 3 / D2: compute ONE shared world origin (map AABB center) for the
+    # distant pass. All distant cells pack relative to this single origin so
+    # the runtime can draw the whole distant pass under ONE camera-relative
+    # matrix (no per-cell origins, no per-mesh matrix rebuild). At kLodScale
+    # 0.25 the full map diagonal (~2000u) packs to ~500 int16 units — far
+    # inside range. The near pass keeps per-cell origins (kPosScale 32).
+    map_min = [float("inf")] * 3
+    map_max = [-float("inf")] * 3
+    for c in chunks.values():
+        amin, amax = _chunk_world_aabb(c)
+        for i in range(3):
+            map_min[i] = min(map_min[i], amin[i])
+            map_max[i] = max(map_max[i], amax[i])
+    shared_origin = tuple((map_min[i] + map_max[i]) * 0.5 for i in range(3))
+
     for k, c in sorted(chunks.items()):
         cid = cell_id(k)
         lvl_path = staging / f"{cid}.lvl"
@@ -202,15 +218,17 @@ def main() -> int:
                          (k[1] + 0.5) * cell_w)
         # Compact `.dlod` (Inc 3/5): the ONLY distant artifact. Inc 4:
         # 4-direction silhouettes by default (`--no-directional` falls back to
-        # a single 360° mesh).
+        # a single 360° mesh). Inc 3 / D2: all cells pack relative to the
+        # SHARED map-center origin (not the per-cell render_origin) so the
+        # distant pass draws under one camera-relative matrix.
         dlod_path = staging / f"{cid}_distant.dlod"
         if args.directional:
             dlod_stats = build_distant_dlod_directional(
-                c, len(build.texture_manifest), render_origin, str(dlod_path),
+                c, len(build.texture_manifest), shared_origin, str(dlod_path),
                 budget=args.distant_budget)
         else:
             dlod_stats = build_distant_dlod(
-                c, len(build.texture_manifest), render_origin, str(dlod_path),
+                c, len(build.texture_manifest), shared_origin, str(dlod_path),
                 budget=args.distant_budget)
         if dlod_stats is None:
             # No renderable geometry — remove any stale distant file.

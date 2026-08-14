@@ -96,20 +96,29 @@ This is the "before" column for the Inc 5 close-out table.
 
 All are compile-time constants, tuned after measuring on device:
 
-- `kCullMargin` (`src/user/gameplay/render/distant_world_renderer.cpp`): distant
-  frustum cone margin. 1.15× current; too tight pops horizon cells, too wide
-  draws the whole map. Adjust ±0.05 and re-check a 360° turn.
+- `kCullMargin` (`src/user/gameplay/render/lod_math.hpp`): distant frustum cone
+  margin. 1.15× current; too tight pops horizon cells, too wide draws the whole
+  map. Adjust ±0.05 and re-check a 360° turn. Shared by the extent-aware AABB
+  cull (`CellAabbInDistantFrustum`) and the renderer (single source of truth).
+- `extent_slack` (`CellAabbInDistantFrustum`): near/far depth slack scaled by
+  the cell half-extent (default 1.0). Tune on device if cells pop at the
+  screen edge.
 - `kDirectionCloseThreshold` (`distant_world_renderer.cpp`): direction-selection
   close threshold (120 world units ≈ 0.5 × cell size). When the camera is within
   this of a cell center, use the camera's own facing to avoid unstable
   directional selection (Lambert §12).
 - **Distant projection (z-split fix):** the distant pass now uses its own
-  viewport projection — `near` = just past the resident ring (`1.5 × tile_size`),
-  `far` = full map diagonal (`MapFarClipDistance(world_bounds, 1.15)`). The near
-  pass restores 20..800. Fog is derived from the distant far plane
-  (`far*0.4` → `far*0.9`) because `t3d_fog_set_range` operates in the
-  projection's depth space, not world distance. `kFogMaxMinDistance` (4000) is
-  high enough to not clamp the fog onset.
+  viewport projection — `near` = the ring FAR EDGE (`1.5 × √2 × tile_size`,
+  ~508u for a 240u cell, so there is no gap/overlap with the near ring), `far` =
+  full map diagonal (`MapFarClipDistance(world_bounds, 1.15)`). The near pass
+  restores 20..800. Fog is derived from the drop threshold
+  (`sqrt(kDistantMaxDist2) * 0.28 → * 0.9` ≈ 370 → 1197) because
+  `t3d_fog_set_range` operates in the projection's depth space, not world
+  distance. **The fog-onset ratio (0.28) is the SINGLE tuning point for the ring
+  boundary** (D7) — it controls where the flat→tex transition sits relative to
+  the fog ramp; all other ring-boundary tuning (near plane, residency) is fixed
+  by the 9-cell budget. `kFogMaxMinDistance` (4000) is high enough to not clamp
+  the fog onset.
 - `kMaxRing` (`src/user/gameplay/render/tile_streamer.hpp`): near resident pool
   (9). Can grow now that Inc 5 freed the ~720 KB embedded batch arrays, but
   only if memory report (`[memory] used=`) has headroom; visibility culling
@@ -118,6 +127,11 @@ All are compile-time constants, tuned after measuring on device:
   per the project decision; D3 coalescing makes it fast.
 - `kPosScale` (near 32) / `kLodScale` (distant 0.25): fixed-point packing;
   don't touch without a precision reason.
+- `kDistantStreamRadius` (`distant_world_renderer.hpp`): the Chebyshev stream
+  radius (6) for the distant tier. Must satisfy the D5 invariant
+  (`radius ≥ ceil(fog_complete/cell + 0.5)`, asserted by
+  `tests/distant_streaming_contract.cpp`) so a cell is fully fogged before it
+  becomes drawable. Larger maps scale this automatically via the invariant.
 - `kVerboseFrameLogging` (`src/user/gameplay/debug_flags.hpp`): false in
   release; flip true for a verbose diagnostics session (per-frame update/tick
   traces + telemetry).
@@ -145,9 +159,26 @@ All are compile-time constants, tuned after measuring on device:
 ### Compressed distant-LOD knobs (`.plans/compressed-distant-lod/`)
 
 - `--distant-budget` (bake, default 20): per-cell face budget (hard ceiling).
-- `--no-directional` (bake): single 360° mesh instead of 4 silhouettes.
+- `--no-directional` (bake): single 360° mesh instead of 4 painter-sorted
+  direction variants.
 - `kDirectionCloseThreshold` (device): see above.
 - `kCullMargin` (device): see above.
+
+### D6 dedup experiment (Inc 7 — measured, not committed)
+
+The distant pass stays **Z-off, distance-primary back-to-front** (far first).
+If device profiling shows prim-color churn matters, the documented experiment
+is a **clean A/B**:
+
+- **(A)** today's Z-off + distance-primary sort;
+- **(B)** Z-on + `dominant_material` grouping.
+
+Enabling a Z test **invalidates the distance-sort rationale** — with Z on, the
+RDP resolves order, so the back-to-front sort is no longer needed and material
+grouping becomes safe. (B) is a self-consistent alternative, not an incremental
+tweak — land it only if the Z-test cost is less than the state changes it
+removes. Record the decision here with device evidence; never a silent
+perf/visual regression.
 
 ### Baseline vs final (compressed-LOD)
 

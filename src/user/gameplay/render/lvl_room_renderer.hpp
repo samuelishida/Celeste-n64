@@ -48,6 +48,15 @@ public:
     // Draw all room geometry. Call within a t3d_frame_start/end pair.
     void Draw() const;
 
+    // Draw the precompiled RSPQ block WITHOUT touching the matrix stack
+    // (Inc 3 / D2). Used by the distant pass, which pushes ONE shared
+    // camera-relative matrix for the whole pass and draws every cell's block
+    // under it. Guards like Draw(): block_ null → legacy per-run/per-batch
+    // emission WITHOUT a matrix push (the caller's shared matrix is already
+    // on the stack — must not add one). Only valid when
+    // `uses_external_matrix_` is set (distant-loaded meshes).
+    void DrawBlockOnly() const;
+
     bool IsLoaded() const { return verts_ != nullptr; }
 
     // Recompute the model-matrix translation so the drawn world is expressed
@@ -56,7 +65,14 @@ public:
     // per-cell render origin (no per-frame re-packing). The near-pass view
     // must ALSO be camera-at-origin (see the CRITICAL coupling note in
     // gameplay_scene.cpp) or geometry is double-offset by `-camera`.
+    // No-op when `uses_external_matrix_` is set (the caller owns the matrix).
     void SetCameraPosition(const Vec3& camera_pos);
+
+    // Mark this renderer as drawing under an EXTERNAL (pass-shared) matrix
+    // (Inc 3 / D2). Set ONLY on distant-loaded meshes; the near pass's
+    // `TileStreamer` renderers keep their per-frame matrix rebuilds. When
+    // set, `SetCameraPosition` is a no-op and `DrawBlockOnly` is the draw path.
+    void SetExternalMatrixOwner() { uses_external_matrix_ = true; }
 
     // Number of faces discarded because they exceeded the batch cap. Must
     // remain zero for a validated artifact.
@@ -181,6 +197,10 @@ private:
 
     Vec3 render_origin_ = {0.0f, 0.0f, 0.0f};
     RenderCounters* counters_ = nullptr;  // per-frame draw counters (Inc 1 / D7)
+    // Inc 3 / D2: when true, this renderer draws under an EXTERNAL
+    // (pass-shared) matrix — `SetCameraPosition` is a no-op and `DrawBlockOnly`
+    // is the draw path. Set only on distant-loaded meshes.
+    bool uses_external_matrix_ = false;
 };
 
 }  // namespace madeline_cube

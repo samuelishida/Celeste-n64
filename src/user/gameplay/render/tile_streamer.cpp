@@ -163,18 +163,36 @@ void TileStreamer::DrawLowPriority(const CameraDesc&) {
     // Inc 5 fills it in.
 }
 
-void TileStreamer::DrawHighPriority(const CameraDesc&) {
-    // Inc 4 / D4 + z-split fix: draw ALL residents every frame. The resident
-    // pool is already bounded to the near ring (center + Chebyshev-1, ≤9
-    // cells), so drawing them all has no memory/streaming cost. The per-frame
-    // frustum visibility gate was removed because it culls by whole grid cell,
-    // but a brush is assigned to a cell by its center and can visually
-    // overflow into a neighbor cell — so a neighbor's geometry can still be on
-    // screen even when the frustum-on-ground polygon stops touching that
-    // cell's grid index, producing a straight cut at the cell boundary when
-    // the camera rotates. Drawing the whole (small) ring eliminates the cut
-    // with negligible cost.
+void TileStreamer::CollectNearDrawSet(const CameraDesc& cam, int out_ix[],
+                                      int out_iz[], int& out_count,
+                                      int out_capacity) const {
+    out_count = 0;
+    if (!out_ix || !out_iz || out_capacity <= 0) return;
+    for (int i = 0; i < set_.count && out_count < out_capacity; ++i) {
+        const V2RoomSpec& rs = *set_.spec[i];
+        if (!CellAabbInNearCone(cam.pos, cam.target, cam.fov_deg, cam.near,
+                                cam.far, rs.world_aabb)) {
+            continue;
+        }
+        out_ix[out_count] = rs.cell_ix;
+        out_iz[out_count] = rs.cell_iz;
+        ++out_count;
+    }
+}
+
+void TileStreamer::DrawHighPriority(const CameraDesc& cam) {
+    // Inc 5 / D4: draw exactly the resident cells whose AABB intersects the
+    // camera cone (AABB-cone test, no grid-index cut). The old grid-index gate
+    // was removed because it cut geometry at cell boundaries during rotation;
+    // an AABB-cone test cannot cut mid-cell. The distant pass skips exactly
+    // this same set (computed once per frame by the orchestrator), so the two
+    // passes are disjoint — no double-draw band, no mid-cell cut.
     for (int i = 0; i < set_.count; ++i) {
+        const V2RoomSpec& rs = *set_.spec[i];
+        if (!CellAabbInNearCone(cam.pos, cam.target, cam.fov_deg, cam.near,
+                                cam.far, rs.world_aabb)) {
+            continue;  // resident but off-cone — not drawn this frame
+        }
         if (textured_renderers_[i]) {
             // Inc 1 / D7: measure the textured near-pass draw (which includes
             // the TMEM sprite uploads) under kPhaseTextureUpload so the upload

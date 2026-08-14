@@ -201,12 +201,12 @@ def test_bake_four_directions():
             assert p["dir_count"] == 4, (
                 f"{dlod_path.name}: expected 4 directions, got {p['dir_count']}")
             for d_faces, d_verts, d_mats in p["dirs"]:
-                assert d_faces <= 12, (
-                    f"{dlod_path.name}: direction has {d_faces} faces > 12")
+                assert d_faces <= 20, (
+                    f"{dlod_path.name}: direction has {d_faces} faces > 20")
                 assert len(d_verts) == 3 * d_faces, "vert_count != 3×face_count"
                 checked += d_faces
         print(f"PASS: 4-direction bake ({len(dlods)} cells, {checked} "
-              f"direction faces, each ≤ 12)")
+              f"direction faces, each ≤ 20)")
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

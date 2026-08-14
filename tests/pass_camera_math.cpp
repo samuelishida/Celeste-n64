@@ -54,11 +54,12 @@ int main() {
     expect(near_eq(pc.near_cam.pos.x, cam_pos.x) && near_eq(pc.near_cam.pos.z, cam_pos.z),
            "near pos preserved");
 
-    // Distant camera: world-space near = ring edge, far = full map diagonal.
-    const float exp_distant_near = tile_size * 1.5f;  // 240*1.5 = 360
+    // Distant camera: world-space near = ring far edge (1.5 × √2 × tile),
+    // far = full map diagonal.
+    const float exp_distant_near = tile_size * 1.5f * 1.41421356f;  // ~508
     const float exp_distant_far = MapFarClipDistance(&world_bounds, 1.15f);
     expect(near_eq(pc.distant_cam.near, exp_distant_near),
-           "distant.near == tile_size * near_margin (ring edge)");
+           "distant.near == tile_size * near_margin (ring far edge)");
     expect(near_eq(pc.distant_cam.far, exp_distant_far),
            "distant.far == MapFarClipDistance(world_bounds, margin)");
 

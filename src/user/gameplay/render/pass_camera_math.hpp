@@ -47,10 +47,16 @@ inline CameraDesc MakeNearCamera(float fov_deg, float near_plane,
 // falls back to `tile_size * 16.0f`. Returns a camera with `far <= near`
 // (invalid) if the inputs produce an empty range — the caller must
 // clamp/reject (distant pass would be empty).
+//
+// Inc 5 / D4: `near_margin` defaults to `1.5 * sqrt(2)` so the distant near
+// plane sits at the ring FAR EDGE (~1.5 × cell × √2 ≈ 508u for a 240u cell) —
+// the corner cells of the 3×3 ring are at that distance, so there is no
+// gap/overlap between the near ring and the distant pass. The ring boundary
+// (square) is then hidden inside the fog ramp (fog onset ~370u).
 inline CameraDesc MakeDistantCamera(const CameraDesc& near,
                                     float tile_size, float lod_scale,
                                     const AABB* world_bounds,
-                                    float near_margin = 1.5f,
+                                    float near_margin = 1.5f * 1.41421356f,
                                     float far_margin = 1.15f) {
     (void)lod_scale;  // retained for future compressed-coordinate projection
     CameraDesc c;

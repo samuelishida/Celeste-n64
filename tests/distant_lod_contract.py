@@ -58,9 +58,9 @@ def bake(out_dir: str) -> None:
 
 
 def read_distant_verts(dlod_path: Path):
-    """Read the packed (x, y, z) vertices from a distant DLOD v1 file.
+    """Read the packed (x, y, z) vertices from a distant DLOD v2 file.
 
-    DLOD v1 layout (big-endian): magic(4), version(4), flags(4),
+    DLOD v2 layout (big-endian): magic(4), version(4), flags(4),
     direction_count(4), face_count(4), vert_count(4), material_count(4),
     origin(12), reserved(4). Then per-direction sections: dir_face_count(4),
     dir_vert_count(4), verts (dir_vert_count × s16 xyz), materials.
@@ -72,7 +72,7 @@ def read_distant_verts(dlod_path: Path):
     magic, version, flags, dir_count, face_count, vert_count, mat_count = \
         struct.unpack_from(">IIIIIII", data, 0)
     assert magic == 0x444C4F44, f"bad DLOD magic {magic:#x}"
-    assert version == 1, f"bad DLOD version {version}"
+    assert version == 2, f"bad DLOD version {version} (expected 2)"
     ox, oy, oz = struct.unpack_from(">fff", data, 28)
     offset = 44
     verts = []
@@ -138,8 +138,10 @@ def test_distant_lod_fits_int16_at_max_far():
         distant_files = sorted(staging.glob("*_distant.dlod"))
         assert len(distant_files) > 0, "no distant .dlod files emitted by the bake"
         checked = 0
+        shared_origins = set()
         for lp in distant_files:
             verts, origin = read_distant_verts(lp)
+            shared_origins.add(origin)
             checked += len(verts)
             for v in verts:
                 # The .dlod packs (world - origin) * kLodScale; the packed
@@ -156,8 +158,13 @@ def test_distant_lod_fits_int16_at_max_far():
                 if abs(dx) > MAX_INT16:
                     raise AssertionError(
                         f"{lp.name} vertex {v} packs to dx={dx:.0f} > 32767")
+        # Inc 3 / D2: ALL cells share ONE origin (the map center) so the
+        # distant pass draws under a single shared matrix.
+        assert len(shared_origins) == 1, (
+            f"expected all cells to share one origin, got {len(shared_origins)}")
         print(f"PASS: {len(distant_files)} distant cells, {checked} packed "
-              f"vertices within int16 at kLodScale={K_LOD_SCALE}")
+              f"vertices within int16 at kLodScale={K_LOD_SCALE}, "
+              f"shared origin {shared_origins.pop()}")
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
