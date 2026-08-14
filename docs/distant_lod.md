@@ -1,22 +1,22 @@
-# Distant LOD (DLOD v1) — format, bake knobs, resident memory
+# Distant LOD (DLOD v2) — format, bake knobs, resident memory
 
 The distant pass renders the whole-map horizon from a heavily-decimated,
 compactly-packed, per-direction representation. This doc pins the binary
 layout, the bake knobs, and the resident-memory math so future bakes/renderers
 don't re-derive them.
 
-## DLOD v1 binary layout (big-endian)
+## DLOD v2 binary layout (big-endian)
 
 ```
 header (44 B):
   u32 magic   0x444C4F44 ("DLOD")
-  u32 version 1
+  u32 version 2
   u32 flags            (bit0 = per-direction)
   u32 direction_count  (1, or 4)
   u32 face_count       (total across directions)
   u32 vert_count       (total across directions; = 3 × face_count)
   u32 material_count   (≤ manifest size)
-  f32 origin_x/y/z     (cell render origin, world)
+  f32 origin_x/y/z     (SHARED map-center origin, world)
   u8  reserved[4]
 per-direction section (direction_count ×):
   u32 dir_face_count
@@ -27,23 +27,60 @@ per-direction section (direction_count ×):
   materials: dir_face_count × u8 material_id  (index into the shared manifest)
 ```
 
-- Vertices are packed relative to the **cell origin** at `kLodScale = 0.25`, so
-  the int16 headroom rule is `cell_extent * kLodScale ≤ 32767`.
+- **Version 2 (Inc 3 / D2):** the header `origin` is the **SHARED map-center
+  origin** — ALL cells pack relative to it, so the runtime draws the whole
+  distant pass under ONE camera-relative matrix (no per-cell origins, no
+  per-mesh matrix rebuild). A stale v1 `.dlod` (per-cell origins) fails to
+  parse at runtime (cell skipped, never misrendered). The byte layout is
+  otherwise unchanged from v1.
+- Vertices are packed relative to the shared origin at `kLodScale = 0.25`, so
+  the int16 headroom rule is **`map_diagonal × kLodScale ≤ ~28000`** (a ~2000u
+  map diagonal packs to ~500 int16 units — comfortable headroom).
 - Faces are **contiguous vertex triples grouped by material at bake time**, so
   the runtime needs no sort and no indexed-draw support — it copies the triples
   into `T3DVertPacked` and builds one span-`FaceSpec` per face.
 - The layout is explicit so the Python writer (`tools/writers/dlod_writer.py`)
   and the C++ parser (`src/user/gameplay/render/dlod_format.hpp`) cannot drift.
 
+## Same-geometry, painter-sorted direction variants (Inc 1)
+
+Each cell is decimated **once** to a single 360° mesh, then the 4 direction
+sections reference the **same triangle set** reordered back-to-front along
+each direction axis. The order is `(material_id, dot(centroid, dir_normal))`
+ascending (stable), so material runs still form AND within-material painter
+order survives (the runtime's `SortFacesByMaterial` is a stable sort). Because
+all 4 directions share the same geometry, switching directions never swaps the
+mesh — no popping at direction boundaries, no horizon holes. `--no-directional`
+keeps the single-mesh fallback.
+
 ## Bake knobs
 
 - `--distant-budget` (default 20): per-cell face budget (hard ceiling) for the
-  single-mesh form. Enforced by vertex-clustering on a coarsening grid, then by
-  dropping the smallest coplanar groups as a last resort.
-- `--no-directional`: emit a single 360° mesh instead of 4 per-direction
-  silhouettes (the Inc 4 fallback).
-- Per-direction budget is `DEFAULT_DIRECTION_BUDGET = 12` (module constant in
-  `tools/ogworld/distant_lod.py`).
+  single decimated mesh. Enforced by vertex-clustering on a coarsening grid,
+  then by dropping the smallest coplanar groups as a last resort.
+- `--no-directional`: emit a single 360° mesh instead of 4 painter-sorted
+  direction variants (the fallback).
+- Per-direction budget is `DEFAULT_DIRECTION_BUDGET = 20` (module constant in
+  `tools/ogworld/distant_lod.py`; all 4 directions share the one decimated mesh).
+
+## Stream radius + D5 invariant (Inc 6)
+
+The distant tier is **dynamically streamed** by camera cell: resident = cells
+within `kDistantStreamRadius` (Chebyshev, **6**) of the camera cell, evicted
+outside (all direction meshes freed via the Inc 2 dedupe). The radius is
+derived so the **worst-case load distance** (radius × cell − half-cell, because
+distance tests hit the cell center) stays ≥ the fog-complete distance:
+
+```
+6·240 − 120 = 1320u > 1197u   (fog completes at 0.9·sqrt(kDistantMaxDist2))
+```
+
+so a cell is always fully fogged before it can become drawable — eviction/load
+is invisible. **INVARIANT:** `radius ≥ ceil(fog_complete/cell + 0.5)` (asserted
+by `tests/distant_streaming_contract.cpp`). On this 45-cell map the whole map
+stays resident at center (radius 6 clamps to the map); the deliverable is the
+architecture (boot loads a smaller initial set; larger maps scale the radius
+automatically via the invariant).
 
 ## Resident-memory math
 

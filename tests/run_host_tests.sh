@@ -72,6 +72,8 @@ run_cpp render_budgets_contract tests/render_budgets_contract.cpp
 run_cpp debug_visualization_contract tests/debug_visualization_contract.cpp
 run_cpp debug_flags_contract tests/debug_flags_contract.cpp
 run_cpp distant_cull_contract tests/distant_cull_contract.cpp
+run_cpp distant_overlap_contract tests/distant_overlap_contract.cpp
+run_cpp distant_streaming_contract tests/distant_streaming_contract.cpp
 run_cpp distant_distance_contract tests/distant_distance_contract.cpp
 run_cpp batch_coalesce_contract tests/batch_coalesce_contract.cpp
 run_cpp material_sort_contract tests/material_sort_contract.cpp
@@ -80,6 +82,8 @@ run_cpp near_visibility_contract tests/near_visibility_contract.cpp
 run_cpp renderer_memory_contract tests/renderer_memory_contract.cpp
 run_cpp render_counters_contract tests/render_counters_contract.cpp
 run_cpp distant_cellstats_contract tests/distant_cellstats_contract.cpp
+run_cpp distant_dedup_contract tests/distant_dedup_contract.cpp
+run_cpp distant_shared_matrix_contract tests/distant_shared_matrix_contract.cpp
 run_cpp dlod_format_contract tests/dlod_format_contract.cpp
 run_cpp directional_lod_contract tests/directional_lod_contract.cpp
 run_cpp input_system_smoke tests/input_system_smoke.cpp

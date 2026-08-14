@@ -96,6 +96,19 @@ void OpenWorldRenderer::RenderHighPriority(const CameraDesc& cam) {
 }
 
 void OpenWorldRenderer::Render(const PassCameras& cams) {
+    // Inc 5 / D4: compute the near-draw set ONCE at the top (iterate the
+    // resident ring through CellAabbInNearCone with the near camera), pass it
+    // to the distant pass (which skips exactly those cells), then draw the
+    // distant pass and the near pass. One computation, one source of truth —
+    // the distant skip and the near draw can never disagree (no double-draw,
+    // no mid-cell cut).
+    int near_ix[9] = {};
+    int near_iz[9] = {};
+    int near_count = 0;
+    tile_streamer_->CollectNearDrawSet(cams.near_cam, near_ix, near_iz,
+                                       near_count, 9);
+    distant_->SetNearDrawSet(near_ix, near_iz, near_count);
+
     // arch.md §21 order: distant (Z off), low-priority (Z off), high-priority
     // (Z on). The skybox is prepended in Inc 6. Each pass is wrapped in a
     // profiler phase scope (Inc 7).
@@ -139,11 +152,11 @@ void OpenWorldRenderer::SetCenter(const MapSpecV2& spec,
     // frames (≈0.000 otherwise) — exactly what the budget wants to catch.
     profiler_.BeginPhase(n64::FrameProfiler::kPhaseStreaming);
     tile_streamer_->SetCenter(spec, center, build_dir);
-    // Load the distant LOD table once per map-pack (all cells, coarse).
-    // Inc 4: the distant pass renders the horizon from these coarse meshes.
-    if (distant_->EntryCount() == 0) {
-        distant_->Load(spec, build_dir);
-    }
+    // Inc 6 / D5: stream the distant tier by camera cell (resident = cells
+    // within kDistantStreamRadius of `center`). Replaces the one-time Load —
+    // residency re-resolves on every transition, so the old `EntryCount() == 0`
+    // gate is removed (it would wrongly suppress reloads).
+    distant_->StreamToCenter(spec, center, build_dir);
     // Fan the camera position to the distant pass too (compressed rebase).
     distant_->SetCameraPosition(camera_pos_);
     profiler_.EndPhase(n64::FrameProfiler::kPhaseStreaming);

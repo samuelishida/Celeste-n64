@@ -33,9 +33,35 @@ struct DistantLodEntry {
     int cell_ix = 0;
     int cell_iz = 0;
     Vec3 origin = {0.0f, 0.0f, 0.0f};  // cell center (world)
+    // Inc 4 / D3: the cell's world XZ AABB (from the manifest). Used by the
+    // extent-aware distant cull so a cell is culled only when its WHOLE AABB
+    // is outside the cone (no screen-edge pop-in). Zero-extent → treated as
+    // the cell center (today's behavior).
+    AABB aabb = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     LvlRoomRenderer* meshes[kMaxDirMeshes] = {};
     DistantLodEntry* children[kMaxChildren] = {};
 };
+
+// Collect the DISTINCT non-null mesh pointers in an entry's directional slots
+// into `out` (bounded by `kMaxDirMeshes`). Host-safe: only compares pointers,
+// never dereferences them — so a host test can pass fake pointer values
+// without instantiating the N64 `LvlRoomRenderer`. Returns the distinct
+// pointer count. Used by `FreeEntries` so a shared-slot entry (all 4 slots
+// pointing at the same mesh) frees each distinct mesh exactly once.
+inline int CollectDistinctMeshes(const DistantLodEntry& en,
+                                 LvlRoomRenderer* out[DistantLodEntry::kMaxDirMeshes]) {
+    int n = 0;
+    for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
+        LvlRoomRenderer* m = en.meshes[d];
+        if (!m) continue;
+        bool seen = false;
+        for (int k = 0; k < n; ++k) {
+            if (out[k] == m) { seen = true; break; }
+        }
+        if (!seen) out[n++] = m;
+    }
+    return n;
+}
 
 // One item in the distant render list (arch.md §8). `cell_index` indexes into
 // the renderer's `entries_[]`; `priority` orders back-to-front (higher =
@@ -77,7 +103,7 @@ inline int BuildDistantRenderList(const Vec3& camera_pos,
 // Build the distant render list keeping only cells inside the camera's
 // horizontal view cone + depth range (Inc 2 / D2). Same ordering contract as
 // `BuildDistantRenderList` (far cells draw first via priority = distance²),
-// but entries failing `CellInDistantFrustum` are omitted. `hfov_deg` is the
+// but entries failing `CellAabbInDistantFrustum` are omitted. `hfov_deg` is the
 // horizontal full FOV in degrees (from vertical FOV + 4:3 aspect); `near_d` /
 // `far_d` are the DISTANT pass clip range (not the near camera's, so cells
 // behind the near far-plane are still drawn here). Host-testable — no N64
@@ -96,8 +122,17 @@ inline int BuildDistantRenderListCulled(const Vec3& camera_pos,
     int n = 0;
     for (int e = 0; e < entry_count && n < out_capacity; ++e) {
         const DistantLodEntry& en = entries[e];
-        if (!CellInDistantFrustum(camera_pos, camera_target, hfov_deg, near_d,
-                                  far_d, en.origin, margin)) {
+        // Inc 4 / D3: extent-aware cull — a cell is culled only when its WHOLE
+        // XZ AABB is outside the cone + depth range. A zero-extent AABB falls
+        // back to the cell center (today's behavior).
+        AABB aabb = en.aabb;
+        if (aabb.min.x == aabb.max.x && aabb.min.z == aabb.max.z) {
+            // Degenerate AABB → treat as the cell center (en.origin).
+            aabb.min = en.origin;
+            aabb.max = en.origin;
+        }
+        if (!CellAabbInDistantFrustum(camera_pos, camera_target, hfov_deg,
+                                      near_d, far_d, aabb, margin)) {
             continue;
         }
         // Inc 2 / D1: skip cells beyond the squared-distance threshold so the
@@ -136,6 +171,16 @@ public:
     // distant mesh (no renderable geometry) is skipped (non-fatal).
     bool Load(const MapSpecV2& spec, const char* build_dir = nullptr);
 
+    // Inc 6 / D5: stream the distant tier by camera cell. Resident = cells
+    // within `kDistantStreamRadius` (Chebyshev) of `center`; cells outside are
+    // evicted (all direction meshes freed via the Inc 2 dedupe), missing
+    // in-radius cells are loaded. `entry_count_` = resident count. Runs in
+    // `SetCenter` (Update phase, before the frame's Render builds its draw
+    // list) — no eviction may occur between list-build and draw (use-after-free
+    // guard). Returns true if any cells are resident.
+    bool StreamToCenter(const MapSpecV2& spec, const V2RoomSpec& center,
+                        const char* build_dir = nullptr);
+
     // Rebase every distant mesh translation to draw camera-relative at the
     // compressed scale.
     void SetCameraPosition(const Vec3& camera_pos);
@@ -166,6 +211,19 @@ public:
     // arena falls back to a small stack buffer.
     void SetArena(n64::FrameArena* arena) { arena_ = arena; }
 
+    // Inc 5 / D4: set this frame's near-draw cell indices (the exact cells the
+    // near pass will draw). The distant pass skips these so no cell is drawn
+    // by both passes (overlap handoff). Computed once per frame by the
+    // orchestrator (OpenWorldRenderer::Render) and passed here. `count` ≤
+    // kNearDrawSetCap. A null/empty set → no skip (draw everything as today).
+    void SetNearDrawSet(const int ix[], const int iz[], int count) {
+        near_count_ = count > kNearDrawSetCap ? kNearDrawSetCap : count;
+        for (int i = 0; i < near_count_; ++i) {
+            near_ix_[i] = ix[i];
+            near_iz_[i] = iz[i];
+        }
+    }
+
     // Host-testable access to the LOD table (used by distant_pass_order.cpp).
     const DistantLodEntry* Entries() const { return entries_; }
 
@@ -193,7 +251,20 @@ public:
     // The compressed coordinate scale used to pack distant vertices.
     static constexpr float kLodScale = 0.25f;
 
+    // Inc 6 / D5: the Chebyshev stream radius (in cells) for the distant tier.
+    // Resident = cells within this radius of the camera cell. Derived so the
+    // worst-case load distance (radius × cell − half-cell, because distance
+    // tests hit the cell center) stays ≥ the fog-complete distance:
+    //   6·240 − 120 = 1320u > 1197u (fog completes at 0.9·sqrt(kDistantMaxDist2))
+    // so a cell is always fully fogged before it can become drawable — eviction
+    // / load is invisible. INVARIANT: radius ≥ ceil(fog_complete/cell + 0.5).
+    static constexpr int kDistantStreamRadius = 6;
+
 private:
+    // Inc 6 / D5: load one cell's distant meshes into `entries_[entry_count_]`
+    // (incrementing it on success). Returns true if the cell loaded. Shared by
+    // `Load` and `StreamToCenter`.
+    bool LoadCell(const V2RoomSpec& rs, const char* build_dir);
     // Cap for the per-cell cost array (Inc 3 / instrumentation). Matches the
     // `entries_` cap (64): you cannot draw more cells than you have entries.
     static constexpr int kDistantCellStatCap = 64;
@@ -201,6 +272,17 @@ private:
     DistantLodEntry entries_[64];       // one per cell (kMaxRooms cap)
     int entry_count_ = 0;
     Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};
+    // Inc 3 / D2: the SHARED map-center origin all distant verts pack against
+    // (from the DLOD header). The whole distant pass draws under ONE
+    // camera-relative matrix built from this origin. Unset (all zeros) until
+    // the first cell loads; Render no-ops if no cells are loaded.
+    Vec3 shared_origin_ = {0.0f, 0.0f, 0.0f};
+    // Inc 3 / D2: the shared pass matrix, allocated in UNCACHED memory (the
+    // RSP DMAs it at command-execution time, so a cached stack local would be
+    // read stale). Allocated lazily in Render, freed in the destructor.
+    // Stored as void* so this header stays host-safe (T3DMat4FP is a t3d
+    // typedef; the .cpp casts to the real type).
+    void* shared_matrix_fp_ = nullptr;
     FogParams fog_;
     RenderCounters* counters_ = nullptr;  // per-frame draw counters (Inc 1 / D7)
     n64::FrameArena* arena_ = nullptr;    // frame-scoped arena (Inc 5 / D6)
@@ -209,6 +291,14 @@ private:
     // is reset to 0 at the top of Render so stale data never survives.
     DistantCellStat cell_stats_[kDistantCellStatCap];
     int cell_stat_count_ = 0;
+    // Inc 5 / D4: this frame's near-draw cell indices (the exact cells the near
+    // pass will draw). The distant pass skips these so no cell is drawn by
+    // both passes. Bounded by the near resident pool (center + Chebyshev-1
+    // ring = 9 cells).
+    static constexpr int kNearDrawSetCap = 9;
+    int near_ix_[kNearDrawSetCap] = {};
+    int near_iz_[kNearDrawSetCap] = {};
+    int near_count_ = 0;
 };
 
 }  // namespace madeline_cube

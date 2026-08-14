@@ -479,6 +479,9 @@ void LvlRoomRenderer::FreeRuns() {
 
 void LvlRoomRenderer::SetCameraPosition(const Vec3& camera_pos) {
     if (!matrix_fp_) return;  // not loaded; no-op
+    // Inc 3 / D2: when drawing under an external (pass-shared) matrix, the
+    // caller owns the matrix — this is a no-op.
+    if (uses_external_matrix_) return;
     // The vertices are packed as (world - render_origin) * kPosScale. To draw
     // the world camera-relative, translate the matrix by (render_origin -
     // camera_pos) so that:
@@ -544,6 +547,30 @@ void LvlRoomRenderer::Draw() const {
     }
 
     t3d_matrix_pop(1);
+}
+
+void LvlRoomRenderer::DrawBlockOnly() const {
+    if (!verts_) return;
+    // Inc 3 / D2: draw the precompiled block WITHOUT touching the matrix
+    // stack — the caller's shared pass matrix is already on the stack. Guards
+    // like Draw() (block_ null → legacy per-run/per-batch emission WITHOUT a
+    // matrix push; must not add one).
+    if (kEnableRspqBlocks && block_) {
+        if (counters_) {
+            counters_->near_batches += counted_batches_;
+            counters_->vert_loads += counted_vert_loads_;
+            counters_->syncs += counted_syncs_;
+        }
+        rspq_block_run(block_);
+    } else if (run_count_ > 0 && runs_ && run_faces_) {
+        for (int r = 0; r < run_count_; ++r) {
+            EmitRunCommands(r, counters_);
+        }
+    } else if (batches_) {
+        for (int b = 0; b < batch_count_; ++b) {
+            EmitBatchCommands(b, counters_);
+        }
+    }
 }
 
 void LvlRoomRenderer::EmitRunCommands(int r, RenderCounters* counters) const {

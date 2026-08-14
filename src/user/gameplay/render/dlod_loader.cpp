@@ -45,33 +45,9 @@ void* ReadWholeFile(const char* path, int* out_size) {
 
 }  // namespace
 
-bool LoadDistantCellDlod(const char* pack_dir, const char* chunk,
-                         const Vec3& render_origin, float pos_scale,
-                         const char* build_dir, LvlRoomRenderer* out) {
-    if (!out) return false;
-
-    // Build the rom:/ path: rom:/lvl/<pack>/<chunk>_distant.dlod.
-    char rom_path[V2RoomSpec::kPathLen + 16] = {};
-    std::snprintf(rom_path, sizeof(rom_path), "rom:/lvl/%s/%s_distant.dlod",
-                  pack_dir, chunk);
-
-    // Load the .dlod (Inc 3 / compressed-LOD). The LVL2 distant path was
-    // removed in Inc 5 — the .dlod is the only distant artifact.
-    const char* path = LocalizePath(rom_path, build_dir);
-    int size = 0;
-    void* data = ReadWholeFile(path, &size);
-    if (!data) return false;
-    DlodMesh mesh;
-    const int dirs = ParseDlod(static_cast<const uint8_t*>(data), size, &mesh);
-    if (dirs <= 0) { free(data); return false; }
-    const bool ok = out->LoadFromDlod(mesh, 0, render_origin, pos_scale);
-    free(data);
-    return ok;
-}
-
 int LoadDistantCellDlodAll(const char* pack_dir, const char* chunk,
-                           const Vec3& render_origin, float pos_scale,
-                           const char* build_dir, LvlRoomRenderer* out[4]) {
+                           float pos_scale, const char* build_dir,
+                           LvlRoomRenderer* out[4], Vec3* out_shared_origin) {
     if (!out) return 0;
     for (int d = 0; d < 4; ++d) out[d] = nullptr;
 
@@ -87,13 +63,21 @@ int LoadDistantCellDlodAll(const char* pack_dir, const char* chunk,
     DlodMesh mesh;
     const int dirs = ParseDlod(static_cast<const uint8_t*>(data), size, &mesh);
     if (dirs <= 0) { free(data); return 0; }
+    // Inc 3 / D2: the DLOD header origin is the SHARED map-center origin (the
+    // source of truth for packing) — the caller's per-cell render origin is
+    // NOT used, so the distant pass draws under one shared matrix.
+    const Vec3 shared_origin = {mesh.origin[0], mesh.origin[1], mesh.origin[2]};
+    if (out_shared_origin) *out_shared_origin = shared_origin;
     int loaded = 0;
     if (dirs == 1) {
-        // Single-direction .dlod: load direction 0 into slot 0 and share it
-        // across all slots (matches the pre-Inc-4 behavior).
+        // Single-direction .dlod: load direction 0 into slot 0 ONLY, slots
+        // 1..3 null (Inc 3 / D2 — stop sharing the pointer; the draw fallback
+        // `meshes[d] -> meshes[0]` handles null slots). This removes the
+        // shared-pointer path that caused the Inc 2 double-free; the
+        // `FreeEntries` dedupe stays as defense-in-depth.
         LvlRoomRenderer* m = new LvlRoomRenderer();
-        if (m->LoadFromDlod(mesh, 0, render_origin, pos_scale)) {
-            for (int d = 0; d < 4; ++d) out[d] = m;
+        if (m->LoadFromDlod(mesh, 0, shared_origin, pos_scale)) {
+            out[0] = m;
             loaded = 1;
         } else {
             delete m;
@@ -103,7 +87,7 @@ int LoadDistantCellDlodAll(const char* pack_dir, const char* chunk,
         for (int d = 0; d < dirs && d < 4; ++d) {
             if (mesh.dirs[d].face_count <= 0) continue;  // empty dir
             LvlRoomRenderer* m = new LvlRoomRenderer();
-            if (m->LoadFromDlod(mesh, d, render_origin, pos_scale)) {
+            if (m->LoadFromDlod(mesh, d, shared_origin, pos_scale)) {
                 out[d] = m;
                 ++loaded;
             } else {

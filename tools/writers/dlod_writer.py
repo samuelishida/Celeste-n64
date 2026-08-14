@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""DLOD v1 binary writer (compressed distant LOD).
+"""DLOD v2 binary writer (compressed distant LOD).
 
 Writes the compact distant-LOD container that the runtime loads straight into
 `LvlRoomRenderer` (no float32→int16 repack, no material sort). Big-endian,
 matching the LVL2 convention.
 
-DLOD v1 layout (big-endian):
+DLOD v2 layout (big-endian):
   header (44 B):
     u32 magic   0x444C4F44 ("DLOD")
-    u32 version 1
+    u32 version 2
     u32 flags            (bit0 = per-direction)
     u32 direction_count  (1, or 4 from Inc 4)
     u32 face_count       (total across directions)
     u32 vert_count       (total across directions; = 3 × face_count)
     u32 material_count   (≤ manifest size)
-    f32 origin_x/y/z     (cell render origin, world)
+    f32 origin_x/y/z     (SHARED map-center origin, world — Inc 3 / D2)
     u8  reserved[4]
   per-direction section (direction_count ×):
     u32 dir_face_count
@@ -24,10 +24,11 @@ DLOD v1 layout (big-endian):
                                         verts[3i..3i+2])
     materials: dir_face_count × u8 material_id  (index into the shared manifest)
 
-Vertices are packed relative to the CELL origin (not the map origin) at
-`kLodScale`, so the int16 headroom rule is `cell_extent * kLodScale ≤ 32767`.
-Faces are contiguous vertex triples grouped by material at bake time (sorted),
-so the runtime needs no sort and no indexed-draw support.
+Vertices are packed relative to the SHARED map-center origin (Inc 3 / D2,
+not the per-cell origin) at `kLodScale`, so the int16 headroom rule is
+`map_diagonal * kLodScale <= ~28000`. Faces are contiguous vertex triples
+grouped by material at bake time (sorted), so the runtime needs no sort and
+no indexed-draw support.
 """
 
 from __future__ import annotations
@@ -38,7 +39,11 @@ from typing import List, Tuple
 
 # DLOD magic + version.
 DLOD_MAGIC = 0x444C4F44  # "DLOD"
-DLOD_VERSION = 1
+# Version 2 (Inc 3 / D2): the header `origin` is now the SHARED map-center
+# origin (all cells pack relative to it), not the per-cell render origin. The
+# byte layout is otherwise unchanged. A stale v1 `.dlod` (per-cell origins)
+# fails to parse at runtime (cell skipped, never misrendered).
+DLOD_VERSION = 2
 # Flags bit 0 = per-direction (direction_count > 1).
 FLAG_PER_DIRECTION = 0x00000001
 
@@ -60,7 +65,7 @@ def _pack_vert(v, origin, scale):
 def dlod_bytes(directions: List[Tuple[List, List]], material_count: int,
                origin, scale: float = KLOD_SCALE,
                per_direction: bool = False) -> bytes:
-    """Serialize a DLOD v1 buffer.
+    """Serialize a DLOD v2 buffer.
 
     `directions` is a list of `(verts, faces)` where `verts` is a list of
     world-space (x, y, z) points and `faces` is a list of
@@ -131,6 +136,6 @@ def dlod_bytes(directions: List[Tuple[List, List]], material_count: int,
 def write_dlod(directions: List[Tuple[List, List]], material_count: int,
                origin, out_path: str, scale: float = KLOD_SCALE,
                per_direction: bool = False) -> None:
-    """Write a DLOD v1 file. See `dlod_bytes` for the argument contract."""
+    """Write a DLOD v2 file. See `dlod_bytes` for the argument contract."""
     data = dlod_bytes(directions, material_count, origin, scale, per_direction)
     Path(out_path).write_bytes(data)

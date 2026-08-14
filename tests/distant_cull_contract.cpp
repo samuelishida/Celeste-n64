@@ -181,6 +181,66 @@ int main() {
                "cell beyond far is culled");
     }
 
+    // --- CellAabbInDistantFrustum (Inc 4 / D3) ---
+    {
+        // A 240u cell centered at (240, 0, 0), facing +X.
+        const AABB cell = {{120.0f, 0.0f, -120.0f}, {360.0f, 0.0f, 120.0f}};
+        // Straight ahead: kept.
+        expect(CellAabbInDistantFrustum(origin, target_px, 60.0f, 50.0f, 1000.0f,
+                                        cell),
+               "AABB straight ahead is kept");
+        // Cell straddling the cone edge: center outside the cone but the AABB
+        // reaches into it → kept (the screen-edge pop-in fix).
+        {
+            // Cell centered at (240, 0, 240): center is 45° off +X (outside
+            // the 34.5° margined half-cone), but its near corner (360, 0, 120)
+            // is at atan(120/360) ≈ 18.4° (inside) → the AABB reaches into the
+            // cone, so the cell must be kept.
+            const AABB edge_cell = {{120.0f, 0.0f, 120.0f}, {360.0f, 0.0f, 360.0f}};
+            expect(CellAabbInDistantFrustum(origin, target_px, 60.0f, 50.0f,
+                                            1000.0f, edge_cell),
+                   "cell straddling cone edge is kept (AABB reaches into cone)");
+        }
+        // All 4 corners outside but the AABB intersects the cone interior →
+        // kept (the exact bug class being fixed).
+        {
+            // A large cell centered just off the cone edge; the cone passes
+            // through its interior even though all 4 corners are outside.
+            const AABB big = {{-200.0f, 0.0f, 200.0f}, {200.0f, 0.0f, 600.0f}};
+            expect(CellAabbInDistantFrustum(origin, target_px, 60.0f, 50.0f,
+                                            1000.0f, big),
+                   "AABB intersecting cone interior is kept (all corners outside)");
+        }
+        // Cell fully behind a side plane (AABB clear of the cone): culled.
+        {
+            const AABB behind = {{-400.0f, 0.0f, -100.0f}, {-200.0f, 0.0f, 100.0f}};
+            expect(!CellAabbInDistantFrustum(origin, target_px, 60.0f, 50.0f,
+                                             1000.0f, behind),
+                   "AABB fully behind a side plane is culled");
+        }
+        // Cell within near-slack: kept even though its center is inside near.
+        {
+            const AABB near_cell = {{0.0f, 0.0f, -100.0f}, {200.0f, 0.0f, 100.0f}};
+            expect(CellAabbInDistantFrustum(origin, target_px, 60.0f, 50.0f,
+                                            1000.0f, near_cell),
+                   "AABB within near-slack is kept");
+        }
+        // Zero-extent AABB → treated as the cell center (today's behavior).
+        {
+            const AABB zero = {{240.0f, 0.0f, 0.0f}, {240.0f, 0.0f, 0.0f}};
+            expect(CellAabbInDistantFrustum(origin, target_px, 60.0f, 50.0f,
+                                            1000.0f, zero),
+                   "zero-extent AABB behaves like the cell center");
+        }
+        // Depth-range edge: cell beyond far (with slack) is culled.
+        {
+            const AABB far_cell = {{2400.0f, 0.0f, -100.0f}, {2600.0f, 0.0f, 100.0f}};
+            expect(!CellAabbInDistantFrustum(origin, target_px, 60.0f, 50.0f,
+                                             1000.0f, far_cell),
+                   "AABB beyond far is culled");
+        }
+    }
+
     if (failures == 0) {
         std::printf("distant_cull_contract: all checks passed\n");
         return 0;

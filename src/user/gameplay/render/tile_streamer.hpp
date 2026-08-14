@@ -171,6 +171,14 @@ public:
     void DrawLowPriority(const CameraDesc& cam);
     void DrawHighPriority(const CameraDesc& cam);
 
+    // Inc 5 / D4: collect the near-draw cell indices — the resident cells
+    // whose AABB intersects the camera cone (the exact set DrawHighPriority
+    // will draw). The orchestrator passes this to the distant pass so it can
+    // skip exactly those cells (overlap handoff). `out_ix`/`out_iz` are filled
+    // with `*out_count` entries (bounded by `out_capacity`). Host-safe.
+    void CollectNearDrawSet(const CameraDesc& cam, int out_ix[], int out_iz[],
+                            int& out_count, int out_capacity) const;
+
     int ResidentCount() const { return set_.count; }
     int EvictedThisFrame() const { return evicted_this_frame_; }
     const ResidentSet& Set() const { return set_; }

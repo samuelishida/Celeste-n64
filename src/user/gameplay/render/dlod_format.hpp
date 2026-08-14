@@ -1,26 +1,27 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 namespace madeline_cube {
 
-// ── DLOD v1 compact distant-LOD parser (Inc 3) ─────────────────────────────
-// Pure, zero-copy, host-safe (no N64 includes). Parses a DLOD v1 buffer into
+// ── DLOD v2 compact distant-LOD parser (Inc 3) ────────────────────────────
+// Pure, zero-copy, host-safe (no N64 includes). Parses a DLOD v2 buffer into
 // views that point into the caller's `data` (no copy/allocation). Big-endian
 // fields are read through explicit byte-swap accessors so the Pattern-A host
 // test is byte-exact on a little-endian host and the device (big-endian)
 // reads the same bytes.
 //
-// DLOD v1 layout (big-endian):
+// DLOD v2 layout (big-endian):
 //   header (44 B):
 //     u32 magic   0x444C4F44 ("DLOD")
-//     u32 version 1
+//     u32 version 2
 //     u32 flags            (bit0 = per-direction)
 //     u32 direction_count  (1, or 4 from Inc 4)
 //     u32 face_count       (total across directions)
 //     u32 vert_count       (total across directions; = 3 × face_count)
 //     u32 material_count   (≤ manifest size)
-//     f32 origin_x/y/z     (cell render origin, world)
+//     f32 origin_x/y/z     (SHARED map-center origin, world — Inc 3 / D2)
 //     u8  reserved[4]
 //   per-direction section (direction_count ×):
 //     u32 dir_face_count
@@ -33,7 +34,11 @@ namespace madeline_cube {
 
 // DLOD magic + version.
 inline constexpr uint32_t kDlodMagic = 0x444C4F44u;  // "DLOD"
-inline constexpr uint32_t kDlodVersion = 1u;
+// Version 2 (Inc 3 / D2): the header `origin` is the SHARED map-center origin
+// (all cells pack relative to it), not the per-cell render origin. The byte
+// layout is otherwise unchanged. A stale v1 `.dlod` (per-cell origins) fails
+// to parse (returns -1, cell skipped) instead of silently misrendering.
+inline constexpr uint32_t kDlodVersion = 2u;
 // Flags bit 0 = per-direction (direction_count > 1).
 inline constexpr uint32_t kDlodFlagPerDirection = 0x00000001u;
 // Max directions a DLOD can carry (matches DistantLodEntry::kMaxDirMeshes).
@@ -88,11 +93,12 @@ struct DlodMesh {
     DlodDirection dirs[4];
 };
 
-// Parse a DLOD v1 buffer into `out` (views point into `data`, zero-copy).
+// Parse a DLOD v2 buffer into `out` (views point into `data`, zero-copy).
 // Returns the direction_count parsed, or -1 on malformed input (bad magic,
 // version, truncated, vert_count != 3×face_count, material_id ≥
 // material_count, direction_count out of range). Strict: the artifact is
-// bake-produced, so strictness is safe.
+// bake-produced, so strictness is safe. A stale v1 `.dlod` (version != 2)
+// returns -1 so the cell is skipped (fail-loud, never misrendered).
 inline int ParseDlod(const uint8_t* data, int size, DlodMesh* out) {
     if (!data || size < 44 || !out) return -1;
 
@@ -111,6 +117,13 @@ inline int ParseDlod(const uint8_t* data, int size, DlodMesh* out) {
     out->origin[0] = dlod_detail::ReadF32BE(data + 28);
     out->origin[1] = dlod_detail::ReadF32BE(data + 32);
     out->origin[2] = dlod_detail::ReadF32BE(data + 36);
+    // Reject non-finite origin floats: a NaN/Inf shared origin would flow into
+    // the pass matrix (shared_origin - camera) and produce a garbage transform
+    // for the whole distant pass. Fail-loud (cell skipped), never misrender.
+    if (!std::isfinite(out->origin[0]) || !std::isfinite(out->origin[1]) ||
+        !std::isfinite(out->origin[2])) {
+        return -1;
+    }
     out->direction_count = static_cast<int>(direction_count);
 
     int offset = 44;

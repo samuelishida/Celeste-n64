@@ -1,10 +1,12 @@
-// Host test for the DLOD v1 parser (Pattern A: header-only, no N64 deps).
-// Asserts (Inc 3 / compressed-LOD):
-//   (a) ParseDlod decodes a synthetic DLOD v1 blob byte-exact (explicit
+// Host test for the DLOD v2 parser (Pattern A: header-only, no N64 deps).
+// Asserts (Inc 3 / compressed-LOD + Inc 3 / D2):
+//   (a) ParseDlod decodes a synthetic DLOD v2 blob byte-exact (explicit
 //       big-endian reads) — counts, origin, packed verts, materials;
 //   (b) malformed blobs (bad magic, bad version, truncated, vert_count !=
 //       3×face_count, material_id ≥ material_count, bad direction_count)
-//       return -1.
+//       return -1;
+//   (c) a stale v1 blob (version 1) returns -1 (fail-loud, cell skipped —
+//       never misrendered).
 //
 // Build:
 //   g++ -std=c++17 -Isrc/user tests/dlod_format_contract.cpp
@@ -26,7 +28,7 @@ static void expect(bool cond, const char* what) {
     }
 }
 
-// Build a synthetic DLOD v1 blob. `directions` is a list of (face_count,
+// Build a synthetic DLOD v2 blob. `directions` is a list of (face_count,
 // material_id) per direction; verts are generated as consecutive triples.
 static std::vector<uint8_t> MakeBlob(int direction_count,
                                     const int* face_counts,
@@ -144,6 +146,26 @@ static void test_malformed() {
         DlodMesh mesh;
         expect(ParseDlod(blob.data(), int(blob.size()), &mesh) == -1,
                "bad version -> -1");
+    }
+    // Stale v1 blob (version 1) -> -1 (fail-loud, cell skipped, never
+    // misrendered). Inc 3 / D2.
+    {
+        int fc[1] = {1}; int mid[1] = {0};
+        auto blob = MakeBlob(1, fc, mid, kDlodMagic, 1u);
+        DlodMesh mesh;
+        expect(ParseDlod(blob.data(), int(blob.size()), &mesh) == -1,
+               "stale v1 blob -> -1 (fail-loud)");
+    }
+    // Non-finite origin (NaN) -> -1 (fail-loud; a NaN shared origin would
+    // produce a garbage pass matrix). Patch origin_x (bytes 28..31) to NaN.
+    {
+        int fc[1] = {1}; int mid[1] = {0};
+        auto blob = MakeBlob(1, fc, mid);
+        // 0x7FC00000 = quiet NaN (big-endian).
+        blob[28] = 0x7F; blob[29] = 0xC0; blob[30] = 0x00; blob[31] = 0x00;
+        DlodMesh mesh;
+        expect(ParseDlod(blob.data(), int(blob.size()), &mesh) == -1,
+               "NaN origin -> -1 (fail-loud)");
     }
     // Truncated (cut the blob in half).
     {

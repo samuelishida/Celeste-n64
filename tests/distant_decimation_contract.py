@@ -27,7 +27,7 @@ sys.path.insert(0, str(REPO / "tools"))
 from ogworld.distant_lod import (
     build_distant_lod, _group_coplanar, _group_triangles, _quantize,
     _outline_of_group, _fan_polygon, _signed_area2d, _convex_hull2d,
-    _direction_silhouette, _DIRECTION_NORMALS,
+    _sort_direction, _DIRECTION_NORMALS,
     QUANT, DEFAULT_BUDGET, DEFAULT_DIRECTION_BUDGET,
 )
 from ogworld.model import WorldPolygon
@@ -180,12 +180,12 @@ def test_quantization():
     print(f"PASS: quantization -> {len(verts)} verts on QUANT grid")
 
 
-def test_direction_silhouette_coverage():
-    """Each direction's mesh AABB covers ≥ 90% of the cell's projection from
-    that direction."""
-    # A proper axis-aligned box (6 faces), so each direction sees one big wall.
-    # Sized 200 units so QUANT=16 quantization doesn't collapse the extent
-    # (real cells are 240 units).
+def test_direction_equivalence():
+    """All 4 directions share the SAME triangle set (only order differs) —
+    the fix for popping/holes. Asserts geometry equivalence, the
+    (material_id, dist-along-axis) order invariant, no holes, and the face
+    budget."""
+    # A proper axis-aligned box (6 faces) so the decimator has real geometry.
     S = 200.0
     polys = []
     box = [
@@ -205,62 +205,39 @@ def test_direction_silhouette_coverage():
     for q in box:
         polys.append(_poly(q, mat=0))
 
+    # Decimate once (the shared mesh), then reorder per direction.
+    verts, faces, met = build_distant_lod(polys, budget=DEFAULT_DIRECTION_BUDGET)
+    assert met, "cell should meet the budget"
+    assert len(faces) <= DEFAULT_DIRECTION_BUDGET, (
+        f"faces {len(faces)} > budget {DEFAULT_DIRECTION_BUDGET}")
+
+    # Geometry equivalence: every direction decodes to the SAME triangle set
+    # (as 3-point coordinate sets, order-insensitive).
+    def tri_set(ordered_faces):
+        return {tuple(sorted(tuple(verts[i] for i in idx))) for idx, _ in
+                ordered_faces}
+
+    base = tri_set(faces)
+    assert len(base) == len(faces), "duplicate triangles in decimated mesh"
     for d in range(4):
-        verts, faces, met = _direction_silhouette(polys, d,
-                                                  DEFAULT_DIRECTION_BUDGET)
-        assert len(faces) > 0, f"direction {d} should have geometry"
-        assert len(faces) <= DEFAULT_DIRECTION_BUDGET, (
-            f"direction {d} faces {len(faces)} > budget")
-        # Coverage: the direction's mesh AABB covers ≥ 90% of the cell's
-        # projection from that direction (the facing wall's extent).
+        ordered = _sort_direction(faces, verts, d)
+        assert tri_set(ordered) == base, (
+            f"direction {d} geometry differs from the shared mesh")
+        # No holes: every source face appears in every direction.
+        assert len(ordered) == len(faces), (
+            f"direction {d} dropped faces ({len(ordered)} vs {len(faces)})")
+        # Order invariant: sorted by (material_id, dot(centroid, dir_normal)).
         n = _DIRECTION_NORMALS[d]
-        src_pts = []
-        for p in polys:
-            if _dot(p.normal, n) >= 0.7071:
-                for v in p.verts:
-                    src_pts.append(_project(v, n))
-        dst_pts = []
-        for idx_tuple, _ in faces:
-            for vi in idx_tuple:
-                dst_pts.append(_project(verts[vi], n))
-        cover = _aabb_cover2d(src_pts, dst_pts)
-        assert cover >= 0.9, (
-            f"direction {d} coverage {cover:.2f} < 0.9")
-    print("PASS: direction silhouette coverage (4 dirs, each ≤ budget)")
-
-
-def _aabb_cover2d(src_pts, dst_pts):
-    """Per-axis coverage of dst 2D AABB over src 2D AABB (0..1)."""
-    sx = [p[0] for p in src_pts]
-    sy = [p[1] for p in src_pts]
-    dx = [p[0] for p in dst_pts]
-    dy = [p[1] for p in dst_pts]
-    ratios = []
-    for (smin, smax, dmin, dmax) in ((min(sx), max(sx), min(dx), max(dx)),
-                                     (min(sy), max(sy), min(dy), max(dy))):
-        s = smax - smin
-        if s <= 1e-9:
-            continue
-        lo = max(smin, dmin)
-        hi = min(smax, dmax)
-        inter = max(0.0, hi - lo)
-        ratios.append(inter / s)
-    return min(ratios) if ratios else 1.0
-
-
-def _project(p, n):
-    """Project a 3D point onto the plane perpendicular to n (2 axes)."""
-    # Pick two orthonormal in-plane axes.
-    t = (1.0, 0.0, 0.0) if abs(n[0]) < 0.9 else (0.0, 1.0, 0.0)
-    u = _cross3(n, t)
-    v = _cross3(n, u)
-    return (_dot(p, u), _dot(p, v))
-
-
-def _cross3(a, b):
-    return (a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0])
+        keys = []
+        for idx, mat in ordered:
+            cx = sum(verts[i][0] for i in idx) / 3.0
+            cy = sum(verts[i][1] for i in idx) / 3.0
+            cz = sum(verts[i][2] for i in idx) / 3.0
+            keys.append((mat, cx * n[0] + cy * n[1] + cz * n[2]))
+        assert keys == sorted(keys), (
+            f"direction {d} not sorted by (material, dist-along-axis)")
+    print(f"PASS: direction equivalence -> {len(faces)} shared faces, "
+          f"4 dirs same geometry, order invariant holds")
 
 
 def _dot(a, b):
@@ -288,5 +265,5 @@ if __name__ == "__main__":
     test_budget_and_no_degenerate()
     test_winding_ccw()
     test_quantization()
-    test_direction_silhouette_coverage()
+    test_direction_equivalence()
     print("ALL PASS")

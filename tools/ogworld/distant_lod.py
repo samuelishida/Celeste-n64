@@ -497,7 +497,7 @@ def build_distant_dlod(chunk: ChunkInput, material_count: int, origin,
                        budget: int = DEFAULT_BUDGET) -> Optional[dict]:
     """High-level entry: decimate + emit a compact `.dlod` for one cell.
 
-    Emits a single-direction DLOD v1 (direction_count=1, flags bit0 clear).
+    Emits a single-direction DLOD v2 (direction_count=1, flags bit0 clear).
     Returns a stats dict (face/vert counts + `budget_met`), or None if the
     cell has no renderable geometry.
     """
@@ -511,7 +511,7 @@ def build_distant_dlod(chunk: ChunkInput, material_count: int, origin,
             "budget_met": budget_met}
 
 
-# ── Per-direction silhouettes (Inc 4) ──────────────────────────────────────
+# ── Same-geometry, painter-sorted direction variants (Inc 1) ──────────────
 
 # Direction index → outward normal (matches lod_math.hpp DirectionalIndexFromDelta):
 #   0 = +Z (south), 1 = -Z (north), 2 = +X (east), 3 = -X (west)
@@ -521,54 +521,60 @@ _DIRECTION_NORMALS = [
     (1.0, 0.0, 0.0),
     (-1.0, 0.0, 0.0),
 ]
-# A face's outward normal must be within this cosine of the direction normal
-# to be kept for that direction's silhouette (±45°).
-_DIRECTION_COS = 0.7071
-# Per-direction face budget (Inc 4).
-DEFAULT_DIRECTION_BUDGET = 12
+# Per-direction face budget (Inc 1). All 4 directions share ONE decimated
+# mesh, so this is the single per-cell budget (matches the bake CLI default).
+DEFAULT_DIRECTION_BUDGET = 20
 
 
-def _direction_silhouette(polygons: List[WorldPolygon], dir_index: int,
-                          budget: int = DEFAULT_DIRECTION_BUDGET):
-    """Extract one direction's silhouette mesh.
+def _sort_direction(faces, verts, dir_index):
+    """Reorder `faces` back-to-front along `dir_index`'s axis.
 
-    Keeps faces whose outward normal faces `dir_index` (within ±45°), plus the
-    group outlines touching that side, then decimates to the per-direction
-    budget. Returns `(verts, faces, budget_met)` (same contract as
-    `build_distant_lod`).
+    Stable sort by `(material_id, dot(centroid, dir_normal))` ascending so
+    material runs still form AND within-material painter order survives (the
+    runtime's `SortFacesByMaterial` is a stable sort). All 4 directions
+    reference the SAME triangle set — only the order differs, so switching
+    directions never swaps geometry (no pop, no holes).
     """
     n = _DIRECTION_NORMALS[dir_index]
-    facing = [p for p in polygons if _dot(p.normal, n) >= _DIRECTION_COS]
-    if not facing:
-        return [], [], True  # no facing geometry — empty direction
-    return build_distant_lod(facing, KLOD_SCALE, budget)
+
+    def key(face):
+        idx_tuple, mat = face
+        cx = sum(verts[i][0] for i in idx_tuple) / 3.0
+        cy = sum(verts[i][1] for i in idx_tuple) / 3.0
+        cz = sum(verts[i][2] for i in idx_tuple) / 3.0
+        return (mat, cx * n[0] + cy * n[1] + cz * n[2])
+
+    return sorted(faces, key=key)
 
 
 def build_distant_dlod_directional(chunk: ChunkInput, material_count: int,
                                   origin, out_path: str,
                                   lod_scale: float = KLOD_SCALE,
                                   budget: int = DEFAULT_BUDGET,
-                                  dir_budget: int = DEFAULT_DIRECTION_BUDGET
+                                  dir_budget: Optional[int] = None
                                   ) -> Optional[dict]:
-    """High-level entry: emit a 4-direction DLOD v1 for one cell.
+    """High-level entry: emit a 4-direction DLOD v2 for one cell.
 
-    Each direction is a silhouette toward N/S/E/W, decimated to `dir_budget`
-    faces. Returns a stats dict (per-direction face/vert counts +
-    `budget_met`), or None if the cell has no renderable geometry.
+    Decimates the cell ONCE to a single 360° mesh (budget = `dir_budget`,
+    defaulting to `budget`), then emits 4 direction sections that reference
+    the SAME triangle set, reordered back-to-front along each direction axis
+    (painter's algorithm, Z off — no geometry swap, no pop). Returns a stats
+    dict (face/vert counts + `budget_met`), or None if the cell has no
+    renderable geometry.
     """
+    if dir_budget is None:
+        dir_budget = budget
     if not chunk.polygons:
         return None
-    directions = []
-    total_faces = 0
-    all_met = True
-    for d in range(4):
-        verts, faces, met = _direction_silhouette(list(chunk.polygons), d,
-                                                   dir_budget)
-        directions.append((verts, faces))
-        total_faces += len(faces)
-        all_met = all_met and met
+    verts, faces, budget_met = build_distant_lod(list(chunk.polygons),
+                                                 lod_scale, dir_budget)
+    directions = [(verts, _sort_direction(faces, verts, d))
+                  for d in range(4)]
     write_dlod(directions, material_count, origin, out_path,
                scale=lod_scale, per_direction=True)
-    return {"faces": total_faces,
+    # `faces` is the shared decimated mesh (1×); the DLOD file carries 4
+    # direction copies, so report the file's total face count (matches the
+    # DLOD header `face_count` and the pre-Inc-1 semantics).
+    return {"faces": len(faces) * len(directions),
             "vertices": sum(len(v) for v, _ in directions),
-            "budget_met": all_met}
+            "budget_met": budget_met}

@@ -428,9 +428,13 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
         if (world_bounds_valid_) {
             // Fog completes before the drop threshold so dropped cells are
             // fully fogged (no pop). kFogMaxMinDistance (4000) is high enough
-            // to not clamp the new min (~532).
+            // to not clamp the new min (~370).
+            // Inc 5 / D4: the fog-onset ratio is lowered to ~0.28 (≈370u) so
+            // the ring boundary (3×3 square, corner cells ~508u) sits INSIDE
+            // the fog ramp — the flat→tex transition is softened by fog. This
+            // ratio is the SINGLE tuning point for the ring boundary (D7).
             const float drop_dist = sqrtf(kDistantMaxDist2);
-            fog = MakeFog(drop_dist * 0.4f, drop_dist * 0.9f,
+            fog = MakeFog(drop_dist * 0.28f, drop_dist * 0.9f,
                           {120.0f, 150.0f, 180.0f});
         } else {
             // Fallback: keep the existing far-plane-derived range.
