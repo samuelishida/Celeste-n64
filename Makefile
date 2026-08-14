@@ -54,7 +54,8 @@ DFS_MAP_PACK_FILES := $(wildcard filesystem/lvl/forsyken-city/*.lvl) \
                       $(wildcard filesystem/lvl/forsyken-city/*.colmesh) \
                       $(wildcard filesystem/lvl/forsyken-city/*.mappack) \
                       $(wildcard filesystem/lvl/forsyken-city/*.manifest) \
-                      $(wildcard filesystem/lvl/forsyken-city/*.json)
+                      $(wildcard filesystem/lvl/forsyken-city/*.json) \
+                      $(wildcard filesystem/lvl/forsyken-city/*.dlod)
 
 # Combine all DFS files
 DFS_ALL_FILES := $(DFS_LVL_FILES) $(DFS_MAP_PACK_FILES)
@@ -122,8 +123,10 @@ filesystem/lvl/forsyken-city/%.lvl filesystem/lvl/forsyken-city/%.colmesh filesy
 	tools/ogworld/geometry.py \
 	tools/ogworld/collision.py \
 	tools/ogworld/chunking.py \
+	tools/ogworld/distant_lod.py \
 	tools/writers/colmesh_world_writer.py \
 	tools/writers/lvl_world_writer.py \
+	tools/writers/dlod_writer.py \
 	tools/mappack_format.py \
 	tools/artifact_hash.py \
 	tools/ogmap_lib/__init__.py \
@@ -149,6 +152,7 @@ filesystem/lvl/forsyken-city/%.lvl filesystem/lvl/forsyken-city/%.colmesh filesy
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.colmesh filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.mappack filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.manifest filesystem/lvl/forsyken-city/ 2>/dev/null || true
+	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.dlod filesystem/lvl/forsyken-city/ 2>/dev/null || true
 
 filesystem/lvl/forsyken-city:
 	mkdir -p $@
@@ -223,6 +227,7 @@ src = \
 	src/user/gameplay/render/open_world_renderer.cpp \
 	src/user/gameplay/render/tile_streamer.cpp \
 	src/user/gameplay/render/distant_world_renderer.cpp \
+	src/user/gameplay/render/dlod_loader.cpp \
 	src/user/gameplay/render/skybox.cpp \
 	src/user/gameplay/render/t3dm_room_renderer.cpp \
 	src/user/gameplay/world/level_loader.cpp \
@@ -272,7 +277,10 @@ bake-colmesh-all:
 	  esac \
 	done
 
--include $(wildcard $(BUILD_DIR)/*.d)
+# Header dependency files are emitted next to each .o under $(BUILD_DIR)/src,
+# so the flat wildcard would miss them (causing stale-layout links — a real
+# heap-corruption bug class). Find them recursively instead.
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
 
 # Bake the whole Forsaken City map-pack (grid-chunked).
 # Usage: make bake-forsaken-city

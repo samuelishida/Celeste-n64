@@ -9,6 +9,7 @@
 #include <rdpq_mode.h>
 
 #include "gameplay/render/lvl_room_renderer.hpp"
+#include "gameplay/render/dlod_loader.hpp"
 #include "gameplay/render/open_world_renderer.hpp"  // RenderCounters (Inc 1 / D7)
 
 namespace madeline_cube {
@@ -19,73 +20,71 @@ namespace {
 // don't pop at the exact screen edge. Tuned in Inc 6.
 constexpr float kCullMargin = 1.15f;
 
-// Localize a "rom:/lvl/<pack>/<chunk>_distant.lvl" path to a filesystem path
-// "<build_dir>/<chunk>_distant.lvl" for host-side loading. On device the
-// rom:/ path is used as-is.
-const char* LocalizePath(const char* rom_path, const char* build_dir) {
-    if (!build_dir || build_dir[0] == '\0') return rom_path;
-    static thread_local char local[256];
-    const char* slash = std::strrchr(rom_path, '/');
-    const char* fname = slash ? slash + 1 : rom_path;
-    std::snprintf(local, sizeof(local), "%s/%s", build_dir, fname);
-    return local;
-}
+// Direction-selection close threshold (Inc 4 / compressed-LOD): when the
+// camera is within this distance of a cell center (XZ), use the camera's own
+// facing instead of the cell→camera delta to avoid unstable directional
+// selection (Lambert §12). ≈ 0.5 × cell size (cells are 240 world units).
+constexpr float kDirectionCloseThreshold = 120.0f;
 
 }  // namespace
 
-// Free every loaded distant mesh. All four directional `meshes[d]` slots point
-// at the SAME loaded mesh (Inc 2 / D1), so only slot 0 is freed — freeing all
-// four would double-free the same pointer (pre-existing UB). If future
-// directional variants hold distinct meshes, this must be revisited.
-DistantWorldRenderer::~DistantWorldRenderer() {
+// Free every loaded distant mesh. All four directional `meshes[d]` slots may
+// hold DISTINCT meshes (Inc 4 / compressed-LOD), so every non-null slot is
+// freed exactly once. Idempotent.
+void DistantWorldRenderer::FreeEntries() {
     for (int i = 0; i < entry_count_; ++i) {
         DistantLodEntry& en = entries_[i];
-        if (en.meshes[0]) {
-            en.meshes[0]->Free();
-            delete en.meshes[0];
-            en.meshes[0] = nullptr;
+        for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
+            if (en.meshes[d]) {
+                en.meshes[d]->Free();
+                delete en.meshes[d];
+                en.meshes[d] = nullptr;
+            }
         }
     }
     entry_count_ = 0;
 }
 
+DistantWorldRenderer::~DistantWorldRenderer() {
+    FreeEntries();
+}
+
 bool DistantWorldRenderer::Load(const MapSpecV2& spec, const char* build_dir) {
-    // Free any existing distant meshes (slot 0 only — see destructor comment).
-    for (int i = 0; i < entry_count_; ++i) {
-        DistantLodEntry& en = entries_[i];
-        if (en.meshes[0]) {
-            en.meshes[0]->Free();
-            delete en.meshes[0];
-            en.meshes[0] = nullptr;
-        }
-    }
-    entry_count_ = 0;
+    // Free any existing distant meshes (all directional slots).
+    FreeEntries();
 
     if (spec.room_count > 64) return false;  // entries_ cap
     for (int i = 0; i < spec.room_count; ++i) {
         const V2RoomSpec& rs = spec.rooms[i];
         if (rs.id[0] == '\0') continue;
 
-        // Distant LVL path: <chunk>_distant.lvl (the bake emits these).
-        // Build from the room's lvl_path by inserting "_distant" before ".lvl".
-        char distant_path[V2RoomSpec::kPathLen + 16] = {};
-        std::strncpy(distant_path, rs.lvl_path, sizeof(distant_path) - 1);
-        char* dot = std::strrchr(distant_path, '.');
-        if (dot) {
-            // Shift the extension right by 8 so it sits directly after the
-            // 8-char "_distant" insert: "<chunk>_distant.lvl". (Shifting by
-            // 9 leaves the old NUL at dot+8, truncating the ".lvl" suffix.)
-            const char* ext = dot;
-            const size_t ext_len = std::strlen(ext);
-            std::memmove(dot + 8, dot, ext_len + 1);
-            std::memcpy(dot, "_distant", 8);
+        // Distant geometry: prefer the compact `.dlod` (Inc 3 / compressed-LOD),
+        // falling back to the `*_distant.lvl` when the `.dlod` is absent
+        // (rollback-safe until Inc 5 removes the LVL2 distant path). The cell
+        // id is the room id (e.g. "cell_00_00"); the pack dir is extracted
+        // from the room's lvl_path (rom:/lvl/<pack>/<chunk>.lvl).
+        char pack_dir[V2RoomSpec::kPathLen] = {};
+        {
+            const char* p = rs.lvl_path;
+            // Skip "rom:/lvl/".
+            const char* start = std::strstr(p, "lvl/");
+            if (start) start += 4;
+            else start = p;
+            const char* slash = std::strchr(start, '/');
+            size_t len = slash ? static_cast<size_t>(slash - start)
+                               : std::strlen(start);
+            if (len >= sizeof(pack_dir)) len = sizeof(pack_dir) - 1;
+            std::memcpy(pack_dir, start, len);
+            pack_dir[len] = '\0';
         }
 
-        LvlRoomRenderer* mesh = new LvlRoomRenderer();
-        const char* path = LocalizePath(distant_path, build_dir);
-        if (!mesh->Load(path, rs.render_origin, kLodScale)) {
-            delete mesh;
-            // A cell with no distant LVL (no renderable geometry) is skipped.
+        // Load the .dlod (all 4 directions) or fall back to the .lvl.
+        LvlRoomRenderer* meshes[DistantLodEntry::kMaxDirMeshes] = {};
+        int loaded = LoadDistantCellDlodAll(pack_dir, rs.id, rs.render_origin,
+                                            kLodScale, build_dir, meshes);
+        if (loaded <= 0) {
+            // A cell with no distant geometry (no renderable geometry) is
+            // skipped.
             continue;
         }
 
@@ -97,9 +96,8 @@ bool DistantWorldRenderer::Load(const MapSpecV2& spec, const char* build_dir) {
         en.cell_iz = rs.cell_iz;
         en.origin = rs.render_origin;
         en.child_count = 0;
-        // First version: all four directional slots share the same mesh.
         for (int d = 0; d < DistantLodEntry::kMaxDirMeshes; ++d) {
-            en.meshes[d] = mesh;
+            en.meshes[d] = meshes[d];
         }
         ++entry_count_;
     }
@@ -149,7 +147,10 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
     }
     const int n = BuildDistantRenderListCulled(
         camera_pos_, cam.target, entries_, entry_count_, order, 64,
-        hfov_deg, cam.near, cam.far, kCullMargin);
+        hfov_deg, cam.near, cam.far, kCullMargin, kDistantMaxDist2);
+
+    // Reset the per-cell cost capture array (Inc 3 / instrumentation).
+    cell_stat_count_ = 0;
 
     // arch.md §7-8: Z off, draw farthest first, then restore Z.
     rdpq_sync_pipe();
@@ -176,13 +177,44 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
     for (int i = 0; i < n; ++i) {
         const int e = order[i].cell_index;
         if (e < 0 || e >= entry_count_) continue;
+        DistantLodEntry& en = entries_[e];
+        // Inc 4 / compressed-LOD: select the directional mesh facing the
+        // camera. Near the cell center, use the camera's own facing to avoid
+        // unstable selection (Lambert §12). Fall back to meshes[0] if the
+        // selected slot is null, else skip.
+        const Vec3 cam_dir = {cam.target.x - camera_pos_.x,
+                              cam.target.y - camera_pos_.y,
+                              cam.target.z - camera_pos_.z};
+        const int d = DirectionalMeshIndex(camera_pos_, en.origin, cam_dir,
+                                           kDirectionCloseThreshold);
+        LvlRoomRenderer* mesh = en.meshes[d];
+        if (!mesh) mesh = en.meshes[0];
+        if (!mesh) continue;
         // Inc 1 / D7: count cells drawn (once per cell).
         if (counters_) ++counters_->distant_cells;
-        // Inc 2 / D1: draw meshes[0] only — all four directional slots point
-        // at the SAME loaded distant mesh, so the old 4-slot loop drew every
-        // cell 4× (45 → 180 mesh draws). The 4-slot data shape stays for
-        // future per-direction variants.
-        if (entries_[e].meshes[0]) entries_[e].meshes[0]->Draw();
+        mesh->Draw();
+
+        // Inc 2 / instrumentation: attribute this cell's draw cost. The active
+        // path (runs vs per-face batches) mirrors Draw()'s own gate exactly, so
+        // the sync count is the true RSP sync count. Guard counters_ null.
+        const int units = mesh->IsActiveRunPath() ? mesh->RunCount()
+                                                  : mesh->BatchCount();
+        if (units > 0 && counters_) {
+            counters_->distant_batches += static_cast<uint32_t>(units);
+            counters_->distant_vert_loads += static_cast<uint32_t>(units);
+            counters_->distant_syncs += static_cast<uint32_t>(units);
+        }
+
+        // Inc 3 / instrumentation: capture a per-cell cost summary (bounded to
+        // the entries cap). `order[i].distance` is dx²+dz² (distance²).
+        if (cell_stat_count_ < kDistantCellStatCap) {
+            DistantCellStat& st = cell_stats_[cell_stat_count_++];
+            st.cell_ix = en.cell_ix;
+            st.cell_iz = en.cell_iz;
+            st.runs = units > 0 ? units : 0;
+            st.verts = mesh->VertexCount();
+            st.distance_sq = order[i].distance;
+        }
     }
 
     // Tear down fog + Z before the near pass.

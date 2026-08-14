@@ -24,6 +24,42 @@ struct FaceSpec {
     uint16_t material_id;
 };
 
+// Stable-sort `src` faces by material_id (ascending), writing the reordered
+// indices to `out_order` (a permutation of 0..n-1). Returns the number of
+// distinct material groups, or -1 if `out_capacity < n` (caller falls back to
+// unsorted coalescing — never a silent truncation). The sort is STABLE so
+// faces within a material keep their original order (preserves per-face fan
+// origins — each face still fans from its own first_vertex, so reordering is
+// safe for the Z-on near pass). Host-safe — no N64 types.
+inline int SortFacesByMaterial(const FaceSpec* src, int n,
+                               uint16_t* out_order, int out_capacity) {
+    if (!src || n <= 0 || !out_order) return 0;
+    if (out_capacity < n) return -1;
+    // Initialize the identity permutation.
+    for (int i = 0; i < n; ++i) out_order[i] = static_cast<uint16_t>(i);
+    // Stable insertion sort by material_id (n is small — a cell's face count
+    // is bounded by kMaxBatches=1024; insertion sort is O(n²) but n is small
+    // and this runs once at load time, not per frame).
+    for (int i = 1; i < n; ++i) {
+        const uint16_t key = out_order[i];
+        const uint16_t key_mat = src[key].material_id;
+        int j = i - 1;
+        while (j >= 0 && src[out_order[j]].material_id > key_mat) {
+            out_order[j + 1] = out_order[j];
+            --j;
+        }
+        out_order[j + 1] = key;
+    }
+    // Count distinct material groups.
+    int groups = 0;
+    for (int i = 0; i < n; ++i) {
+        if (i == 0 || src[out_order[i]].material_id != src[out_order[i - 1]].material_id) {
+            ++groups;
+        }
+    }
+    return groups;
+}
+
 // One coalesced run: a contiguous span of same-material faces.
 // `vertex_count` is the run span measured from the even-aligned load start so
 // that `(first_vertex & 1) + vertex_count <= max_span` (see CoalesceBatches) —

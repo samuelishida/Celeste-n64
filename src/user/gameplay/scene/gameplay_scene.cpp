@@ -208,6 +208,12 @@ struct GameplayScene::Impl {
     // Material catalog for the textured near pass (Inc 5). Loaded from the
     // map-pack's `.manifest`; owned by this Impl.
     MaterialCatalog material_catalog_;
+    // Cached union of all room AABBs (Inc 4 / D4). Computed once at map-pack
+    // init (alongside the fog config) and reused every frame instead of
+    // re-running `UnionRoomsAABB` over all 45 rooms. Static for the map
+    // lifetime. `world_bounds_valid_` guards the null/empty case.
+    AABB world_bounds = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    bool world_bounds_valid_ = false;
 
     // Resolve the active room for query/update/render. Routes to the MapRuntime
     // active room when a map-pack is in use, else the legacy single room.
@@ -398,14 +404,39 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
     // because t3d_fog_set_range operates in the projection's depth space, not
     // world distance. Static-by-design (derived from static world_bounds); if
     // the map ever becomes dynamic, move this into the per-frame distant render.
+    // Inc 4 / D4: cache the world bounds here (computed once) and reuse it in
+    // Render instead of re-running `UnionRoomsAABB` over all 45 rooms every
+    // frame.
+    //
+    // Inc 2 / D2 (distant-pass perf): retune the fog to complete WITHIN the
+    // distance² drop threshold so far cells are fully fogged when dropped —
+    // no pop at the drop edge. The drop threshold is `sqrt(kDistantMaxDist2)`
+    // (≈1330 for Forsaken City); the fog range is derived from that constant
+    // in code (`sqrt(kDistantMaxDist2) * 0.4 → * 0.9` ≈ 532 → 1197), keeping
+    // the drop/fog coupling in one place. This makes the horizon fade within
+    // the map (fog completes at ~1197, well inside the 3228 diagonal). The
+    // `0.4/0.9` ratios are a world-XZ approximation fed into depth-space fog;
+    // Inc 3 tunes them by feel. If `world_bounds` is invalid we keep the
+    // existing `distant_far * 0.4/0.9` range as the fallback so a null/empty
+    // bounds never produces an invalid `MakeFog(0,0,…)`.
     {
         const MapSpecV2& spec = map_runtime_.Spec();
-        const AABB world_bounds = UnionRoomsAABB(spec.rooms, spec.room_count);
+        world_bounds = UnionRoomsAABB(spec.rooms, spec.room_count);
+        world_bounds_valid_ = spec.room_count > 0;
         const float distant_far = MapFarClipDistance(&world_bounds, 1.15f);
-        // Fog starts at 40% of the distant far and completes at 90% (before the
-        // clip). kFogMaxMinDistance (4000) is high enough to not clamp.
-        FogParams fog = MakeFog(distant_far * 0.4f, distant_far * 0.9f,
-                                {120.0f, 150.0f, 180.0f});
+        FogParams fog;
+        if (world_bounds_valid_) {
+            // Fog completes before the drop threshold so dropped cells are
+            // fully fogged (no pop). kFogMaxMinDistance (4000) is high enough
+            // to not clamp the new min (~532).
+            const float drop_dist = sqrtf(kDistantMaxDist2);
+            fog = MakeFog(drop_dist * 0.4f, drop_dist * 0.9f,
+                          {120.0f, 150.0f, 180.0f});
+        } else {
+            // Fallback: keep the existing far-plane-derived range.
+            fog = MakeFog(distant_far * 0.4f, distant_far * 0.9f,
+                          {120.0f, 150.0f, 180.0f});
+        }
         open_world_.SetFog(fog);
     }
 
@@ -522,6 +553,32 @@ void GameplayScene::SetMapPack(const char* mappack_path) {
     }
 }
 
+const RenderCounters& GameplayScene::GetRenderCounters() const {
+    // The two-pass orchestrator owns the per-frame counters; forward them so
+    // the reporting profiler (rom_main.cpp) can print them (Inc 1 / D6).
+    // If the scene isn't initialized yet, return a zeroed static fallback
+    // (never dereference a null impl_).
+    static const RenderCounters kEmpty;
+    return impl_ ? impl_->open_world_.Counters() : kEmpty;
+}
+
+const n64::FrameProfiler& GameplayScene::Profiler() const {
+    // Forward the renderer's per-phase profiler (Inc 1 / instrumentation) so
+    // rom_main can print phase_average_ms(). If the scene isn't initialized,
+    // return a zeroed static fallback (never dereference a null impl_).
+    static const n64::FrameProfiler kEmpty(60);
+    return impl_ ? impl_->open_world_.Profiler() : kEmpty;
+}
+
+const DistantWorldRenderer::DistantCellStat* GameplayScene::GetDistantCellStats(int* count) const {
+    // Forward the distant pass's per-cell cost capture (Inc 3 / instrumentation).
+    // If the scene isn't initialized, return nullptr with *count=0.
+    if (count) *count = 0;
+    if (!impl_) return nullptr;
+    if (count) *count = impl_->open_world_.Distant().CellStatCount();
+    return impl_->open_world_.Distant().CellStats();
+}
+
 void GameplayScene::Init() {
     impl_ = new Impl();
     impl_->lvl_path   = lvl_path_;
@@ -617,6 +674,13 @@ void GameplayScene::Shutdown() {
 void GameplayScene::Update(float delta_seconds) {
     if (impl_ == nullptr) return;
 
+    // Open the renderer's per-frame profiler + reset arena/counters at the TOP
+    // of Update (Inc 1 / instrumentation, D1). This MUST precede SetCenter/
+    // transitions (which emit kPhaseStreaming) so the streaming ticks are not
+    // wiped by BeginFrame's reset. EndFrame closes the span at the tail of
+    // Render, spanning Update + Render.
+    impl_->open_world_.BeginFrame();
+
     // Sample the controller once per render frame; same snapshot replayed
     // across all fixed-step substeps (§34: capture raw input once).
     joypad_poll();
@@ -636,6 +700,11 @@ void GameplayScene::Update(float delta_seconds) {
         impl_->camera.target.y - impl_->camera.position.y,
         impl_->camera.target.z - impl_->camera.position.z,
     };
+
+    // Reset collision query counters at the start of each frame so the
+    // telemetry line reports only this frame's work.
+    impl_->map_runtime_.GlobalCollision().ResetCounters();
+    impl_->room.query_counters = &impl_->map_runtime_.GlobalCollision().Counters();
 
     // Fixed-step physics loop.
     const int n_ticks = impl_->fixed_step.BeginFrame(delta_seconds);
@@ -729,6 +798,9 @@ void GameplayScene::Update(float delta_seconds) {
             motor_result.grounded ? motor_result.ground_normal.y : 0.0f,
             active ? active->render_origin : Vec3{0.0f, 0.0f, 0.0f});
     }
+    // Inc 8: Record per-frame collision query cost from the global collision.
+    impl_->telemetry.RecordCollisionQueryCounters(
+        impl_->map_runtime_.GlobalCollision().Counters());
     if (did_respawn) {
         impl_->telemetry.RecordRespawn();
         impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
@@ -879,23 +951,21 @@ void GameplayScene::Render() {
         // Inc 3 swaps it for TileStreamer. Otherwise use the legacy single-room
         // renderer.
         if (impl_->use_map_pack_) {
-            // Reset the frame-scoped arena + profiler phases (Inc 7).
-            impl_->open_world_.BeginFrame();
-
-            // Inc 4 / D4: the near pass draws ALL residents every frame (the
-            // pool is bounded to the center + Chebyshev-1 ring), so there is no
-            // per-frame frustum visibility culling to drive here. The hook
-            // only runs the over-capacity eviction safety net.
+            // Reset the frame-scoped arena + profiler phases (Inc 7). The arena
+            // + counters are reset in BeginFrame (top of Update); only the
+            // near-pass update + render follow here.
             impl_->open_world_.UpdateCamera();
 
             const MapSpecV2& spec = impl_->map_runtime_.Spec();
-            const AABB world_bounds = UnionRoomsAABB(spec.rooms, spec.room_count);
+            // Inc 4 / D4: use the cached world bounds (computed once at
+            // map-pack init) instead of re-running `UnionRoomsAABB` over all
+            // 45 rooms every frame.
             const PassCameras cams = BuildPassCameras(
                 impl_->camera.position, impl_->camera.target,
                 fov_deg, 20.0f, 800.0f,
                 /*tile_size=*/spec.chunk_size * spec.scale,
                 /*lod_scale=*/0.25f,
-                /*world_bounds=*/spec.room_count > 0 ? &world_bounds : nullptr);
+                /*world_bounds=*/impl_->world_bounds_valid_ ? &impl_->world_bounds : nullptr);
             // Inc 2 / z-split: hand the viewport to the orchestrator so it can
             // switch projections between the distant and near passes.
             impl_->open_world_.SetViewport(&impl_->viewport);
@@ -963,6 +1033,11 @@ void GameplayScene::Render() {
         rdpq_fill_rectangle(0, 0, display_get_width(), display_get_height());
     }
     impl_->debug_hud.Render();
+
+    // Close the renderer's per-frame profiler span (Inc 1 / instrumentation).
+    // Called unconditionally (both the map-pack and legacy branches) so the
+    // whole-frame average covers either path. Safe when no phases were opened.
+    impl_->open_world_.EndFrame();
 
     rdpq_detach_show();
 }

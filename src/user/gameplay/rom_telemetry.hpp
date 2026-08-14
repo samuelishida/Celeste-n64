@@ -4,6 +4,7 @@
 
 #include "math_types.hpp"
 #include "gameplay/player/player_state.hpp"
+#include "gameplay/world/world.hpp"
 
 namespace madeline_cube {
 
@@ -62,6 +63,12 @@ struct RomTelemetry {
     // verifying the drawn chunk matches the collision frame.
     float render_origin[3] = {0.0f, 0.0f, 0.0f};
 
+    // Inc 8: collision-query counters surfaced to ROM telemetry.
+    uint32_t query_raycasts = 0;
+    uint32_t query_sphere_sweeps = 0;
+    uint32_t query_overlap_queries = 0;
+    uint32_t query_bvh_nodes_touched = 0;
+
     void BeginFrame() { ++frame_index; }
 
     void RecordPlayerState(const PlayerState& state);
@@ -76,6 +83,9 @@ struct RomTelemetry {
     // Inc 3: Record the active room id, floor normal, and render origin.
     void RecordActiveRoom(const char* room_id, float fnorm_y,
                           const Vec3& render_origin);
+
+    // Inc 8: Record per-frame collision query cost.
+    void RecordCollisionQueryCounters(const CollisionQueryCounters& counters);
 
     void RecordLanding() { ++landing_events; }
     void RecordDashStart() { ++dash_start_events; }

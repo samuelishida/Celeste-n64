@@ -215,7 +215,7 @@ Recommended validation habit:
 
 Current ROM control map (N64 controller, via `src/user/gameplay/input/input_system.cpp`):
 
-- left analog stick + D-Pad: move
+- left analog stick: move
 - `A` (or GameCube `Y`): jump
 - `B` (or GameCube `X`): dash
 - `Z` / `L` / `R` (or analog triggers): climb / grab

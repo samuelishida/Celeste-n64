@@ -31,7 +31,9 @@ from ogworld.collision import (
 )
 from ogworld.chunking import partition_world, build_adjacency, cell_id
 from ogworld.class_policy import validate_policies
-from ogworld.distant_lod import build_distant_lvl
+from ogworld.distant_lod import (
+    build_distant_dlod, build_distant_dlod_directional,
+)
 from writers.colmesh_world_writer import write_colmesh
 from writers.lvl_world_writer import write_lvl_room
 from mappack_format import (
@@ -89,7 +91,18 @@ def main() -> int:
     ap.add_argument("--strict", action="store_true", default=True)
     ap.add_argument("--mappack-id", default="forsyken-city")
     ap.add_argument("--eps", type=float, default=1e-4)
+    ap.add_argument("--distant-budget", type=int, default=20,
+                    help="per-cell distant face budget (hard ceiling; default 20)")
+    ap.add_argument("--no-directional", action="store_true",
+                    help="emit a single 360° distant mesh instead of 4 "
+                         "per-direction silhouettes (Inc 4 fallback)")
     args = ap.parse_args()
+
+    if args.distant_budget <= 0:
+        print(f"WARN: invalid --distant-budget {args.distant_budget}; "
+              f"clamping to default 20")
+        args.distant_budget = 20
+    args.directional = not args.no_directional
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -154,6 +167,12 @@ def main() -> int:
     staging = out_dir / "staging"
     staging.mkdir(parents=True, exist_ok=True)
 
+    # Inc 5: the LVL2 distant path is removed — the `.dlod` is the only distant
+    # artifact. Remove any stale `*_distant.lvl` from a prior bake so they
+    # don't leak into the published pack.
+    for stale in staging.glob("*_distant.lvl"):
+        stale.unlink()
+
     # Global CMSH.
     global_colmesh_path = staging / f"{args.mappack_id}.colmesh"
     audit_path = staging / f"{args.mappack_id}.colmesh.audit.json"
@@ -162,22 +181,14 @@ def main() -> int:
 
     # Per-room LVL + spawn table.
     v2_rooms: List[V2Room] = []
+    # Per-cell distant stats (faces/verts/bytes) for the Inc 1 audit report.
+    distant_stats_by_cell: dict = {}
     for k, c in sorted(chunks.items()):
         cid = cell_id(k)
         lvl_path = staging / f"{cid}.lvl"
         lvl_stats = write_lvl_room(c, build.texture_manifest, str(lvl_path),
                                    scale=args.scale)
         lvl_hash = artifact_hash(str(lvl_path))
-        # Distant LOD: emit a coarse distant LVL per cell (Inc 4). Skips cells
-        # with no renderable geometry (decoration/hazard). The `.lvl` wildcard
-        # in the Makefile DFS packaging already covers `*_distant.lvl`.
-        distant_path = staging / f"{cid}_distant.lvl"
-        distant_stats = build_distant_lvl(c, build.texture_manifest,
-                                          str(distant_path))
-        if distant_stats is None:
-            # No renderable geometry — remove any stale distant file.
-            if distant_path.exists():
-                distant_path.unlink()
         # World AABB from the cell's polygons.
         amin, amax = _chunk_world_aabb(c)
         # Render origin = the cell's world-space CENTER (XZ) and the center of
@@ -189,6 +200,30 @@ def main() -> int:
         render_origin = ((k[0] + 0.5) * cell_w,
                          (amin[1] + amax[1]) * 0.5,
                          (k[1] + 0.5) * cell_w)
+        # Compact `.dlod` (Inc 3/5): the ONLY distant artifact. Inc 4:
+        # 4-direction silhouettes by default (`--no-directional` falls back to
+        # a single 360° mesh).
+        dlod_path = staging / f"{cid}_distant.dlod"
+        if args.directional:
+            dlod_stats = build_distant_dlod_directional(
+                c, len(build.texture_manifest), render_origin, str(dlod_path),
+                budget=args.distant_budget)
+        else:
+            dlod_stats = build_distant_dlod(
+                c, len(build.texture_manifest), render_origin, str(dlod_path),
+                budget=args.distant_budget)
+        if dlod_stats is None:
+            # No renderable geometry — remove any stale distant file.
+            if dlod_path.exists():
+                dlod_path.unlink()
+            distant_stats_by_cell[cid] = None
+        else:
+            distant_stats_by_cell[cid] = {
+                "faces": dlod_stats["faces"],
+                "vertices": dlod_stats["vertices"],
+                "bytes": dlod_path.stat().st_size,
+                "budget_met": dlod_stats["budget_met"],
+            }
         # Spawn records for this cell.
         spawns = []
         for s in c.spawns:
@@ -276,6 +311,10 @@ def main() -> int:
                 "spawns": len(c.spawns),
             }
             for k, c in sorted(chunks.items())
+        },
+        "distant": {
+            cid: stats
+            for cid, stats in sorted(distant_stats_by_cell.items())
         },
         "adjacency": {
             cell_id(k): {ax: (cell_id(v) if v else "")

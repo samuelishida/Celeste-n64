@@ -51,13 +51,31 @@ int main() {
     scene_mgr.Goto(0);
 
     n64::FrameProfiler profiler(60);
+    // Silent: the consolidated report block below prints the whole-frame avg
+    // (Inc 1 / instrumentation) so exactly ONE `[profiler] avg frame time` line
+    // appears per 60 frames. The profiler still accumulates + refreshes
+    // last_average_ms() at the interval; only the debugf self-print is gated.
+    profiler.SetSilent(true);
     uint32_t memory_report_counter = 0;
+    uint32_t counter_report_counter = 0;
 
     for (;;) {
         profiler.BeginFrame();
 
         scene_mgr.Update(kFixedDeltaSeconds);
         scene_mgr.Render();
+
+        // RSPQ-block-render Inc 3 / D8 (async-RSP sync): wait for the RSP to
+        // finish the frame's commands before the next Update rewrites the
+        // single-buffered matrices the RSP DMAs at command-execution time
+        // (viewport _matCameraFP/_matProjFP, per-cell matrix_fp_, model
+        // matrices). With RSPQ blocks the CPU emits a frame in ~0.1 ms and
+        // would otherwise race 2+ frames ahead of the RSP (ring-buffer bound),
+        // so the RSP read torn matrices -> cells twitched and split. The wait
+        // is nearly free on real HW (the RSP work must happen anyway) and is
+        // the same synchronization rule tiny3d documents for buffered
+        // viewports.
+        rspq_wait();
 
         profiler.EndFrame();
 
@@ -69,6 +87,68 @@ int main() {
                    static_cast<unsigned int>(mem.total_bytes),
                    static_cast<unsigned int>(mem.used_bytes),
                    static_cast<unsigned int>(mem.free_bytes));
+        }
+
+        // Inc 1 / D6: print the per-frame render draw counters at the same
+        // 60-frame cadence as the profiler report so each pass's cost is
+        // validated on device with hard numbers. All report sources read at the
+        // same point after 60 frames, so they describe the same window. The
+        // LOCAL profiler reports the whole-frame avg; the renderer's profiler
+        // is SILENT (Inc 1) — rom_main is the single [profiler]-family report
+        // path, so exactly ONE `[profiler] avg frame time` line prints.
+        ++counter_report_counter;
+        if (counter_report_counter >= 60) {
+            counter_report_counter = 0;
+            const madeline_cube::RenderCounters& c = gameplay.GetRenderCounters();
+
+            // Whole-frame avg from the local profiler (unchanged).
+            debugf("[profiler] avg frame time over 60 frames: %.3f ms (%.1f fps)\n",
+                   static_cast<double>(profiler.last_average_ms()),
+                   profiler.last_average_ms() > 0.0f
+                       ? static_cast<double>(1000.0f / profiler.last_average_ms())
+                       : 0.0);
+
+            // Per-phase ms from the renderer's profiler (Inc 1 / instrumentation).
+            // These are the REAL per-pass costs; previously all read 0.000.
+            const n64::FrameProfiler& rp = gameplay.Profiler();
+            debugf("[render-phases] distant=%.3f low_priority=%.3f "
+                   "high_priority=%.3f streaming=%.3f ms\n",
+                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseDistant)),
+                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseLowPriority)),
+                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseHighPriority)),
+                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseStreaming)));
+
+            // Draw counters, now including the distant pass's own split
+            // (Inc 2 / instrumentation).
+            debugf("[counters] distant_cells=%u near_batches=%u "
+                   "texture_uploads=%u vert_loads=%u syncs=%u "
+                   "distant_batches=%u distant_vert_loads=%u distant_syncs=%u\n",
+                   static_cast<unsigned int>(c.distant_cells),
+                   static_cast<unsigned int>(c.near_batches),
+                   static_cast<unsigned int>(c.texture_uploads),
+                   static_cast<unsigned int>(c.vert_loads),
+                   static_cast<unsigned int>(c.syncs),
+                   static_cast<unsigned int>(c.distant_batches),
+                   static_cast<unsigned int>(c.distant_vert_loads),
+                   static_cast<unsigned int>(c.distant_syncs));
+
+            // Per-cell distant cost summary (Inc 3 / instrumentation). Names
+            // the costliest cell (by active-path draw units = RSP sync driver).
+            int stat_count = 0;
+            const auto* stats = gameplay.GetDistantCellStats(&stat_count);
+            debugf("[distant-cells] n=%d", stat_count);
+            if (stat_count > 0 && stats) {
+                int top_i = 0;
+                for (int i = 1; i < stat_count; ++i) {
+                    if (stats[i].runs > stats[top_i].runs) top_i = i;
+                }
+                debugf(" top=(%d,%d) runs=%d verts=%d d2=%.0f\n",
+                       stats[top_i].cell_ix, stats[top_i].cell_iz,
+                       stats[top_i].runs, stats[top_i].verts,
+                       static_cast<double>(stats[top_i].distance_sq));
+            } else {
+                debugf("\n");
+            }
         }
     }
 

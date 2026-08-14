@@ -90,13 +90,20 @@ inline int BuildDistantRenderListCulled(const Vec3& camera_pos,
                                         DistantRenderItem out[],
                                         int out_capacity,
                                         float hfov_deg, float near_d,
-                                        float far_d, float margin = 1.15f) {
+                                        float far_d, float margin = 1.15f,
+                                        float max_dist2 = 0.0f) {
     if (!out || out_capacity <= 0 || !entries) return 0;
     int n = 0;
     for (int e = 0; e < entry_count && n < out_capacity; ++e) {
         const DistantLodEntry& en = entries[e];
         if (!CellInDistantFrustum(camera_pos, camera_target, hfov_deg, near_d,
                                   far_d, en.origin, margin)) {
+            continue;
+        }
+        // Inc 2 / D1: skip cells beyond the squared-distance threshold so the
+        // horizon fades into fog instead of drawing the whole map. `max_dist2
+        // <= 0` means no limit (preserves the existing cull contract).
+        if (!CellWithinDistance(camera_pos, en.origin, max_dist2)) {
             continue;
         }
         const float dx = camera_pos.x - en.origin.x;
@@ -145,6 +152,11 @@ public:
     // Number of loaded distant entries.
     int EntryCount() const { return entry_count_; }
 
+    // Free every loaded distant mesh (all distinct directional slots) and reset
+    // the entry table. Idempotent. Called by the destructor and the reload
+    // path in Load().
+    void FreeEntries();
+
     // Attach the per-frame draw counters (Inc 1 / D7). The renderer increments
     // `distant_cells` per cell drawn; the orchestrator owns + resets them.
     void SetCounters(RenderCounters* counters) { counters_ = counters; }
@@ -157,16 +169,46 @@ public:
     // Host-testable access to the LOD table (used by distant_pass_order.cpp).
     const DistantLodEntry* Entries() const { return entries_; }
 
+    // Per-cell cost summary captured each frame during the distant draw
+    // (Inc 3 / instrumentation). `distance_sq` is dx²+dz² (matches
+    // `DistantRenderItem.distance`), NOT euclidean distance. `runs` is the
+    // active-path draw unit count (runs when IsActiveRunPath, else per-face
+    // batches) — the true RSP sync driver. `verts` is the baked cell vertex
+    // count, a cell-size proxy (NOT the per-frame run span ≤70 loaded into
+    // DMEM). Host-safe — plain fields.
+    struct DistantCellStat {
+        int cell_ix = 0;
+        int cell_iz = 0;
+        int runs = 0;
+        int verts = 0;
+        float distance_sq = 0.0f;
+    };
+
+    // Number of drawn cells captured this frame (≤ kDistantCellStatCap).
+    int CellStatCount() const { return cell_stat_count_; }
+
+    // The per-frame captured cell stats (valid for CellStatCount() entries).
+    const DistantCellStat* CellStats() const { return cell_stats_; }
+
     // The compressed coordinate scale used to pack distant vertices.
     static constexpr float kLodScale = 0.25f;
 
 private:
+    // Cap for the per-cell cost array (Inc 3 / instrumentation). Matches the
+    // `entries_` cap (64): you cannot draw more cells than you have entries.
+    static constexpr int kDistantCellStatCap = 64;
+
     DistantLodEntry entries_[64];       // one per cell (kMaxRooms cap)
     int entry_count_ = 0;
     Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};
     FogParams fog_;
     RenderCounters* counters_ = nullptr;  // per-frame draw counters (Inc 1 / D7)
     n64::FrameArena* arena_ = nullptr;    // frame-scoped arena (Inc 5 / D6)
+    // Per-cell cost summary captured during Render (Inc 3 / instrumentation).
+    // Plain member array — no allocation, no arena dependency; `cell_stat_count_`
+    // is reset to 0 at the top of Render so stale data never survives.
+    DistantCellStat cell_stats_[kDistantCellStatCap];
+    int cell_stat_count_ = 0;
 };
 
 }  // namespace madeline_cube

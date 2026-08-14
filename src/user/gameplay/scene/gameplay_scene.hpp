@@ -1,5 +1,8 @@
 #pragma once
 
+#include "gameplay/render/distant_world_renderer.hpp"  // DistantCellStat (Inc 3)
+#include "gameplay/render/open_world_renderer.hpp"  // RenderCounters (Inc 1)
+#include "n64/profiler.hpp"                        // FrameProfiler (Inc 1)
 #include "gameplay/scene/scene.hpp"
 
 namespace madeline_cube {
@@ -20,6 +23,22 @@ public:
     void Shutdown() override;
     void Update(float delta_seconds) override;
     void Render() override;
+
+    // Per-frame render draw counters (Inc 1 / D6). Forwarded from the
+    // two-pass orchestrator so the reporting profiler (owned by rom_main.cpp)
+    // can print them. Named `GetRenderCounters` (not `RenderCounters`) to
+    // avoid collision with the `RenderCounters` type name.
+    const RenderCounters& GetRenderCounters() const;
+
+    // The renderer's per-phase profiler (Inc 1 / instrumentation). Forwarded
+    // so rom_main can print phase_average_ms(). May be a zeroed fallback if
+    // the scene is not yet initialized.
+    const n64::FrameProfiler& Profiler() const;
+
+    // The distant pass's per-cell cost capture (Inc 3 / instrumentation).
+    // `*count` is set to the number of drawn cells this frame (≤ 64); returns
+    // nullptr with *count=0 if the scene is not initialized.
+    const DistantWorldRenderer::DistantCellStat* GetDistantCellStats(int* count) const;
 
 private:
     struct Impl;

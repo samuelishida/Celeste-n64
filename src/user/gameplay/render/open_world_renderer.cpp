@@ -36,8 +36,14 @@ void AttachCameraAtOriginViewport(T3DViewport* viewport, const CameraDesc& cam) 
 OpenWorldRenderer::OpenWorldRenderer()
     : tile_streamer_(new TileStreamer()),
       distant_(new DistantWorldRenderer()),
-      skybox_(new Skybox()) {
+      skybox_(new Skybox()),
+      profiler_(60) {
     skybox_->Init(nullptr);  // flat-colored dome (textured skybox is future work)
+    // The renderer's profiler is SILENT (Inc 1 / instrumentation): rom_main
+    // is the single report path and reads phase_average_ms() every 60 frames.
+    // The 60-frame interval keeps the averages fresh; only the debugf
+    // self-print is suppressed.
+    profiler_.SetSilent(true);
     // Thread the per-frame counters + profiler into the passes (Inc 1 / D7) so
     // the room renderers can record draw counters and the texture-upload phase
     // is emitted. Both are set once in the ctor and live for the renderer's
@@ -111,6 +117,16 @@ void OpenWorldRenderer::BeginFrame() {
     arena_.Reset();
     // Reset the per-frame draw counters (Inc 1 / D7).
     counters_ = RenderCounters{};
+    // Open the per-frame profiler span. Must run at the top of Update (before
+    // any SetCenter/transition) so streaming ticks are not wiped by this reset.
+    profiler_.BeginFrame();
+}
+
+void OpenWorldRenderer::EndFrame() {
+    // Close the per-frame profiler span (Inc 1 / instrumentation). Safe to
+    // call every frame; the report fires at the 60-frame interval and is
+    // silent (rom_main prints it).
+    profiler_.EndFrame();
 }
 
 void OpenWorldRenderer::SetCenter(const MapSpecV2& spec,
