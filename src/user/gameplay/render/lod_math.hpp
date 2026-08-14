@@ -15,6 +15,38 @@ inline constexpr float kLevel2MinDistance = 500.0f;
 // Pi for degree->radian conversions (no global constant in math_types.hpp).
 inline constexpr float kLodPi = 3.14159265358979f;
 
+// Squared-distance threshold beyond which a distant cell is skipped (Inc 2 /
+// D1). Initial value = (distant_far * 0.4)^2 so the drop coincides with fog
+// onset; tuned in Inc 5. MUST be non-zero or the falloff is a no-op (the
+// `max_dist2 <= 0` rule below treats 0 as "no limit").
+// For the Forsaken City map: distant_far ≈ 3323, fog onset ≈ 1329, so
+// (1329)^2 ≈ 1.77e6. Cells beyond ~1329 world units fade into fog.
+//
+// Fog range (Inc 6): the runtime fog is `sqrt(kDistantMaxDist2) * 0.4 → 0.9`
+// = ~532 → 1197, so fog COMPLETES before the ~1330 drop (no pop at the drop
+// edge). The invariant (fog completes before the drop) holds.
+//
+// Inc 2 / D2 (distant-pass perf): this constant is MAP-SPECIFIC (bakes in the
+// Forsaken City diagonal; re-derive per map). It is the single source of truth
+// for the distant-pass drop threshold AND the fog range — `gameplay_scene.cpp`
+// derives the fog from `sqrt(kDistantMaxDist2)` so the drop/fog coupling lives
+// in one place. INVARIANT: the fog range must COMPLETE before
+// `sqrt(kDistantMaxDist2)` so cells dropped by the falloff are already fully
+// fogged (no pop at the drop edge). If this constant changes, the fog follows
+// automatically; keep the fog max ratio ≤ 1.0.
+inline constexpr float kDistantMaxDist2 = 1.77e6f;
+
+// Returns true if `origin` is within `max_dist2` of `cam_pos` (XZ plane).
+// `max_dist2 <= 0` → treat as "no distance limit" (all cells pass) so a bad
+// constant never blanks the horizon. Host-safe — pure Vec3/float.
+inline bool CellWithinDistance(const Vec3& cam_pos, const Vec3& origin,
+                               float max_dist2) {
+    if (max_dist2 <= 0.0f) return true;  // no limit
+    const float dx = origin.x - cam_pos.x;
+    const float dz = origin.z - cam_pos.z;
+    return (dx * dx + dz * dz) <= max_dist2;
+}
+
 // Worst-case camera→cell distance = full map diagonal × margin. Used as the
 // distant pass far clip (cull + projection). Covers a camera at any map corner
 // seeing the opposite corner. Returns 0 if `bounds` is null (caller falls back

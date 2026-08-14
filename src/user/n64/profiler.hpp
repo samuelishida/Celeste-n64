@@ -29,6 +29,12 @@ public:
     // Call once per frame, after all work.
     void EndFrame();
 
+    // Suppress the self-print `[profiler]` debugf lines. Averages still
+    // accumulate + refresh at `report_interval_` (so `phase_average_ms()`
+    // stays fresh); only the debugf output is silenced. Used when a caller
+    // (rom_main) reads `phase_average_ms()` as the single reporting path.
+    void SetSilent(bool silent) { silent_ = silent; }
+
     // Mark the start/end of a named phase. An unclosed phase asserts at frame
     // end (catches renderer bugs).
     void BeginPhase(Phase phase);
@@ -41,6 +47,7 @@ public:
 
 private:
     uint32_t report_interval_;
+    bool silent_ = false;
     uint32_t frame_count_ = 0;
     uint64_t frame_start_ticks_ = 0;
     uint64_t accumulated_ticks_ = 0;

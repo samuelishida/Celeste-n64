@@ -14,6 +14,7 @@ void RomTelemetry::PrintLine() const {
 #ifdef N64
     debugf("[telemetry] f=%u sp=%u rp=%u g=%u a=%u w=%u ip=%u iv=%u st=%u "
            "L=%u Ds=%u De=%u W=%u C=%u ms=%u sl=%u sn=%u "
+           "qr=%u qs=%u qo=%u qb=%u "
            "room=%s fnorm=%.3f orig=(%.1f,%.1f,%.1f) "
            "pos=(%.3f,%.3f,%.3f) vel=(%.3f,%.3f,%.3f)\n",
            static_cast<unsigned int>(frame_index),
@@ -33,6 +34,10 @@ void RomTelemetry::PrintLine() const {
            static_cast<unsigned int>(moving_surface_count),
            static_cast<unsigned int>(slope_ground_count),
            static_cast<unsigned int>(snap_recoveries_count),
+           static_cast<unsigned int>(query_raycasts),
+           static_cast<unsigned int>(query_sphere_sweeps),
+           static_cast<unsigned int>(query_overlap_queries),
+           static_cast<unsigned int>(query_bvh_nodes_touched),
            active_room[0] ? active_room : "-",
            static_cast<double>(floor_normal_y),
            static_cast<double>(render_origin[0]),
@@ -47,6 +52,7 @@ void RomTelemetry::PrintLine() const {
 #else
     std::printf("[telemetry] f=%u sp=%u rp=%u g=%u a=%u w=%u ip=%u iv=%u st=%u "
                 "L=%u Ds=%u De=%u W=%u C=%u ms=%u sl=%u sn=%u "
+                "qr=%u qs=%u qo=%u qb=%u "
                 "room=%s fnorm=%.3f orig=(%.1f,%.1f,%.1f) "
                 "pos=(%.3f,%.3f,%.3f) vel=(%.3f,%.3f,%.3f)\n",
                 static_cast<unsigned int>(frame_index),
@@ -66,6 +72,10 @@ void RomTelemetry::PrintLine() const {
                 static_cast<unsigned int>(moving_surface_count),
                 static_cast<unsigned int>(slope_ground_count),
                 static_cast<unsigned int>(snap_recoveries_count),
+                static_cast<unsigned int>(query_raycasts),
+                static_cast<unsigned int>(query_sphere_sweeps),
+                static_cast<unsigned int>(query_overlap_queries),
+                static_cast<unsigned int>(query_bvh_nodes_touched),
                 active_room[0] ? active_room : "-",
                 static_cast<double>(floor_normal_y),
                 static_cast<double>(render_origin[0]),
@@ -107,6 +117,13 @@ void RomTelemetry::RecordActiveRoom(const char* room_id, float fnorm_y,
     render_origin[0] = origin.x;
     render_origin[1] = origin.y;
     render_origin[2] = origin.z;
+}
+
+void RomTelemetry::RecordCollisionQueryCounters(const CollisionQueryCounters& counters) {
+    query_raycasts = counters.raycasts;
+    query_sphere_sweeps = counters.sphere_sweeps;
+    query_overlap_queries = counters.overlap_queries;
+    query_bvh_nodes_touched = counters.bvh_nodes_touched;
 }
 
 void RomTelemetry::RecordPlayerState(const PlayerState& state) {

@@ -74,6 +74,14 @@ struct RenderCounters {
     uint32_t texture_uploads = 0;  // rdpq_sprite_upload calls (near pass)
     uint32_t vert_loads = 0;       // t3d_vert_load calls (near pass)
     uint32_t syncs = 0;            // t3d_tri_sync calls (near pass)
+
+    // Distant-pass draw cost (Inc 2 / instrumentation). The distant renderer
+    // accumulates these from per-cell accessors on `LvlRoomRenderer`, so the
+    // distant RSP sync/vert/batch cost is attributable separately from the
+    // near pass's shared fields above.
+    uint32_t distant_batches = 0;     // draw units in the distant pass (runs or per-face batches)
+    uint32_t distant_vert_loads = 0;  // t3d_vert_load calls in the distant pass
+    uint32_t distant_syncs = 0;       // t3d_tri_sync calls in the distant pass
 };
 
 // N64-only renderer types, forward-declared so this header stays host-safe.
@@ -128,7 +136,13 @@ public:
     void SetViewport(void* viewport) { viewport_ = viewport; }
 
     // Reset the frame-scoped arena at the start of each frame (Inc 7).
+    // Call at the TOP of GameplayScene::Update so the streaming phase (emitted
+    // inside SetCenter during transitions) is NOT wiped by the BeginFrame reset.
     void BeginFrame();
+
+    // Close the per-frame profiler span. Call at the END of GameplayScene::
+    // Render, after all phases, so the whole Update+Render span is measured.
+    void EndFrame();
 
     // The frame-scoped arena for transient per-frame allocations (Inc 7).
     n64::FrameArena& Arena() { return arena_; }
@@ -139,6 +153,10 @@ public:
     // The per-frame draw counters (Inc 1 / D7). Reset in BeginFrame; filled by
     // the distant + near passes. Read by the profiler report / device walk.
     const RenderCounters& Counters() const { return counters_; }
+
+    // The distant pass (Inc 3 / instrumentation). Exposes per-cell cost stats.
+    DistantWorldRenderer& Distant() { return *distant_; }
+    const DistantWorldRenderer& Distant() const { return *distant_; }
 
 private:
     TileStreamer* tile_streamer_ = nullptr;  // Inc 3 near pass

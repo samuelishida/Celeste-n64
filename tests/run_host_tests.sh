@@ -80,6 +80,8 @@ run_cpp near_visibility_contract tests/near_visibility_contract.cpp
 run_cpp renderer_memory_contract tests/renderer_memory_contract.cpp
 run_cpp render_counters_contract tests/render_counters_contract.cpp
 run_cpp distant_cellstats_contract tests/distant_cellstats_contract.cpp
+run_cpp dlod_format_contract tests/dlod_format_contract.cpp
+run_cpp directional_lod_contract tests/directional_lod_contract.cpp
 run_cpp input_system_smoke tests/input_system_smoke.cpp
 
 # ── Pattern C (links mappack_loader.cpp) ─────────────────────────────
@@ -102,6 +104,8 @@ run_py interconnected_map_contract tests/interconnected_map_contract.py
 run_py interconnected_seam_equivalence tests/interconnected_seam_equivalence.py
 run_py render_pipeline_contract tests/render_pipeline_contract.py
 run_py distant_lod_contract tests/distant_lod_contract.py
+run_py distant_decimation_contract tests/distant_decimation_contract.py
+run_py dlod_format_contract tests/dlod_format_contract.py
 
 echo
 echo "=== $PASSES passed, $FAILURES failed ==="

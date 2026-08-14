@@ -79,6 +79,21 @@ private:
     // unloaded renderer. Nulls `batches_` so the destructor can't double-free.
     void FreeBatches();
 
+    // Release the precompiled RSPQ block (RSPQ-block-render plan / D5). Safe
+    // on an unloaded renderer. Nulls `block_` so a double-free is impossible.
+    void FreeBlock();
+
+    // Emit the command sequence for one coalesced material run: sprite upload
+    // + textured combiner + white primColor (or flat PRIM*SHADE primColor
+    // when the material has no sprite) + one `t3d_vert_load` + each face's
+    // OWN fan + one `t3d_tri_sync`. Counter increments apply only when
+    // `counters` is non-null. Used both to build the precompiled RSPQ block
+    // (counters = nullptr) and by the legacy fallback Draw loop.
+    void EmitRunCommands(int r, RenderCounters* counters) const;
+
+    // Emit the command sequence for one per-face batch (fallback path).
+    void EmitBatchCommands(int b, RenderCounters* counters) const;
+
     T3DVertPacked* verts_ = nullptr;
     uint32_t vert_count_ = 0;
     uint32_t pair_count_ = 0;
@@ -96,6 +111,23 @@ private:
     BatchRun* runs_ = nullptr;
     RunFace* run_faces_ = nullptr;
     int run_count_ = 0;
+
+    // Precompiled RSPQ block (RSPQ-block-render plan / D1). Captured at the
+    // end of Load(): the active path's full command sequence (sprite uploads
+    // resolved via `catalog_` at Load — same staleness semantics as the old
+    // draw-time resolution). Draw() plays it back with one `rspq_block_run`
+    // after pushing the per-frame camera-relative matrix (the matrix stays
+    // outside the block). Null when kEnableRspqBlocks is off or no geometry
+    // (Draw falls back to per-frame emission).
+    rspq_block_t* block_ = nullptr;
+
+    // Precomputed per-frame counter sums (RSPQ-block-render plan / D2).
+    // Computed at Load with the exact predicates the emitters use; the
+    // block-path Draw adds them to counters_ in O(1).
+    uint32_t counted_batches_ = 0;
+    uint32_t counted_texture_uploads_ = 0;
+    uint32_t counted_vert_loads_ = 0;
+    uint32_t counted_syncs_ = 0;
 
     T3DMat4FP* matrix_fp_ = nullptr;
     Vec3 render_origin_ = {0.0f, 0.0f, 0.0f};

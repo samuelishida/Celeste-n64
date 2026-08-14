@@ -5,6 +5,7 @@
 
 #include "gameplay/math_types.hpp"
 #include "gameplay/render/batch_coalesce.hpp"  // FaceSpec, BatchRun, RunFace (Inc 3 / D3)
+#include "gameplay/render/dlod_format.hpp"     // DlodMesh (Inc 3 / compressed-LOD)
 
 namespace madeline_cube {
 
@@ -31,6 +32,16 @@ public:
     bool Load(const char* lvl_path, const Vec3& render_origin = {0.0f, 0.0f, 0.0f},
               float pos_scale = kDefaultPosScale);
 
+    // Load from a parsed DLOD direction (Inc 3 / compressed-LOD). Positions
+    // are already packed at `pos_scale` relative to `render_origin`; faces are
+    // contiguous vertex triples pre-grouped by material. Reuses the
+    // run-coalescing + RSPQ block capture path. REQUIRES pos_scale ==
+    // kLodScale (the no-repack shortcut is only valid at the baked scale) —
+    // asserted. Returns false on a null direction / 0 faces (cell skipped,
+    // non-fatal, matching today).
+    bool LoadFromDlod(const DlodMesh& mesh, int direction,
+                      const Vec3& render_origin, float pos_scale);
+
     // Free all allocated resources.
     void Free();
 
@@ -56,6 +67,24 @@ public:
     // + resets them. May be null (counters disabled).
     void SetCounters(RenderCounters* counters) { counters_ = counters; }
 
+    // Whether Draw() uses the coalesced-run path (Inc 3 / D3). Mirrors the
+    // `run_count_ > 0 && runs_ && run_faces_` gate inside Draw(), so the
+    // distant-pass counter split (Inc 2 / instrumentation) picks the exact
+    // same path the renderer actually takes. Host-safe.
+    bool IsActiveRunPath() const { return run_count_ > 0 && runs_ && run_faces_; }
+
+    // Number of coalesced material runs (Inc 3 / D3). One vert_load + one
+    // tri_sync per run when IsActiveRunPath(). May be -1 if coalescing failed.
+    int RunCount() const { return run_count_; }
+
+    // Number of per-face batches (fallback path). Used when !IsActiveRunPath().
+    int BatchCount() const { return batch_count_; }
+
+    // Total logical vertices loaded from the .lvl (cell-size proxy). Baked
+    // vertex count, NOT the per-frame run span loaded into RSP DMEM. Cast is
+    // safe: the bake caps faces at kMaxBatches, so vert_count_ fits in int.
+    int VertexCount() const { return static_cast<int>(vert_count_); }
+
     // The render origin this renderer was loaded with (world units). Stored
     // as a plain Vec3 so host tests can assert it without any N64 dependency.
     const Vec3& RenderOrigin() const { return render_origin_; }
@@ -79,10 +108,35 @@ private:
     // an unloaded renderer (both null). Nulls both pointers.
     void FreeRuns();
 
+    // Shared tail of Load()/LoadFromDlod(): build the coalesced runs + RSPQ
+    // block from an already-packed vertex array + a FaceSpec list. The LVL
+    // and DLOD paths both funnel through here so they can't drift. `faces`
+    // is the per-face spec list (already material-sorted for DLOD, or in
+    // original order for LVL — the sort happens inside). Returns true on
+    // success (runs or fallback batches built + block captured).
+    bool BuildRunsAndBlock(const FaceSpec* faces, int face_count);
+
     // Release the heap-allocated batch array (Inc 5 / D6). Safe on an
     // unloaded renderer. Nulls `batches_` so the destructor path can't
     // double-free.
     void FreeBatches();
+
+    // Release the precompiled RSPQ block (RSPQ-block-render plan / D5). Safe
+    // on an unloaded renderer. Nulls `block_` so a double-free is impossible.
+    void FreeBlock();
+
+    // Emit the command sequence for one coalesced material run: prim color +
+    // one `t3d_vert_load` (≤ kMaxRunSpan vertices) + each face's OWN fan from
+    // its RunFace.offset (never a run-wide fan — crosses face boundaries) +
+    // one `t3d_tri_sync`. Counter increments (near_batches / vert_loads /
+    // syncs) apply only when `counters` is non-null. Used both to build the
+    // precompiled RSPQ block (counters = nullptr) and by the legacy fallback
+    // Draw loop (counters = counters_). Emits nothing for empty runs.
+    void EmitRunCommands(int r, RenderCounters* counters) const;
+
+    // Emit the command sequence for one per-face batch (fallback path when
+    // coalescing failed): prim color + vert_load + its own fan + tri_sync.
+    void EmitBatchCommands(int b, RenderCounters* counters) const;
 
     T3DVertPacked* verts_ = nullptr;
     uint32_t vert_count_ = 0;     // total logical vertices (half of pairs*2)
@@ -99,12 +153,29 @@ private:
 
     // Coalesced material runs (Inc 3 / D3). Heap-allocated in Load() sized to
     // the face count; freed by FreeRuns()/Free(). When run_count_ > 0, Draw()
-    // uses the run path (one RDP state + one vert_load + one tri_sync per run,
-    // each face fanned from its own origin); otherwise it falls back to the
-    // per-face batch path.
+    // uses the run path (one RDP state + one vert_load + one t3d_tri_sync per
+    // run, each face fanned from its own origin); otherwise it falls back to
+    // the per-face batch path.
     BatchRun* runs_ = nullptr;
     RunFace* run_faces_ = nullptr;
     int run_count_ = 0;
+
+    // Precompiled RSPQ block (RSPQ-block-render plan / D1). Captured at the
+    // end of Load(): the active path's full command sequence (runs, or the
+    // per-face batches when coalescing failed). Draw() plays it back with one
+    // `rspq_block_run` after pushing the per-frame camera-relative matrix —
+    // the matrix is the ONLY per-frame state, so it stays outside the block.
+    // Null when kEnableRspqBlocks is off or Load failed before building
+    // (Draw falls back to per-frame emission).
+    rspq_block_t* block_ = nullptr;
+
+    // Precomputed per-frame counter sums (RSPQ-block-render plan / D2).
+    // Computed at Load with the exact predicates the emitters use, so the
+    // block-path Draw adds them to counters_ in O(1) with totals identical to
+    // the legacy per-run increments (each cell draws at most once per frame).
+    uint32_t counted_batches_ = 0;
+    uint32_t counted_vert_loads_ = 0;
+    uint32_t counted_syncs_ = 0;
 
     T3DMat4FP* matrix_fp_ = nullptr;
 

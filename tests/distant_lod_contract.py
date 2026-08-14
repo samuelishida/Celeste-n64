@@ -57,26 +57,34 @@ def bake(out_dir: str) -> None:
         raise AssertionError(f"bake failed: {proc.stderr}\n{proc.stdout}")
 
 
-def read_distant_verts(lvl_path: Path):
-    """Read the (x, y, z) vertices from a distant LVL2 file.
+def read_distant_verts(dlod_path: Path):
+    """Read the packed (x, y, z) vertices from a distant DLOD v1 file.
 
-    LVL2 layout (big-endian): magic(4), version(4), collider_count(4),
-    face_count(4), vertex_count(4), entity_count(4), string_count(4),
-    atmosphere(16), off_strings(4), off_colliders(4), off_faces(4),
-    off_vertices(4), off_entities(4), off_props(4). Then faces then vertices.
-    Vertex record: pos xyz (3 floats) + uv (2 floats).
+    DLOD v1 layout (big-endian): magic(4), version(4), flags(4),
+    direction_count(4), face_count(4), vert_count(4), material_count(4),
+    origin(12), reserved(4). Then per-direction sections: dir_face_count(4),
+    dir_vert_count(4), verts (dir_vert_count × s16 xyz), materials.
+    Returns (verts, origin) where verts are the packed s16 triples.
     """
     import struct
-    with open(lvl_path, "rb") as f:
+    with open(dlod_path, "rb") as f:
         data = f.read()
-    off_vertices = struct.unpack_from(">I", data, 0x38)[0]
-    vertex_count = struct.unpack_from(">I", data, 0x10)[0]
+    magic, version, flags, dir_count, face_count, vert_count, mat_count = \
+        struct.unpack_from(">IIIIIII", data, 0)
+    assert magic == 0x444C4F44, f"bad DLOD magic {magic:#x}"
+    assert version == 1, f"bad DLOD version {version}"
+    ox, oy, oz = struct.unpack_from(">fff", data, 28)
+    offset = 44
     verts = []
-    rec = struct.Struct(">5f")  # x,y,z,u,v
-    for i in range(vertex_count):
-        x, y, z, _, _ = rec.unpack_from(data, off_vertices + i * rec.size)
-        verts.append((x, y, z))
-    return verts
+    for _ in range(dir_count):
+        d_faces, d_verts = struct.unpack_from(">II", data, offset)
+        offset += 8
+        for _ in range(d_verts):
+            x, y, z = struct.unpack_from(">hhh", data, offset)
+            offset += 6
+            verts.append((x, y, z))
+        offset += d_faces  # materials
+    return verts, (ox, oy, oz)
 
 
 def test_distant_lod_fits_int16_at_max_far():
@@ -122,21 +130,29 @@ def test_distant_lod_fits_int16_at_max_far():
         print(f"PASS: world half-extent {max_extent:.0f} * kLodScale "
               f"= {packed_extent:.0f} <= 32767")
 
-        # Read every distant LVL and assert each vertex, packed relative to the
-        # camera at the far edge, stays within int16 at kLodScale.
+        # Read every distant .dlod and assert each packed vertex stays within
+        # int16 at kLodScale (the .dlod is already packed at kLodScale
+        # relative to the cell origin, so the packed values are directly
+        # bounded by int16).
         staging = Path(d) / "staging"
-        distant_files = sorted(staging.glob("*_distant.lvl"))
-        assert len(distant_files) > 0, "no distant LVLs emitted by the bake"
+        distant_files = sorted(staging.glob("*_distant.dlod"))
+        assert len(distant_files) > 0, "no distant .dlod files emitted by the bake"
         checked = 0
         for lp in distant_files:
-            verts = read_distant_verts(lp)
+            verts, origin = read_distant_verts(lp)
             checked += len(verts)
             for v in verts:
-                # Pack each vertex relative to the extreme camera (at -max_extent
-                # on X, the far edge). Worst case = camera at one extreme,
-                # vertex at the opposite extreme.
+                # The .dlod packs (world - origin) * kLodScale; the packed
+                # value must fit int16. Also verify the world-space extent
+                # from the extreme camera stays in range.
+                for c in v:
+                    if abs(c) > MAX_INT16:
+                        raise AssertionError(
+                            f"{lp.name} packed vertex {v} exceeds int16")
+                # Reconstruct world and check the camera-extreme packing.
+                wx = v[0] / K_LOD_SCALE + origin[0]
                 cam_x = -max_extent
-                dx = (v[0] - cam_x) * K_LOD_SCALE
+                dx = (wx - cam_x) * K_LOD_SCALE
                 if abs(dx) > MAX_INT16:
                     raise AssertionError(
                         f"{lp.name} vertex {v} packs to dx={dx:.0f} > 32767")
