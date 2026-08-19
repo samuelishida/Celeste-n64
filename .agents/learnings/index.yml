@@ -1,0 +1,3 @@
+rsp-bound-frame-and-material-grouping:
+  file: rsp-bound-frame-and-material-grouping.md
+  description: When doing renderer perf work — the frame is RSP-bound (rspq_wait), so target RSP command count / DMA traffic not CPU loops; global material grouping uses direct emission not per-(cell,material) blocks; Ares boots with expanded memory so compare [memory] used as a fraction of total.

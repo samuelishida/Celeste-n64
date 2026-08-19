@@ -43,7 +43,7 @@ The original implementation defines movement constants including acceleration, m
 Nintendo 64:
 
 * 93.75 MHz NEC VR4300 CPU
-* 4 MB base RDRAM
+* 8 MB RDRAM (Expansion Pak required — `assert_memory_expanded()` at boot)
 * MIPS III
 * 64-bit registers but 32-bit game-oriented arithmetic should be preferred
 * N64 analog controller

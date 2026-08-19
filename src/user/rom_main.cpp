@@ -13,8 +13,6 @@ namespace {
 
 using namespace madeline_cube;
 
-constexpr float kFixedDeltaSeconds = 1.0f / 60.0f;
-
 }  // namespace
 
 int main() {
@@ -22,7 +20,19 @@ int main() {
     debug_init_usblog();
     joypad_init();
 
+    // Target hardware is the N64 with the Expansion Pak (8 MB RDRAM). The
+    // open-world renderer's streaming/memory budget assumes the full 8 MB
+    // heap; without the pak the ROM would run out of memory mid-map. Fail
+    // early with a clear error screen instead of a crash if it is absent.
+    assert_memory_expanded();
+
     display_init(RESOLUTION_320x240, DEPTH_16_BPP, 3, GAMMA_NONE, FILTERS_RESAMPLE);
+    // Cap the displayed frame rate at 30 fps. The N64 VI runs at 60 Hz (NTSC);
+    // without a limit the loop runs as fast as the RSP-bound workload allows,
+    // which is 60+ in light scenes and drops as more cells stream in. Capping
+    // at 30 gives a steady target and halves the per-frame RSP/RDRAM budget,
+    // which is where the streaming/memory optimization plan targets.
+    display_set_fps_limit(30.0f);
     rdpq_init();
     t3d_init((T3DInitParams){});
 
@@ -62,7 +72,14 @@ int main() {
     for (;;) {
         profiler.BeginFrame();
 
-        scene_mgr.Update(kFixedDeltaSeconds);
+        // Drive the fixed-step simulation with REAL elapsed time, not a
+        // constant 1/60. With the 30 fps cap the loop runs ~30 Hz, so a
+        // constant 1/60 delta would make the game play at half speed.
+        // display_get_delta_time() returns the time since the last displayed
+        // frame (~1/30 s under the cap); the FixedStepAccumulator inside
+        // GameplayScene::Update converts that into the right number of 60 Hz
+        // physics ticks, keeping the simulation in real time at any frame rate.
+        scene_mgr.Update(display_get_delta_time());
         scene_mgr.Render();
 
         // RSPQ-block-render Inc 3 / D8 (async-RSP sync): wait for the RSP to

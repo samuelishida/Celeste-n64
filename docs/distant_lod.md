@@ -101,3 +101,24 @@ blocks; the format is the on-disk + load-time win.
 After Inc 4, measure `[memory]`; if the distant share exceeds ~300 KB, fall
 back to loading the 2 nearest directions only, then single-mesh. Recorded in
 `docs/perf_budget.md`.
+
+## No-block direct emit (Inc 3, streaming-memory-opt)
+
+The distant pass no longer captures/runs RSPQ blocks. `LvlRoomRenderer` gained
+`DrawRunsDirect()` (no block, no matrix-stack touch) + `SetNoBlockMode()`/
+`no_block_`; distant cells set `no_block_` **before** `LoadFromDlod` (in
+`dlod_loader.cpp`, both single- and multi-dir branches) so `block_` stays null,
+and `DistantWorldRenderer::Render()` calls `DrawRunsDirect()` under the one
+shared distant matrix (push once, emit, pop). This drops the distant pass's
+~180 RSPQ blocks (~300 KB of the pool high-water mark) to **zero** — the frame
+is RSP-bound, so direct emit has identical RSP cost to blocks (blocks only save
+CPU time, which has headroom). The near pass still uses blocks
+(`TexturedRoomRenderer::Draw`), gated by `kEnableRspqBlocks` for A/B.
+
+## Shared per-cell vertex buffer (Inc 2 note)
+
+The 4 direction sections reference the **same triangle set** (same-geometry,
+painter-sorted variants), so all directions share one vertex buffer per cell —
+switching directions never swaps the mesh and never re-uploads verts. (Inc 2's
+indexed-draw re-scope was skipped as infeasible as specified; the shared-verts
+property is inherent to the same-geometry bake and is preserved.)

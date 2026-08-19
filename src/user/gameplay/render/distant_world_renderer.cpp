@@ -121,7 +121,8 @@ bool DistantWorldRenderer::LoadCell(const V2RoomSpec& rs,
         en.meshes[d] = meshes[d];
         // Inc 3 / D2: distant meshes draw under the pass-shared matrix — mark
         // them so SetCameraPosition is a no-op and DrawBlockOnly is the draw
-        // path.
+        // path. (No-block mode is set in dlod_loader.cpp BEFORE LoadFromDlod,
+        // because the RSPQ block capture happens inside LoadFromDlod.)
         if (meshes[d]) meshes[d]->SetExternalMatrixOwner();
     }
     ++entry_count_;
@@ -296,8 +297,11 @@ void DistantWorldRenderer::Render(const CameraDesc& cam) {
         if (!mesh) continue;
         // Inc 1 / D7: count cells drawn (once per cell).
         if (counters_) ++counters_->distant_cells;
-        // Inc 3 / D2: draw under the shared pass matrix (no per-cell push).
-        mesh->DrawBlockOnly();
+        // streaming-memory-opt Inc 3: emit the cell's runs DIRECTLY under the
+        // shared pass matrix (no per-cell push, NO RSPQ block). The (run, face)
+        // sequence is identical to the old DrawBlockOnly path, so silhouettes
+        // are unchanged; the cell allocated zero blocks at load.
+        mesh->DrawRunsDirect();
 
         // Inc 2 / instrumentation: attribute this cell's draw cost. The active
         // path (runs vs per-face batches) mirrors Draw()'s own gate exactly, so

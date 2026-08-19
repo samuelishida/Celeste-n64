@@ -57,6 +57,18 @@ public:
     // `uses_external_matrix_` is set (distant-loaded meshes).
     void DrawBlockOnly() const;
 
+    // Draw the coalesced runs DIRECTLY (no RSPQ block) WITHOUT touching the
+    // matrix stack (streaming-memory-opt Inc 3). Used by the distant pass,
+    // which pushes ONE shared camera-relative matrix for the whole pass and
+    // emits every cell's runs under it. Unlike DrawBlockOnly, this NEVER plays
+    // back a block — it always emits the active path's runs (or fallback
+    // batches) directly: one vert_load + one tri_sync per run, flat color (no
+    // sprite upload). The (run, face) sequence is identical to the block
+    // path's (both replay the same coalesced runs), so silhouettes are
+    // unchanged. Only valid when `uses_external_matrix_` is set (distant-
+    // loaded meshes).
+    void DrawRunsDirect() const;
+
     bool IsLoaded() const { return verts_ != nullptr; }
 
     // Recompute the model-matrix translation so the drawn world is expressed
@@ -73,6 +85,15 @@ public:
     // `TileStreamer` renderers keep their per-frame matrix rebuilds. When
     // set, `SetCameraPosition` is a no-op and `DrawBlockOnly` is the draw path.
     void SetExternalMatrixOwner() { uses_external_matrix_ = true; }
+
+    // Mark this renderer as NO-BLOCK (streaming-memory-opt Inc 3). When set,
+    // `BuildRunsAndBlock` skips the `rspq_block_begin/end` capture (block_
+    // stays null) so the cell allocates ZERO RSPQ blocks — the distant pass
+    // emits its runs directly via DrawRunsDirect instead of replaying a block.
+    // Set ONLY on distant-loaded meshes, BEFORE their BuildRunsAndBlock runs
+    // (i.e. before LoadFromDlod completes). The near pass's renderers keep
+    // block capture (this flag is never set on them).
+    void SetNoBlockMode() { no_block_ = true; }
 
     // Number of faces discarded because they exceeded the batch cap. Must
     // remain zero for a validated artifact.
@@ -201,6 +222,10 @@ private:
     // (pass-shared) matrix — `SetCameraPosition` is a no-op and `DrawBlockOnly`
     // is the draw path. Set only on distant-loaded meshes.
     bool uses_external_matrix_ = false;
+    // streaming-memory-opt Inc 3: when true, BuildRunsAndBlock skips the RSPQ
+    // block capture (block_ stays null) and the cell draws via DrawRunsDirect.
+    // Set only on distant-loaded meshes (before LoadFromDlod completes).
+    bool no_block_ = false;
 };
 
 }  // namespace madeline_cube

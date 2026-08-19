@@ -281,6 +281,31 @@ bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
         }
     }
 
+    // streaming-memory-opt Inc 4: derive per-material run groups for the
+    // active path. The coalesced runs are already grouped by material (the
+    // load-time stable sort), so each group is a contiguous run range of one
+    // material. Used by the global near-pass material grouping to upload each
+    // sprite once per material instead of once per (material, cell).
+    if (material_groups_) { free(material_groups_); material_groups_ = nullptr; }
+    material_group_count_ = 0;
+    if (run_count_ > 0 && runs_ && run_faces_) {
+        material_groups_ = (MaterialGroup*)malloc(sizeof(MaterialGroup) * (size_t)run_count_);
+        if (material_groups_) {
+            int g = 0;
+            int r = 0;
+            while (r < run_count_) {
+                const uint16_t mat = runs_[r].material_id;
+                const int first = r;
+                while (r < run_count_ && runs_[r].material_id == mat) ++r;
+                material_groups_[g].material_id = mat;
+                material_groups_[g].first_run = first;
+                material_groups_[g].run_count = r - first;
+                ++g;
+            }
+            material_group_count_ = g;
+        }
+    }
+
     // Precompile the active path's full command sequence into one RSPQ block
     // (RSPQ-block-render plan / D1). All run/batch contents are static after
     // Load (sprites resolve via `catalog_` now; the camera-relative matrix is
@@ -310,6 +335,8 @@ void TexturedRoomRenderer::Free() {
     FreeBatches();
     FreeRuns();
     FreeBlock();
+    if (material_groups_) { free(material_groups_); material_groups_ = nullptr; }
+    material_group_count_ = 0;
     vert_count_ = 0;
     pair_count_ = 0;
     counted_batches_ = 0;
@@ -387,16 +414,35 @@ void TexturedRoomRenderer::Draw() const {
     t3d_matrix_pop(1);
 }
 
-void TexturedRoomRenderer::EmitRunCommands(int r, RenderCounters* counters) const {
-    const BatchRun& run = runs_[r];
-    if (run.face_count == 0 || run.vertex_count == 0) return;
-    // Inc 1 / D7: count near-pass batches (one per run).
-    if (counters) ++counters->near_batches;
+int TexturedRoomRenderer::MaterialGroupCount() const {
+    return material_group_count_;
+}
 
-    // Resolve the run's material sprite once. If present, upload it as a
-    // tile; else fall back to flat primColor for the whole run.
-    sprite_t* sprite = catalog_ ? catalog_->MaterialFor(run.material_id)
-                                : nullptr;
+void TexturedRoomRenderer::MaterialGroupAt(
+    int i, uint16_t* out_material, int* out_first_run, int* out_run_count) const {
+    if (i < 0 || i >= material_group_count_ || !material_groups_) return;
+    if (out_material) *out_material = material_groups_[i].material_id;
+    if (out_first_run) *out_first_run = material_groups_[i].first_run;
+    if (out_run_count) *out_run_count = material_groups_[i].run_count;
+}
+
+void TexturedRoomRenderer::DrawMaterialRun(int first_run, int run_count,
+                                           RenderCounters* counters) const {
+    if (first_run < 0 || run_count <= 0 || !runs_ || !run_faces_) return;
+    if (first_run + run_count > run_count_) run_count = run_count_ - first_run;
+    if (run_count <= 0) return;
+    t3d_matrix_push(matrix_fp_);
+    for (int r = first_run; r < first_run + run_count; ++r) {
+        EmitRunGeometry(r, counters);
+    }
+    t3d_matrix_pop(1);
+}
+
+void TexturedRoomRenderer::EmitRunState(uint16_t material_id,
+                                        RenderCounters* counters) const {
+    // Resolve the material's sprite once. If present, upload it as a tile;
+    // else fall back to flat primColor for the whole run.
+    sprite_t* sprite = catalog_ ? catalog_->MaterialFor(material_id) : nullptr;
     if (sprite) {
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH));
         rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
@@ -409,7 +455,7 @@ void TexturedRoomRenderer::EmitRunCommands(int r, RenderCounters* counters) cons
     } else {
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
         rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
-        uint32_t color = material_color(run.material_id);
+        uint32_t color = material_color(material_id);
         rdpq_set_prim_color(RGBA32(
             (uint8_t)(color >> 24),
             (uint8_t)(color >> 16),
@@ -417,6 +463,13 @@ void TexturedRoomRenderer::EmitRunCommands(int r, RenderCounters* counters) cons
             (uint8_t)(color)
         ));
     }
+}
+
+void TexturedRoomRenderer::EmitRunGeometry(int r, RenderCounters* counters) const {
+    const BatchRun& run = runs_[r];
+    if (run.face_count == 0 || run.vertex_count == 0) return;
+    // Inc 1 / D7: count near-pass batches (one per run).
+    if (counters) ++counters->near_batches;
 
     // Load the run span once (≤ kMaxRunSpan vertices, pair-aligned).
     const uint32_t base_offset = run.first_vertex & 1u;
@@ -435,6 +488,18 @@ void TexturedRoomRenderer::EmitRunCommands(int r, RenderCounters* counters) cons
     }
     t3d_tri_sync();
     if (counters) ++counters->syncs;  // Inc 1 / D7
+}
+
+void TexturedRoomRenderer::EmitRunCommands(int r, RenderCounters* counters) const {
+    const BatchRun& run = runs_[r];
+    if (run.face_count == 0 || run.vertex_count == 0) return;
+    EmitRunState(run.material_id, counters);
+    EmitRunGeometry(r, counters);
+}
+
+void TexturedRoomRenderer::UploadMaterial(uint16_t material_id,
+                                          RenderCounters* counters) const {
+    EmitRunState(material_id, counters);
 }
 
 void TexturedRoomRenderer::EmitBatchCommands(int b, RenderCounters* counters) const {

@@ -187,15 +187,17 @@ Current smoke coverage:
 
 Known local results:
 
-- `mupen64plus` successfully recognized and launched `madeline_cube_rom.z64`
 - Ares (snap install) launches the ROM via CLI; verified output:
   `Loaded madeline_cube_rom` / `Vulkan Enabled: using paraLLEl-RDP`
+- Ares prints the ROM's USB-serial telemetry (`[profiler]`, `[render-phases]`,
+  `[counters]`, `[distant-cells]`, `[memory]`) to stdout — this is how the
+  baseline/telemetry capture (`tools/capture_baseline.sh`) works.
 
 Ares CLI launch (from the repo root):
 
 ```sh
 LD_LIBRARY_PATH=/snap/ares-emulator/current/usr/lib/x86_64-linux-gnu \
-  /snap/ares-emulator/current/usr/bin/ares madeline_cube_rom.z64
+  /snap/ares-emulator/current/usr/bin/ares --no-file-prompt madeline_cube_rom.z64
 ```
 
 Notes:
@@ -207,11 +209,16 @@ Notes:
   so the command survives snap updates
 - Ares is GUI-only: it opens the emulator window and stays running; there is no
   run-and-exit CLI mode
+- `--no-file-prompt` skips the file-open dialog so the ROM boots immediately
+  (needed for the automated telemetry capture)
 
 Recommended validation habit:
 
-- use Mupen64Plus for a quick local smoke launch if convenient
-- use Ares or gopher64 for serious validation of modern libdragon/tiny3d behavior
+- Ares is the sole device emulator for this project. Use it for both quick
+  smoke launches and serious validation of modern libdragon/tiny3d behavior.
+- For automated telemetry capture (baseline / before-after), use
+  `tools/capture_baseline.sh`, which launches Ares in the background, polls its
+  stdout for report lines, and kills it when done.
 
 Current ROM control map (N64 controller, via `src/user/gameplay/input/input_system.cpp`):
 
@@ -252,6 +259,7 @@ First field issue already found:
 - The current placeholder collision is intentionally crude: one axis-aligned island and one kill plane.
 - Camera, collision, input, and gameplay are still tightly simple on purpose. Avoid polishing abstractions before Milestone 1 exposes real needs.
 - The current first-pass movement values are in `docs/movement_spec.md`; tune by feel only after checking behavior in ROM.
+- **Target hardware is the N64 with the Expansion Pak (8 MB RDRAM).** `rom_main.cpp` calls `assert_memory_expanded()` at boot, so the ROM fails early with a clear error screen if the pak is absent. The whole-map interconnected renderer's streaming/memory budget assumes the full 8 MB heap (measured `[memory] total` ≈ 5.48 MB arena, `used` ≈ 5.39 MB). The 4 MB base-RDRAM target was dropped.
 
 ### Reference material
 

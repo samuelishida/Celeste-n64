@@ -87,6 +87,11 @@ run_cpp distant_shared_matrix_contract tests/distant_shared_matrix_contract.cpp
 run_cpp dlod_format_contract tests/dlod_format_contract.cpp
 run_cpp directional_lod_contract tests/directional_lod_contract.cpp
 run_cpp input_system_smoke tests/input_system_smoke.cpp
+# Streaming & memory opt plan (Inc 1/3/4) — Pattern A, header-only.
+# (Inc 2 was skipped as infeasible, so there is no distant_shared_verts_smoke.)
+run_cpp tile_streamer_diff_smoke tests/tile_streamer_diff_smoke.cpp
+run_cpp distant_no_block_smoke tests/distant_no_block_smoke.cpp
+run_cpp near_global_sort_smoke tests/near_global_sort_smoke.cpp
 
 # ── Pattern C (links mappack_loader.cpp) ─────────────────────────────
 # These need a baked map-pack fixture. Use the repo's baked staging dir if

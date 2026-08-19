@@ -106,7 +106,23 @@ void SetTransform(RenderObject& object, const Vec3& position, const Vec3& scale)
     t3d_mat4_to_fixed(object.matrix_fp, &object.matrix);
 }
 
+// Self-contained RDP state for actor t3dm draws (Inc 5): the baked world pass
+// leaves PRIM×SHADE + the last room material's prim color in the RDP. Without
+// explicit state the strawberry/cassette/madeline models inherit that prim and
+// tint-shift depending on which cell drew last (camera-angle-dependent). MUST
+// NOT be applied inside StaticModel::Draw — room_fixture_model relies on its
+// red PRIM×SHADE diagnostic at the call site.
+void SetActorShadedState() {
+    t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
+    rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+}
+
 void DrawCube(const T3DVertPacked* vertices, T3DMat4FP* matrix_fp) {
+    // Self-contained RDP state (Inc 5): the baked world pass leaves PRIM×SHADE
+    // + the last room material's prim color in the RDP. Without explicit state
+    // here the cube would inherit that prim and shift gray/tinted depending on
+    // which cell drew last (camera-angle-dependent). Force lit vertex-shade.
+    SetActorShadedState();
     t3d_matrix_push(matrix_fp);
     t3d_vert_load(vertices, 0, 24);
     t3d_matrix_pop(1);
@@ -145,7 +161,12 @@ CameraInput ReadCameraInput(const InputSystem& input_system) {
 }  // namespace
 
 struct GameplayScene::Impl {
-    T3DViewport viewport = t3d_viewport_create();
+    // Buffered (3 slots = swap-chain count) so the RSP's async DMA of the
+    // projection/camera matrices never reads a torn matrix mid-frame. The
+    // distant→near projection switch rewrites these 3×/frame (see
+    // open_world_renderer.cpp); unbuffered, the RSP could read a half-written
+    // matrix → mid-screen split under some camera angles. Freed in Shutdown.
+    T3DViewport viewport = t3d_viewport_create_buffered(3);
     T3DVec3 light_direction = {{0.2f, 0.8f, 0.6f}};
     uint8_t ambient_light[4] = {90, 85, 80, 0xFF};
     uint8_t directional_light[4] = {0xFF, 0xF8, 0xEE, 0xFF};
@@ -478,6 +499,57 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
         room.checkpoint = start->position;
     }
 
+    // Debug (baseline capture): boot at the map-center cell's authored spawn
+    // instead of the corner Start spawn. Ares cannot take controller input, so
+    // we need the player to start where the "still takes" symptom is worst.
+    // The center cell's authored spawn is on solid ground, so the existing
+    // floor-snap in ResetPlayerToRoomStart handles Y (room.coll_mesh is the
+    // global mesh at this point). The first Update's SetActiveByPosition then
+    // transitions the active room + re-centers the render ring to the center
+    // cell. Gated by kDebugTeleportToMapCenter (revert to false after capture).
+    if (kDebugTeleportToMapCenter) {
+        const MapSpecV2& spec = map_runtime_.Spec();
+        if (spec.room_count > 0) {
+            int min_ix = spec.rooms[0].cell_ix, max_ix = spec.rooms[0].cell_ix;
+            int min_iz = spec.rooms[0].cell_iz, max_iz = spec.rooms[0].cell_iz;
+            for (int i = 1; i < spec.room_count; ++i) {
+                if (spec.rooms[i].cell_ix < min_ix) min_ix = spec.rooms[i].cell_ix;
+                if (spec.rooms[i].cell_ix > max_ix) max_ix = spec.rooms[i].cell_ix;
+                if (spec.rooms[i].cell_iz < min_iz) min_iz = spec.rooms[i].cell_iz;
+                if (spec.rooms[i].cell_iz > max_iz) max_iz = spec.rooms[i].cell_iz;
+            }
+            const float center_ix = 0.5f * (float)(min_ix + max_ix);
+            const float center_iz = 0.5f * (float)(min_iz + max_iz);
+            int best = 0;
+            float best_d2 = 1e30f;
+            for (int i = 0; i < spec.room_count; ++i) {
+                const float dx = (float)spec.rooms[i].cell_ix - center_ix;
+                const float dz = (float)spec.rooms[i].cell_iz - center_iz;
+                const float d2 = dx * dx + dz * dz;
+                if (d2 < best_d2) { best_d2 = d2; best = i; }
+            }
+            const V2RoomSpec& center_room = spec.rooms[best];
+            // Prefer a PlayerSpawn (Start/Anchor) on solid ground; fall back to
+            // the first authored spawn in the cell.
+            const V2SpawnSpec* spawn = nullptr;
+            for (int s = 0; s < center_room.spawn_count; ++s) {
+                if (center_room.spawns[s].kind != kSpawnActor) {
+                    spawn = &center_room.spawns[s];
+                    break;
+                }
+            }
+            if (!spawn && center_room.spawn_count > 0) spawn = &center_room.spawns[0];
+            if (spawn) {
+                room.player_start = spawn->position;
+                room.checkpoint = spawn->position;
+                debugf("[mappack] debug teleport -> %s (%d,%d) spawn=(%.2f,%.2f,%.2f)\n",
+                       center_room.id, center_room.cell_ix, center_room.cell_iz,
+                       (double)spawn->position.x, (double)spawn->position.y,
+                       (double)spawn->position.z);
+            }
+        }
+    }
+
     ResetPlayerToRoomStart();
 
     // Load the render-only neighbor ring for the start cell.
@@ -670,6 +742,10 @@ void GameplayScene::Shutdown() {
     for (int i = 0; i < impl_->room_geometry_count; ++i) {
         free_uncached(impl_->room_geometry[i].matrix_fp);
     }
+
+    // Buffered viewports allocate an uncached _matFP ring that `delete impl_`
+    // will not free (Impl has no destructor). Safe no-op when _matFP is null.
+    t3d_viewport_destroy(&impl_->viewport);
 
     delete impl_;
     impl_ = nullptr;
@@ -985,6 +1061,7 @@ void GameplayScene::Render() {
             pos.y -= cam.y;
             pos.z -= cam.z;
             impl_->cassette_model.UpdateMatrix(pos, kCassetteScale, impl_->cassette_actor.SpinYawRadians());
+            SetActorShadedState();
             impl_->cassette_model.Draw();
         }
         constexpr float kStrawberryScale = 0.05f;
@@ -995,6 +1072,7 @@ void GameplayScene::Render() {
             pos.y -= cam.y;
             pos.z -= cam.z;
             impl_->strawberry_model.UpdateMatrix(pos, kStrawberryScale, 0.0f);
+            SetActorShadedState();
             impl_->strawberry_model.Draw();
         }
     } else {
@@ -1022,6 +1100,7 @@ void GameplayScene::Render() {
         draw_pos.y -= impl_->camera.position.y;
         draw_pos.z -= impl_->camera.position.z;
         impl_->madeline_model.UpdateMatrix(draw_pos, kMadelineScale, yaw);
+        SetActorShadedState();
         impl_->madeline_model.Draw();
     } else {
         DrawCube(impl_->cube_vertices, impl_->player_render.matrix_fp);
