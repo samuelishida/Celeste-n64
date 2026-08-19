@@ -76,6 +76,10 @@ int LoadDistantCellDlodAll(const char* pack_dir, const char* chunk,
         // shared-pointer path that caused the Inc 2 double-free; the
         // `FreeEntries` dedupe stays as defense-in-depth.
         LvlRoomRenderer* m = new LvlRoomRenderer();
+        // streaming-memory-opt Inc 3: distant cells allocate ZERO RSPQ blocks —
+        // set no-block mode BEFORE LoadFromDlod so its BuildRunsAndBlock skips
+        // the block capture. The cell then draws via DrawRunsDirect.
+        m->SetNoBlockMode();
         if (m->LoadFromDlod(mesh, 0, shared_origin, pos_scale)) {
             out[0] = m;
             loaded = 1;
@@ -87,6 +91,8 @@ int LoadDistantCellDlodAll(const char* pack_dir, const char* chunk,
         for (int d = 0; d < dirs && d < 4; ++d) {
             if (mesh.dirs[d].face_count <= 0) continue;  // empty dir
             LvlRoomRenderer* m = new LvlRoomRenderer();
+            // streaming-memory-opt Inc 3: no-block mode (see single-dir branch).
+            m->SetNoBlockMode();
             if (m->LoadFromDlod(mesh, d, shared_origin, pos_scale)) {
                 out[d] = m;
                 ++loaded;

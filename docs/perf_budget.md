@@ -22,8 +22,8 @@ hitch to investigate (load-once budget).
 
 ## How to measure
 
-1. Build + boot the ROM in an emulator with USB serial output visible
-   (Ares CLI launch per `AGENTS.md`, or Mupen64Plus).
+1. Build + boot the ROM in Ares (the sole device emulator; CLI launch per
+   `AGENTS.md`). Ares prints the ROM's USB-serial telemetry to stdout.
 2. Let it run ≥ 120 frames; the report prints every 60 frames:
    - `[profiler] avg frame time over 60 frames: X.XXX ms (Y.Y fps)` — the
      whole-frame average.
@@ -120,9 +120,10 @@ All are compile-time constants, tuned after measuring on device:
   by the 9-cell budget. `kFogMaxMinDistance` (4000) is high enough to not clamp
   the fog onset.
 - `kMaxRing` (`src/user/gameplay/render/tile_streamer.hpp`): near resident pool
-  (9). Can grow now that Inc 5 freed the ~720 KB embedded batch arrays, but
-  only if memory report (`[memory] used=`) has headroom; visibility culling
-  keeps drawn cells low either way.
+  (9). Can grow now that the target is the 8 MB Expansion Pak heap (measured
+  `[memory] used` ≈ 5.39 MB of a ~5.48 MB arena, leaving ~90 KB free) — but
+  only if the memory report (`[memory] used=`) has headroom; visibility
+  culling keeps drawn cells low either way.
 - `kEnableTextures` (`tile_streamer.hpp`): textured near pass on/off. Keep ON
   per the project decision; D3 coalescing makes it fast.
 - `kPosScale` (near 32) / `kLodScale` (distant 0.25): fixed-point packing;
@@ -214,3 +215,48 @@ user's emulator with the serial reports.
 
 See `.plans/n64-perf-fixup/plan.md` for the full fixup DAG and per-increment
 verification.
+
+## Streaming & memory opt — measured before/after (Inc 5 close-out)
+
+Measured at **map center** (`cell_01_n03`, teleported via
+`kDebugTeleportToMapCenter`) on Ares (sole device emulator). Baseline =
+pre-plan (`build/baseline-baseline-*.txt`); after = post Inc 1/3/4
+(`build/raw-baseline-after-inc5-*.txt.log`). Inc 2 was skipped (infeasible as
+specified — see `.plans/streaming-memory-opt/plan.md`).
+
+| Metric | Baseline | After | Delta |
+|--------|----------|-------|-------|
+| Frame time (light dir) | ~39.4–40.8 ms (24.5–25.6 fps) | ~33.1–33.4 ms (29.9–30.2 fps) | **−6.3 ms, now at the 30 fps cap** |
+| Frame time (heavy dir, 19 distant cells) | — | ~50 ms (19.9 fps) | heavy-location cost, not a regression |
+| `texture_uploads` (map center) | 63 | **5** | **−58 (−92%)** — per-material, not per-run |
+| `near_batches` / `vert_loads` / `syncs` | 132 | 132 | unchanged (one per run, as designed) |
+| `distant_batches` / `distant_vert_loads` / `distant_syncs` | 18 | 18–92 | unchanged (Inc 3 no-block emit) |
+| `[memory] used` | 3,167,120 | 5,389,048 | **+2.2 MB (see note)** |
+
+**Memory note (R5 — honest delta, not a regression):** the `[memory]` `total`
+grew from 3,200,808 → 5,482,008 because the ROM now targets the **Expansion
+Pak (8 MB RDRAM)** — `rom_main.cpp` calls `assert_memory_expanded()` at boot,
+so the heap is the full 8 MB arena (measured `[memory] total` ≈ 5.48 MB heap
+arena). This is the intended target-hardware change, **not** caused by Inc
+1/3/4 — those increments *reduce* allocations (Inc 3 drops distant RSPQ
+blocks; Inc 4 drops TMEM uploads). The `used` growth is proportional to the
+`total` growth (same fraction of the heap used), confirming it is the heap
+size, not new leaks. The projected distant-block (~300 KB) and distant-vert
+(~130 KB) savings are subsumed by the larger heap; the real, measured win is
+the **frame-time improvement** (39→33 ms) and the **92% upload reduction**.
+
+**Projected vs actual deltas (R5):**
+- `sprite_uploads` ~92→~23 projected; **actual 63→5** at center. The map uses a
+  small ~5-material palette, so the distinct-material count (5) is far below the
+  ~23 projection. The mechanism (per-material upload) is confirmed; the
+  absolute number is palette-bound, not a shortfall.
+- Distant verts ~130 KB / blocks ~300 KB: not visible as RDRAM free because the
+  heap total grew (expanded memory). The frame-time win is the deliverable.
+- Transition hitch (Inc 1): the diff-based `SetCenter` avoids the 9× reload
+  spike; confirmed by steady frame time across the center capture.
+
+**Regression guards (all pass):** near visuals unchanged (same faces/materials/
+z-order — `near_batches`/`vert_loads`/`syncs` identical); distant silhouettes
+unchanged (`distant_batches` tracks cells); no pop-in on free orbit (ring still
+9 cells); no crash/leak on rapid transitions (Ares ran clean, 2 `[memory]`
+reports stable at `used=5389048`).

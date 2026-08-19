@@ -137,6 +137,89 @@ struct ResidentSet {
     bool OverCapacity() const { return count > capacity; }
 };
 
+// streaming-memory-opt Inc 4: per-frame (material, cell, first_run, run_count)
+// triple for the global near-pass material grouping. The near pass is fully
+// opaque (depth buffer resolves order), so draws can be reordered by material
+// without changing the visible result; each TMEM sprite is then uploaded ONCE
+// per material instead of once per (material, cell). Host-safe (no N64 types).
+struct NearMaterialTriple {
+    uint16_t material_id;
+    int16_t cell_index;
+    uint16_t first_run;
+    uint16_t run_count;
+};
+
+// streaming-memory-opt Inc 4: stable-sort a triple list by material_id
+// (grouped), so all cells of one material are contiguous. Returns the count
+// (unchanged). Host-safe.
+inline int SortMaterialTriplesByMaterial(NearMaterialTriple* triples, int count) {
+    for (int a = 1; a < count; ++a) {
+        const NearMaterialTriple key = triples[a];
+        int b = a - 1;
+        while (b >= 0 && triples[b].material_id > key.material_id) {
+            triples[b + 1] = triples[b];
+            --b;
+        }
+        triples[b + 1] = key;
+    }
+    return count;
+}
+
+// streaming-memory-opt Inc 4: count the number of distinct materials in a
+// triple list (== the number of sprite uploads per frame under the global
+// near-pass material grouping). Host-safe.
+inline int CountDistinctMaterials(const NearMaterialTriple* triples, int count) {
+    int distinct = 0;
+    for (int i = 0; i < count; ++i) {
+        if (i == 0 || triples[i].material_id != triples[i - 1].material_id) {
+            ++distinct;
+        }
+    }
+    return distinct;
+}
+
+// Host-safe incremental ring diff (streaming-memory-opt Inc 1). Given the
+// current resident set and the new ring, classify every cell:
+//   - keep: resident AND in the new ring (its renderer is reused, no reload);
+//   - load: in the new ring but not resident (a new renderer is loaded);
+//   - free: resident but not in the new ring (its renderer is freed).
+// `keep`/`load` are filled in new-ring order; `free` in resident order. The
+// center is always new_ring[0]; if it is not resident it is classified as
+// load (the .cpp treats a center load failure as fatal). Membership uses
+// `ResidentSet::IndexOf` (pointer identity — the ring entries and the resident
+// specs are both pointers into the same `MapSpecV2::rooms[]`). Host-safe — no
+// N64 types; the device `TileStreamer` applies the result to its renderer
+// arrays. This is what makes a center→neighbor transition load only the 1–3
+// new cells instead of rebuilding all 9.
+struct RingDiffResult {
+    const V2RoomSpec* keep[kMaxRing] = {};
+    const V2RoomSpec* load[kMaxRing] = {};
+    const V2RoomSpec* free[kMaxRing] = {};
+    int keep_count = 0;
+    int load_count = 0;
+    int free_count = 0;
+};
+
+inline RingDiffResult ResolveRingDiff(const ResidentSet& old_set,
+                                      const V2RoomSpec* const new_ring[],
+                                      int new_count) {
+    RingDiffResult r;
+    for (int i = 0; i < new_count; ++i) {
+        const V2RoomSpec* s = new_ring[i];
+        if (old_set.IndexOf(s) >= 0) r.keep[r.keep_count++] = s;
+        else r.load[r.load_count++] = s;
+    }
+    for (int k = 0; k < old_set.count; ++k) {
+        const V2RoomSpec* s = old_set.spec[k];
+        bool in_new = false;
+        for (int i = 0; i < new_count; ++i) {
+            if (new_ring[i] == s) { in_new = true; break; }
+        }
+        if (!in_new) r.free[r.free_count++] = s;
+    }
+    return r;
+}
+
 // Render-only near-pass tile streamer (Inc 3). Owns a bounded resident pool
 // of `LvlRoomRenderer` instances (the near ring) and stream/evicts cells as
 // the camera moves, never evicting the center. Gameplay stays active-only.

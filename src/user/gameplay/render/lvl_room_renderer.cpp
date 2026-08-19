@@ -332,7 +332,11 @@ bool LvlRoomRenderer::BuildRunsAndBlock(const FaceSpec* faces, int face_count) {
     // at Draw). `rspq_block_begin` asserts on OOM, so the legacy per-frame
     // Draw loops remain as the defensive fallback when block_ is null.
     block_ = nullptr;
-    if (kEnableRspqBlocks && (run_count_ > 0 || batch_count_ > 0)) {
+    // streaming-memory-opt Inc 3: no-block mode (distant pass) skips the RSPQ
+    // block capture entirely — the cell allocates ZERO blocks and draws its
+    // runs directly via DrawRunsDirect. The near pass (no_block_ false) keeps
+    // the block path for A/B (R3).
+    if (!no_block_ && kEnableRspqBlocks && (run_count_ > 0 || batch_count_ > 0)) {
         rspq_block_begin();
         if (IsActiveRunPath()) {
             for (int r = 0; r < run_count_; ++r) EmitRunCommands(r, nullptr);
@@ -563,6 +567,28 @@ void LvlRoomRenderer::DrawBlockOnly() const {
         }
         rspq_block_run(block_);
     } else if (run_count_ > 0 && runs_ && run_faces_) {
+        for (int r = 0; r < run_count_; ++r) {
+            EmitRunCommands(r, counters_);
+        }
+    } else if (batches_) {
+        for (int b = 0; b < batch_count_; ++b) {
+            EmitBatchCommands(b, counters_);
+        }
+    }
+}
+
+void LvlRoomRenderer::DrawRunsDirect() const {
+    if (!verts_) return;
+    // streaming-memory-opt Inc 3: emit the active path's runs DIRECTLY (no
+    // RSPQ block) WITHOUT touching the matrix stack — the caller's shared
+    // pass matrix is already on the stack (same contract as DrawBlockOnly).
+    // The (run, face) sequence is identical to the block path's: both replay
+    // the same coalesced runs (or the same fallback batches), so the distant
+    // silhouettes are unchanged. Flat color (rdpq_set_prim_color per run) —
+    // no sprite upload. Distant meshes carry no counters_ (the pass counts
+    // distant_batches/vert_loads/syncs separately in Render), so passing
+    // counters_ here is a no-op that cannot pollute the near counters.
+    if (run_count_ > 0 && runs_ && run_faces_) {
         for (int r = 0; r < run_count_; ++r) {
             EmitRunCommands(r, counters_);
         }

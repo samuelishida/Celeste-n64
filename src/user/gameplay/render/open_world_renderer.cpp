@@ -66,7 +66,9 @@ void OpenWorldRenderer::RenderDistant(const CameraDesc& cam) {
     // Inc 2 / z-split: switch to the distant projection (near=ring edge,
     // far=map diagonal) so distant cells past the near far-plane (800) actually
     // rasterize instead of clipping. The skybox draws under this projection
-    // (Z-off, no near/far dependence — safe).
+    // (Z-off, no near/far dependence — safe). Inc 4: safe because the viewport
+    // is now BUFFERED (3 slots) — the switch rewrites the matrices 3×/frame and
+    // the RSP DMAs them asynchronously; buffering prevents torn-matrix reads.
     if (viewport_) {
         AttachCameraAtOriginViewport(static_cast<T3DViewport*>(viewport_), cam);
     }
