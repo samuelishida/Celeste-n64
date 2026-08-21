@@ -1,24 +1,18 @@
 #pragma once
 
 #include "gameplay/math_types.hpp"
-#include "gameplay/render/lod_math.hpp"  // MapFarClipDistance, AABB
 
 namespace madeline_cube {
 
-// Pure two-pass camera derivation math, shared between the N64 renderer and
-// host tests. Mirrors `arch.md` §5:
-//   near_cam    : normal gameplay clip planes.
-//   distant_cam : near = just past the resident ring (world-space);
-//                 far  = full map diagonal (world-space).
-// `lod_scale` is a coordinate packing scale (analogous to kPosScale) used for
-// compressed distant vertices — it is NOT a clip-plane multiplier and no
-// longer affects the distant near plane (retained in the signature for future
-// compressed-coordinate projection work).
-// This header uses only `Vec3` and `float` — no N64 types.
+// Single near-pass camera derivation math, shared between the N64 renderer
+// and host tests. After the z-split distant pass was removed, only one camera
+// is needed: normal gameplay clip planes (near=5, far=800) that cover the
+// 9-cell resident ring. This header uses only `Vec3` and `float` — no N64
+// types.
 
 struct CameraDesc {
     float fov_deg = 45.0f;
-    float near = 20.0f;
+    float near = 5.0f;  // Inc 6: lowered from 20.0 (matches near-pass clip plane)
     float far = 800.0f;
     Vec3 pos;     // world-space camera position
     Vec3 target;  // world-space look target
@@ -37,42 +31,6 @@ inline CameraDesc MakeNearCamera(float fov_deg, float near_plane,
     c.target = target;
     c.up = up;
     return c;
-}
-
-// Build the distant-pass camera with world-space cull distances:
-//   distant.near = tile_size * near_margin   (just past the resident ring)
-//   distant.far  = MapFarClipDistance(world_bounds, far_margin)  (full map)
-// The distant camera shares the near camera's position/target/up orientation.
-// `world_bounds` is the union of all room AABBs; if null or zero-extent, `far`
-// falls back to `tile_size * 16.0f`. Returns a camera with `far <= near`
-// (invalid) if the inputs produce an empty range — the caller must
-// clamp/reject (distant pass would be empty).
-//
-// Inc 5 / D4: `near_margin` defaults to `1.5 * sqrt(2)` so the distant near
-// plane sits at the ring FAR EDGE (~1.5 × cell × √2 ≈ 508u for a 240u cell) —
-// the corner cells of the 3×3 ring are at that distance, so there is no
-// gap/overlap between the near ring and the distant pass. The ring boundary
-// (square) is then hidden inside the fog ramp (fog onset ~370u).
-inline CameraDesc MakeDistantCamera(const CameraDesc& near,
-                                    float tile_size, float lod_scale,
-                                    const AABB* world_bounds,
-                                    float near_margin = 1.5f * 1.41421356f,
-                                    float far_margin = 1.15f) {
-    (void)lod_scale;  // retained for future compressed-coordinate projection
-    CameraDesc c;
-    c.fov_deg = near.fov_deg;
-    c.near = tile_size * near_margin;  // world-space ring edge
-    c.far = MapFarClipDistance(world_bounds, far_margin);
-    if (c.far <= 0.0f) c.far = tile_size * 16.0f;  // fallback (null/zero bounds)
-    c.pos = near.pos;
-    c.target = near.target;
-    c.up = near.up;
-    return c;
-}
-
-// Returns true if the distant camera has a valid, non-empty range.
-inline bool ValidateDistantCamera(const CameraDesc& distant) {
-    return distant.far > distant.near && distant.near > 0.0f;
 }
 
 }  // namespace madeline_cube

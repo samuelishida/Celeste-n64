@@ -55,6 +55,38 @@ never map_z, which is the Quake UP axis. Boot uses the manifest `Start` spawn
 record. Render origins are per-cell centers so the full map's absolute
 coordinates do not overflow the int16 fixed-point packing.
 
+**Renderer (single near pass).** The renderer is a **single near pass** — the
+two-pass z-split (near + distant DLOD horizon) was removed because the distant
+pass was the source of persistent visual corruption (missing ground, floating
+fragments, distant geometry in the sky). `OpenWorldRenderer` drives one
+`CameraDesc` (near=5, far=800) per frame: skybox first, then the resident
+pool via `TileStreamer` (`DrawHighPriority`). The resident set is a **forward-
+prioritized 3×3 ring** (`ResolveForwardWedge` in `tile_streamer.hpp`): all
+Chebyshev-1 neighbors of the active cell are loaded (matching the 9-cell
+`kMaxRing` budget), and the camera direction only reorders cells so the most
+forward ones are placed first. This avoids the screen-edge gaps caused by an
+aggressive forward half-space cut while still putting the visible cells first.
+`TileStreamer` keeps the incremental `ResolveRingDiff` ring streaming and the
+global material grouping (one TMEM upload per material instead of per
+material·cell; the legacy per-cell block path and its
+`kEnableGlobalMaterialGrouping` gate were removed). The distant-only code paths
+(`DistantWorldRenderer`, `dlod_loader`, `dlod_format`,
+`LvlRoomRenderer::DrawBlockOnly`/`DrawRunsDirect`/`LoadFromDlod`, and the
+`uses_external_matrix_`/`no_block_` flags) are deleted. The `.dlod` files and
+baker remain on disk for a future distant-horizon feature but are not loaded
+at runtime. Telemetry is trimmed: `[render-phases]` reports only
+`high_priority`/`streaming`; `[counters]` reports only `near_batches`,
+`texture_uploads`, `vert_loads`, `syncs` (no distant counters).
+
+**Texturing (UV wrap).** LVL2 UVs are **unwrapped world-scale texel units** (1
+unit = 1 texel), packed as s10.5 with **`1 texel = 32` units** (`u * 32.0f`).
+The RDP must **wrap** the tile (not clamp), so `TexturedRoomRenderer` forces
+`REPEAT_INFINITE` texparms (`kWrapTexparms`) on both sprite uploads; the int16
+overflow of extreme unwrapped UVs is harmless because 65536 is a multiple of
+the 1024-unit tile size. Boot orients the player + camera toward the map center
+via `CameraController::OrientForward` so the map is on-screen at spawn (the
+default +Z facing would point away from a -Z map).
+
 Bake: `make bake-forsaken-city` (or `python3 tools/bake_interconnected_map.py
 assets/og_converted/maps/1.map --out-dir build/bake-fc-1200 --chunk-size 1200
 --scale 0.2 --mappack-id forsyken-city`).
@@ -190,7 +222,7 @@ Known local results:
 - Ares (snap install) launches the ROM via CLI; verified output:
   `Loaded madeline_cube_rom` / `Vulkan Enabled: using paraLLEl-RDP`
 - Ares prints the ROM's USB-serial telemetry (`[profiler]`, `[render-phases]`,
-  `[counters]`, `[distant-cells]`, `[memory]`) to stdout — this is how the
+  `[counters]`, `[memory]`) to stdout — this is how the
   baseline/telemetry capture (`tools/capture_baseline.sh`) works.
 
 Ares CLI launch (from the repo root):

@@ -7,91 +7,20 @@
 
 namespace madeline_cube {
 
-// The two-pass camera set derived from a single world-space camera.
-// `near_cam` uses the normal gameplay clip planes; `distant_cam` uses the
-// compressed `arch.md` §5 clip planes. Both share the same orientation.
-struct PassCameras {
-    CameraDesc near_cam;
-    CameraDesc distant_cam;
-};
-
-// Derive both pass cameras from one world-space camera. `tile_size` is the
-// world tile/cell size; `lod_scale` is the coordinate packing scale for the
-// distant pass (used in Inc 4), NOT a clip-plane multiplier. `world_bounds` is
-// the union of all room AABBs (nullable → distant far falls back to a default).
-// Host-testable — no N64 types.
-inline PassCameras BuildPassCameras(const Vec3& camera_pos,
-                                    const Vec3& camera_target,
-                                    float fov_deg, float near_plane,
-                                    float far_plane, float tile_size,
-                                    float lod_scale,
-                                    const AABB* world_bounds = nullptr) {
-    const Vec3 up = {0.0f, 1.0f, 0.0f};
-    PassCameras p;
-    p.near_cam = MakeNearCamera(fov_deg, near_plane, far_plane,
-                                camera_pos, camera_target, up);
-    p.distant_cam = MakeDistantCamera(p.near_cam, tile_size, lod_scale,
-                                      world_bounds);
-    return p;
-}
-
-// The documented `arch.md` §21 frame-stage order.
-enum class FrameStage {
-    Distant,       // Z off, compressed coordinates, back-to-front sort
-    LowPriority,   // near subpass, Z off (water/background)
-    HighPriority,  // near main pass, Z on
-    Present,
-};
-
-inline const char* FrameStageName(FrameStage s) {
-    switch (s) {
-        case FrameStage::Distant: return "distant";
-        case FrameStage::LowPriority: return "low_priority";
-        case FrameStage::HighPriority: return "high_priority";
-        case FrameStage::Present: return "present";
-    }
-    return "unknown";
-}
-
-// The canonical stage sequence (host-testable). Returns 4 entries in the
-// documented order so a host test can assert the frame order without calling
-// the device-only `OpenWorldRenderer::Render`.
-inline void OrderedFrameStages(FrameStage out[4]) {
-    out[0] = FrameStage::Distant;
-    out[1] = FrameStage::LowPriority;
-    out[2] = FrameStage::HighPriority;
-    out[3] = FrameStage::Present;
-}
-
-// Per-frame draw counters (Inc 1 / D7). Reset each frame in `BeginFrame` and
-// consumed by the profiler report + device walk to validate each pass's cost
-// with hard numbers. The orchestrator owns the counters and hands pointers to
-// the distant renderer and tile streamer, which thread them to the room
-// renderers. Host-safe — plain integers, no N64 types.
+// Per-frame draw counters. Reset each frame in `BeginFrame` and consumed by
+// the profiler report + device walk. Host-safe — plain integers, no N64 types.
 struct RenderCounters {
-    uint32_t distant_cells = 0;    // cells drawn in the distant pass
     uint32_t near_batches = 0;     // batches drawn in the near pass
     uint32_t texture_uploads = 0;  // rdpq_sprite_upload calls (near pass)
     uint32_t vert_loads = 0;       // t3d_vert_load calls (near pass)
     uint32_t syncs = 0;            // t3d_tri_sync calls (near pass)
-
-    // Distant-pass draw cost (Inc 2 / instrumentation). The distant renderer
-    // accumulates these from per-cell accessors on `LvlRoomRenderer`, so the
-    // distant RSP sync/vert/batch cost is attributable separately from the
-    // near pass's shared fields above.
-    uint32_t distant_batches = 0;     // draw units in the distant pass (runs or per-face batches)
-    uint32_t distant_vert_loads = 0;  // t3d_vert_load calls in the distant pass
-    uint32_t distant_syncs = 0;       // t3d_tri_sync calls in the distant pass
 };
 
 // N64-only renderer types, forward-declared so this header stays host-safe.
-class TileStreamer;           // near pass (Inc 3 resident pool)
-class DistantWorldRenderer;   // distant pass (Inc 4 fleshes out)
-class Skybox;                 // skybox (Inc 6)
+class TileStreamer;
+class Skybox;
 
-// Device-only render orchestrator. Owns the near tile streamer and the
-// distant world renderer by pointer (created in the .cpp), so this header
-// never pulls in libdragon/t3d. Drives the `arch.md` §21 frame order.
+// Device-only render orchestrator. Drives a single near pass plus skybox.
 class OpenWorldRenderer {
 public:
     OpenWorldRenderer();
@@ -99,74 +28,56 @@ public:
     OpenWorldRenderer(const OpenWorldRenderer&) = delete;
     OpenWorldRenderer& operator=(const OpenWorldRenderer&) = delete;
 
-    // Full frame: skybox (Inc 6), distant (Inc 4), low-priority, high-priority.
-    void Render(const PassCameras& cams);
+    // Full frame: skybox, then single near pass.
+    void Render(const CameraDesc& cam);
 
-    // Individual passes (called by Render; exposed for per-phase profiling in
-    // Inc 7 and for the distant/near split).
-    void RenderDistant(const CameraDesc& cam);
-    void RenderLowPriority(const CameraDesc& cam);
-    void RenderHighPriority(const CameraDesc& cam);
-
-    // Inc 2/3 near-pass management (delegates to the active near renderer).
+    // Resident-pool management.
     void SetCenter(const class MapSpecV2& spec, const class V2RoomSpec& center,
-                   const char* build_dir);
+                   const Vec3& camera_dir, const char* build_dir);
     void SetCameraPosition(const Vec3& camera_pos);
 
-    // Inc 4 / D4: per-frame near-pass update. The near pass draws ALL
-    // residents every frame (the pool is bounded to the center + Chebyshev-1
-    // ring, ≤9 cells), so this only runs the over-capacity eviction safety net
-    // — no frustum visibility resolution (cell-level culling would cut
-    // geometry that overflows a cell boundary).
-    void UpdateCamera();
+    // Per-frame resident visibility update. The streamer resolves which
+    // resident cells are inside the camera cone and draws only those.
+    void UpdateCamera(const CameraDesc& cam);
 
-    // Set the material catalog for the textured near pass (Inc 5). Forwarded
-    // to the tile streamer. The catalog is owned by the caller.
+    // Set the material catalog for the textured near pass. The catalog is
+    // owned by the caller.
     void SetMaterialCatalog(const class MaterialCatalog* catalog);
 
-    // Set the fog applied to the distant pass (Inc 6).
-    void SetFog(const class FogParams& fog);
-
-    // Set the viewport used to switch projections between the distant and near
-    // passes (Inc 2 / z-split). The distant pass attaches its own projection
-    // (near=ring edge, far=map diagonal); the near pass restores 20..800.
-    // Set once from GameplayScene; null disables the switch (host tests).
-    // Stored as void* so this header stays host-safe (T3DViewport is a t3d
-    // typedef; the .cpp casts to the real type).
+    // Set the viewport pointer for host tests / legacy callers. The viewport
+    // is attached once by the caller before Render(). Null disables any attach
+    // here (host tests).
     void SetViewport(void* viewport) { viewport_ = viewport; }
 
-    // Reset the frame-scoped arena at the start of each frame (Inc 7).
-    // Call at the TOP of GameplayScene::Update so the streaming phase (emitted
-    // inside SetCenter during transitions) is NOT wiped by the BeginFrame reset.
+    // Reset the frame-scoped arena at the start of each frame. Call at the TOP
+    // of GameplayScene::Update so the streaming phase (emitted inside SetCenter
+    // during transitions) is NOT wiped by the BeginFrame reset.
     void BeginFrame();
 
     // Close the per-frame profiler span. Call at the END of GameplayScene::
     // Render, after all phases, so the whole Update+Render span is measured.
     void EndFrame();
 
-    // The frame-scoped arena for transient per-frame allocations (Inc 7).
+    // The frame-scoped arena for transient per-frame allocations.
     n64::FrameArena& Arena() { return arena_; }
 
-    // Per-phase profiler (Inc 7). Reports per-pass timing.
+    // Per-phase profiler. Reports per-pass timing.
     n64::FrameProfiler& Profiler() { return profiler_; }
 
-    // The per-frame draw counters (Inc 1 / D7). Reset in BeginFrame; filled by
-    // the distant + near passes. Read by the profiler report / device walk.
+    // The per-frame draw counters. Reset in BeginFrame; filled by the near
+    // pass. Read by the profiler report / device walk.
     const RenderCounters& Counters() const { return counters_; }
 
-    // The distant pass (Inc 3 / instrumentation). Exposes per-cell cost stats.
-    DistantWorldRenderer& Distant() { return *distant_; }
-    const DistantWorldRenderer& Distant() const { return *distant_; }
-
 private:
-    TileStreamer* tile_streamer_ = nullptr;  // Inc 3 near pass
-    DistantWorldRenderer* distant_ = nullptr;
+    void RenderHighPriority(const CameraDesc& cam);
+
+    TileStreamer* tile_streamer_ = nullptr;
     Skybox* skybox_ = nullptr;
-    void* viewport_ = nullptr;  // Inc 2 / z-split projection switch (T3DViewport*)
+    void* viewport_ = nullptr;
     Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};
-    n64::FrameArena arena_;  // frame-scoped transient allocations
-    n64::FrameProfiler profiler_;  // per-phase timing
-    RenderCounters counters_;  // per-frame draw counters (Inc 1 / D7)
+    n64::FrameArena arena_;
+    n64::FrameProfiler profiler_;
+    RenderCounters counters_;
 };
 
 }  // namespace madeline_cube

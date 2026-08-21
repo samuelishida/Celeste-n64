@@ -11,17 +11,6 @@ namespace madeline_cube {
 
 struct RenderCounters;  // defined in open_world_renderer.hpp (Inc 1 / D7)
 
-// streaming-memory-opt Inc 4: global near-pass material grouping gate. When
-// true, the near pass draws per-material → per-cell (each TMEM sprite uploaded
-// ONCE per material instead of once per (material, cell)) via direct run
-// emission — no per-cell RSPQ block. When false, the near pass uses the legacy
-// per-cell block path (`Draw()` → `rspq_block_run`). Direct emission is chosen
-// over per-(cell, material) blocks (the plan's MF1) because the frame is
-// RSP-bound (blocks and direct emit have identical RSP cost; blocks only save
-// CPU time, which has headroom) and direct emission allocates zero near-pass
-// RSPQ blocks (lower pool high-water mark, consistent with Inc 3). Host-safe.
-inline constexpr bool kEnableGlobalMaterialGrouping = true;
-
 // Textured near-pass room renderer (Inc 5). Wraps `LvlRoomRenderer`-style
 // LVL2 packing but draws each material batch with the resolved sprite from a
 // `MaterialCatalog`, instead of the flat per-material primColor. This is a

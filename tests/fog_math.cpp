@@ -9,7 +9,6 @@
 #include <cstdlib>
 
 #include "gameplay/render/fog_math.hpp"
-#include "gameplay/render/lod_math.hpp"  // kDistantMaxDist2 (Inc 2 / D2)
 
 using namespace madeline_cube;
 
@@ -58,15 +57,13 @@ int main() {
         expect(!ValidateFogRange(f), "negative min rejected");
     }
 
-    // Inc 2 / D2 (distant-pass perf): the fog range is derived from the drop
-    // threshold `sqrt(kDistantMaxDist2)` so dropped cells are fully fogged.
-    // Named ratio constants (not literals) so a future ratio > 1.0 is caught
-    // structurally. This test only uses the compile-time `kDistantMaxDist2`
-    // constant (not a runtime `fog_max`), so it is buildable host-side.
+    // Fog range derived from a distance threshold stays valid (min < max) and
+    // completes before the threshold when the max ratio <= 1.0. Independent of
+    // the (now-removed) distant-pass constant — uses a literal map diagonal.
     {
-        constexpr float kFogMinRatio = 0.4f;
+        constexpr float kFogMinRatio = 0.28f;
         constexpr float kFogMaxRatio = 0.9f;
-        const float drop_dist = sqrtf(kDistantMaxDist2);
+        const float drop_dist = 3423.0f;  // Forsaken City map diagonal (world u)
 
         // (a) the derived fog range is valid (min < max, both >= 0).
         const FogParams f = MakeFog(drop_dist * kFogMinRatio,
@@ -74,10 +71,10 @@ int main() {
                                     {120.0f, 150.0f, 180.0f});
         expect(ValidateFogRange(f), "(a) drop-derived fog range is valid");
 
-        // (b) fog completes BEFORE the drop threshold (max ratio <= 1.0), so
-        // cells dropped by the distance² falloff are already fully fogged.
+        // (b) fog completes BEFORE the max (max ratio <= 1.0), so a cell at
+        // the far edge is already fully fogged.
         expect(kFogMaxRatio <= 1.0f,
-               "(b) fog max ratio <= 1.0 (fog completes before the drop)");
+               "(b) fog max ratio <= 1.0 (fog completes before the max)");
         expect(f.max < drop_dist,
                "(b) fog max < drop threshold (dropped cells fully fogged)");
         expect(f.min < f.max, "(b) fog min < fog max");

@@ -57,6 +57,13 @@ public:
         const Room* room = nullptr
     );
 
+    // Reorient the camera to look along `forward` (normalized XZ direction)
+    // and recompute `target`/`position` from the current `target_distance`
+    // using the same `DesiredLookAt`/`DesiredPosition` formulas as `Step`/`Reset`.
+    // Used at boot to face the map center; keeps the camera state consistent so
+    // the next `Step` does not jump. `origin`/`target_forward` must already be set.
+    void OrientForward(CameraState& camera, const Vec3& forward);
+
 private:
     CameraConfig config_;
     // Persisted across respawns (OG: static storedCameraForward/storedCameraDistance)

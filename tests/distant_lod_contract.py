@@ -58,13 +58,14 @@ def bake(out_dir: str) -> None:
 
 
 def read_distant_verts(dlod_path: Path):
-    """Read the packed (x, y, z) vertices from a distant DLOD v2 file.
+    """Read the packed (x, y, z) vertices from a distant DLOD v2/v3 file.
 
-    DLOD v2 layout (big-endian): magic(4), version(4), flags(4),
+    DLOD v3 layout (big-endian): magic(4), version(4), flags(4),
     direction_count(4), face_count(4), vert_count(4), material_count(4),
     origin(12), reserved(4). Then per-direction sections: dir_face_count(4),
-    dir_vert_count(4), verts (dir_vert_count × s16 xyz), materials.
-    Returns (verts, origin) where verts are the packed s16 triples.
+    dir_vert_count(4), verts (dir_vert_count × s16 xyz), materials, and for
+    version >= 3 a per-direction color_flag u8 (plus per-face color bytes when
+    set). Returns (verts, origin) where verts are the packed s16 triples.
     """
     import struct
     with open(dlod_path, "rb") as f:
@@ -72,7 +73,7 @@ def read_distant_verts(dlod_path: Path):
     magic, version, flags, dir_count, face_count, vert_count, mat_count = \
         struct.unpack_from(">IIIIIII", data, 0)
     assert magic == 0x444C4F44, f"bad DLOD magic {magic:#x}"
-    assert version == 2, f"bad DLOD version {version} (expected 2)"
+    assert version in (2, 3), f"bad DLOD version {version} (expected 2 or 3)"
     ox, oy, oz = struct.unpack_from(">fff", data, 28)
     offset = 44
     verts = []
@@ -84,6 +85,11 @@ def read_distant_verts(dlod_path: Path):
             offset += 6
             verts.append((x, y, z))
         offset += d_faces  # materials
+        if version >= 3:
+            color_flag = data[offset]
+            offset += 1
+            if color_flag:
+                offset += d_faces  # per-face color bytes
     return verts, (ox, oy, oz)
 
 

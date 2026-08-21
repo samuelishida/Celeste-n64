@@ -10,13 +10,11 @@ namespace n64 {
 // Reports a rolling average every N frames via debugf().
 class FrameProfiler {
 public:
-    // Named per-phase timers (arch.md §21 / Inc 7). Each phase reports its
-    // own rolling average.
+    // Named per-phase timers. Each phase reports its own rolling average.
+    // After removing the z-split distant + low-priority passes, the remaining
+    // phases are contiguous.
     enum Phase {
-        kPhaseDistant = 0,
-        kPhaseLowPriority,
-        kPhaseHighPriority,
-        kPhaseParticles,
+        kPhaseHighPriority = 0,
         kPhaseTextureUpload,
         kPhaseStreaming,
         kPhaseCount,

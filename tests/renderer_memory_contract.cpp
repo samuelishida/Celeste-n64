@@ -1,11 +1,7 @@
 // Host test for the Inc 5 / D6 memory diet (Pattern A: header-only, no N64
 // deps). Asserts:
-//   - `FrameArena` Alloc/Used/Reset semantics + exhaustion returns null — the
-//     arena now backs the per-frame distant render list + visible snapshot.
-//   - The exact per-frame arena budget Inc 5 allocates (distant list:
-//     64 × sizeof(DistantRenderItem); visible snapshot:
-//     kMaxRing × sizeof(const V2RoomSpec*)) fits comfortably in the 64 KB
-//     arena, and Reset() makes the same budget available next frame.
+//   - `FrameArena` Alloc/Used/Reset semantics + exhaustion returns null. The
+//     arena backs the single near pass's per-frame resident draw list.
 //   - The batch-array ownership pattern the room renderers now follow
 //     (heap-allocate sized to face count, free-before-realloc, free-nulls) is
 //     pinned by a host-safe mirror so a regression in the pattern is caught.
@@ -20,10 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <vector>
 
-#include "gameplay/render/distant_world_renderer.hpp"  // DistantRenderItem
-#include "gameplay/render/tile_streamer.hpp"           // kMaxRing
 #include "n64/frame_arena.hpp"
 
 using namespace n64;
@@ -106,32 +99,25 @@ int main() {
         expect(b != nullptr, "budget reusable after Reset");
     }
 
-    // --- Inc 5 per-frame arena budget ---
+    // --- Per-frame near-pass arena usage ---
+    // After the distant pass was removed, the arena only needs to back the
+    // resident set (a handful of cell pointers); it must fit trivially.
     {
         FrameArena arena;
-        const size_t distant_budget = sizeof(madeline_cube::DistantRenderItem) * 64;
-        const size_t visible_budget =
-            sizeof(const void*) * static_cast<size_t>(madeline_cube::kMaxRing);
-        const size_t total = distant_budget + visible_budget;
+        constexpr size_t kResidentMax = 9;  // near ring: center + 8
+        const size_t resident_budget = sizeof(const void*) * kResidentMax;
+        expect(resident_budget < FrameArena::kArenaSize,
+               "near-pass resident list fits in the 64 KB arena");
 
-        // The budget must fit with a large margin in the 64 KB arena.
-        expect(total < FrameArena::kArenaSize,
-               "per-frame render budget fits in the 64 KB arena");
-        expect(total * 8 < FrameArena::kArenaSize,
-               "per-frame render budget is a small fraction of the arena");
-
-        // Allocate exactly what the renderers allocate each frame.
-        void* order = arena.Alloc(sizeof(madeline_cube::DistantRenderItem) * 64);
-        void* visible = arena.Alloc(sizeof(const void*) *
-                                    static_cast<size_t>(madeline_cube::kMaxRing));
-        expect(order != nullptr, "distant render list allocates");
-        expect(visible != nullptr, "visible snapshot allocates");
-        expect(arena.Used() >= total, "arena Used() reflects both allocations");
+        // Allocate what the render loop uses each frame.
+        void* visible = arena.Alloc(resident_budget);
+        expect(visible != nullptr, "resident snapshot allocates");
+        expect(arena.Used() >= resident_budget, "arena Used() reflects allocation");
 
         // Next frame: Reset makes the same budget available again.
         arena.Reset();
         expect(arena.Used() == 0, "frame Reset frees the render budget");
-        void* again = arena.Alloc(sizeof(madeline_cube::DistantRenderItem) * 64);
+        void* again = arena.Alloc(resident_budget);
         expect(again != nullptr, "render budget reusable next frame");
     }
 

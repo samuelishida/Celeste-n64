@@ -125,47 +125,20 @@ int main() {
                        ? static_cast<double>(1000.0f / profiler.last_average_ms())
                        : 0.0);
 
-            // Per-phase ms from the renderer's profiler (Inc 1 / instrumentation).
-            // These are the REAL per-pass costs; previously all read 0.000.
+            // Per-phase ms from the renderer's profiler. These are the
+            // remaining per-pass costs after removing the z-split distant pass.
             const n64::FrameProfiler& rp = gameplay.Profiler();
-            debugf("[render-phases] distant=%.3f low_priority=%.3f "
-                   "high_priority=%.3f streaming=%.3f ms\n",
-                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseDistant)),
-                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseLowPriority)),
+            debugf("[render-phases] high_priority=%.3f streaming=%.3f ms\n",
                    static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseHighPriority)),
                    static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseStreaming)));
 
-            // Draw counters, now including the distant pass's own split
-            // (Inc 2 / instrumentation).
-            debugf("[counters] distant_cells=%u near_batches=%u "
-                   "texture_uploads=%u vert_loads=%u syncs=%u "
-                   "distant_batches=%u distant_vert_loads=%u distant_syncs=%u\n",
-                   static_cast<unsigned int>(c.distant_cells),
+            // Draw counters for the single near pass.
+            debugf("[counters] near_batches=%u texture_uploads=%u "
+                   "vert_loads=%u syncs=%u\n",
                    static_cast<unsigned int>(c.near_batches),
                    static_cast<unsigned int>(c.texture_uploads),
                    static_cast<unsigned int>(c.vert_loads),
-                   static_cast<unsigned int>(c.syncs),
-                   static_cast<unsigned int>(c.distant_batches),
-                   static_cast<unsigned int>(c.distant_vert_loads),
-                   static_cast<unsigned int>(c.distant_syncs));
-
-            // Per-cell distant cost summary (Inc 3 / instrumentation). Names
-            // the costliest cell (by active-path draw units = RSP sync driver).
-            int stat_count = 0;
-            const auto* stats = gameplay.GetDistantCellStats(&stat_count);
-            debugf("[distant-cells] n=%d", stat_count);
-            if (stat_count > 0 && stats) {
-                int top_i = 0;
-                for (int i = 1; i < stat_count; ++i) {
-                    if (stats[i].runs > stats[top_i].runs) top_i = i;
-                }
-                debugf(" top=(%d,%d) runs=%d verts=%d d2=%.0f\n",
-                       stats[top_i].cell_ix, stats[top_i].cell_iz,
-                       stats[top_i].runs, stats[top_i].verts,
-                       static_cast<double>(stats[top_i].distance_sq));
-            } else {
-                debugf("\n");
-            }
+                   static_cast<unsigned int>(c.syncs));
         }
     }
 

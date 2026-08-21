@@ -24,11 +24,6 @@ struct LvlFace   { uint32_t vs, vc; uint16_t mid, flags; float nx, ny, nz; };
 // comparison on device.
 constexpr bool kEnableRspqBlocks = true;
 
-// Compressed distant coordinate scale (Inc 3 / compressed-LOD). Must match
-// `DistantWorldRenderer::kLodScale` (distant_world_renderer.hpp) — the DLOD
-// no-repack shortcut in `LoadFromDlod` is only valid at this scale.
-constexpr float kLodScale = 0.25f;
-
 uint32_t ReadU32(FILE* f) {
     uint8_t b[4]; fread(b, 1, 4, f);
     return (uint32_t(b[0])<<24)|(uint32_t(b[1])<<16)|(uint32_t(b[2])<<8)|b[3];
@@ -251,16 +246,10 @@ bool LvlRoomRenderer::BuildRunsAndBlock(const FaceSpec* faces, int face_count) {
     // grouping all faces of one material into contiguous runs → one
     // `t3d_vert_load` + one `t3d_tri_sync` per material per cell instead of per
     // run. Measured from the baked LVLs: 1015 → 303 runs across all 45 cells
-    // (~22.6 → ~6.7 runs/cell), a ~3.3× reduction in RSP syncs. Cells are still
-    // sorted back-to-front by distance² in `DistantWorldRenderer::Render`. The
-    // sort is load-time only (runs in `DistantWorldRenderer::Load` /
-    // `TileStreamer::SetCenter`, not per frame). The `batches_` fallback path
-    // below stays in original face order (unsorted) — it gets no sort benefit,
-    // but it is only used if coalescing fails.
+    // (~22.6 → ~6.7 runs/cell), a ~3.3× reduction in RSP syncs.
     //
-    // The DLOD path (Inc 3 / compressed-LOD) is pre-grouped by material at
-    // bake time, so the stable sort is a no-op there (already sorted) — the
-    // shared helper keeps the two paths identical.
+    // The old DLOD path was pre-grouped by material at bake time, so the
+    // stable sort was a no-op there; the near-pass LVL path always needs it.
     FreeRuns();
     if (face_count <= 0) return false;
     {
@@ -332,11 +321,7 @@ bool LvlRoomRenderer::BuildRunsAndBlock(const FaceSpec* faces, int face_count) {
     // at Draw). `rspq_block_begin` asserts on OOM, so the legacy per-frame
     // Draw loops remain as the defensive fallback when block_ is null.
     block_ = nullptr;
-    // streaming-memory-opt Inc 3: no-block mode (distant pass) skips the RSPQ
-    // block capture entirely — the cell allocates ZERO blocks and draws its
-    // runs directly via DrawRunsDirect. The near pass (no_block_ false) keeps
-    // the block path for A/B (R3).
-    if (!no_block_ && kEnableRspqBlocks && (run_count_ > 0 || batch_count_ > 0)) {
+    if (kEnableRspqBlocks && (run_count_ > 0 || batch_count_ > 0)) {
         rspq_block_begin();
         if (IsActiveRunPath()) {
             for (int r = 0; r < run_count_; ++r) EmitRunCommands(r, nullptr);
@@ -354,96 +339,6 @@ bool LvlRoomRenderer::BuildRunsAndBlock(const FaceSpec* faces, int face_count) {
     if (IsActiveRunPath()) {
         FreeBatches();
     }
-    return true;
-}
-
-bool LvlRoomRenderer::LoadFromDlod(const DlodMesh& mesh, int direction,
-                                   const Vec3& render_origin, float pos_scale) {
-    // The no-repack shortcut is only valid at the baked scale.
-    if (pos_scale != kLodScale) return false;
-    if (direction < 0 || direction >= mesh.direction_count) return false;
-    const DlodDirection& dir = mesh.dirs[direction];
-    if (!dir.verts || dir.face_count <= 0 || dir.vert_count <= 0) return false;
-
-    // Free the previous block + arrays before rebuilding (streaming re-loads
-    // / SetCenter call Load repeatedly and would leak otherwise).
-    FreeBlock();
-    render_origin_ = render_origin;
-    kPosScale = pos_scale;
-    kInvScale = 1.0f / kPosScale;
-
-    // Copy the direction's consecutive per-face triples into T3DVertPacked
-    // pairs (with the odd-pair padding the existing path already handles).
-    // Each face is 3 verts; the DLOD stores them as contiguous triples, so
-    // face i uses verts[3i..3i+2].
-    const int face_count = dir.face_count;
-    const int vertex_count = dir.vert_count;  // = 3 × face_count
-    pair_count_ = (vertex_count + 1) / 2;
-    vert_count_ = static_cast<uint32_t>(vertex_count);
-    verts_ = static_cast<T3DVertPacked*>(
-        malloc_uncached(sizeof(T3DVertPacked) * pair_count_));
-    if (!verts_) return false;
-
-    for (int pi = 0; pi < static_cast<int>(pair_count_); ++pi) {
-        T3DVertPacked& p = verts_[pi];
-        const int ia = pi * 2;
-        const int ib = pi * 2 + 1;
-        const DlodVertex& va = dir.verts[ia];
-        const DlodVertex& vb = (ib < vertex_count) ? dir.verts[ib] : dir.verts[ia];
-        p.posA[0] = va.x(); p.posA[1] = va.y(); p.posA[2] = va.z();
-        p.posB[0] = vb.x(); p.posB[1] = vb.y(); p.posB[2] = vb.z();
-        p.normA = 0; p.normB = 0;
-        p.rgbaA = 0xFFFFFFFF; p.rgbaB = 0xFFFFFFFF;
-        p.stA[0] = 0; p.stA[1] = 0;
-        p.stB[0] = 0; p.stB[1] = 0;
-    }
-
-    // Build the per-face batch array (one batch per face, each a 3-vert fan).
-    FreeBatches();
-    {
-        const int batch_cap = face_count < kMaxBatches ? face_count : kMaxBatches;
-        if (batch_cap > 0) {
-            batches_ = static_cast<Batch*>(malloc(sizeof(Batch) * batch_cap));
-            if (!batches_) return false;
-        }
-    }
-    batch_count_ = 0;
-    discarded_faces_ = 0;
-    for (int f = 0; f < face_count; ++f) {
-        if (batch_count_ >= kMaxBatches) {
-            ++discarded_faces_;
-            continue;
-        }
-        // Face f uses verts[3f..3f+2] (contiguous triples).
-        const uint32_t first_vertex = static_cast<uint32_t>(3 * f);
-        batches_[batch_count_++] = {first_vertex, 3u, 1u, dir.materials[f]};
-    }
-
-    // Build the coalesced runs + RSPQ block (shared with the LVL path).
-    {
-        FaceSpec* specs = static_cast<FaceSpec*>(malloc(sizeof(FaceSpec) * batch_count_));
-        if (specs) {
-            for (int s = 0; s < batch_count_; ++s) {
-                specs[s] = {batches_[s].first_vertex, batches_[s].vertex_count,
-                            batches_[s].tri_count, batches_[s].material_id};
-            }
-            BuildRunsAndBlock(specs, batch_count_);
-            free(specs);
-        }
-    }
-
-    // Model matrix: compensate for kPosScale AND translate back to world
-    // space (same as Load()).
-    matrix_fp_ = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
-    T3DMat4 m;
-    const float s[3] = {kInvScale, kInvScale, kInvScale};
-    const float r[3] = {0, 0, 0};
-    const float p[3] = {render_origin_.x, render_origin_.y, render_origin_.z};
-    t3d_mat4_from_srt_euler(&m, s, r, p);
-    t3d_mat4_to_fixed(matrix_fp_, &m);
-
-    debugf("[lvlroom] dlod loaded: %d verts, %d faces, block=%s\n",
-           vertex_count, face_count, block_ ? "yes" : "no");
     return true;
 }
 
@@ -483,9 +378,6 @@ void LvlRoomRenderer::FreeRuns() {
 
 void LvlRoomRenderer::SetCameraPosition(const Vec3& camera_pos) {
     if (!matrix_fp_) return;  // not loaded; no-op
-    // Inc 3 / D2: when drawing under an external (pass-shared) matrix, the
-    // caller owns the matrix — this is a no-op.
-    if (uses_external_matrix_) return;
     // The vertices are packed as (world - render_origin) * kPosScale. To draw
     // the world camera-relative, translate the matrix by (render_origin -
     // camera_pos) so that:
@@ -551,52 +443,6 @@ void LvlRoomRenderer::Draw() const {
     }
 
     t3d_matrix_pop(1);
-}
-
-void LvlRoomRenderer::DrawBlockOnly() const {
-    if (!verts_) return;
-    // Inc 3 / D2: draw the precompiled block WITHOUT touching the matrix
-    // stack — the caller's shared pass matrix is already on the stack. Guards
-    // like Draw() (block_ null → legacy per-run/per-batch emission WITHOUT a
-    // matrix push; must not add one).
-    if (kEnableRspqBlocks && block_) {
-        if (counters_) {
-            counters_->near_batches += counted_batches_;
-            counters_->vert_loads += counted_vert_loads_;
-            counters_->syncs += counted_syncs_;
-        }
-        rspq_block_run(block_);
-    } else if (run_count_ > 0 && runs_ && run_faces_) {
-        for (int r = 0; r < run_count_; ++r) {
-            EmitRunCommands(r, counters_);
-        }
-    } else if (batches_) {
-        for (int b = 0; b < batch_count_; ++b) {
-            EmitBatchCommands(b, counters_);
-        }
-    }
-}
-
-void LvlRoomRenderer::DrawRunsDirect() const {
-    if (!verts_) return;
-    // streaming-memory-opt Inc 3: emit the active path's runs DIRECTLY (no
-    // RSPQ block) WITHOUT touching the matrix stack — the caller's shared
-    // pass matrix is already on the stack (same contract as DrawBlockOnly).
-    // The (run, face) sequence is identical to the block path's: both replay
-    // the same coalesced runs (or the same fallback batches), so the distant
-    // silhouettes are unchanged. Flat color (rdpq_set_prim_color per run) —
-    // no sprite upload. Distant meshes carry no counters_ (the pass counts
-    // distant_batches/vert_loads/syncs separately in Render), so passing
-    // counters_ here is a no-op that cannot pollute the near counters.
-    if (run_count_ > 0 && runs_ && run_faces_) {
-        for (int r = 0; r < run_count_; ++r) {
-            EmitRunCommands(r, counters_);
-        }
-    } else if (batches_) {
-        for (int b = 0; b < batch_count_; ++b) {
-            EmitBatchCommands(b, counters_);
-        }
-    }
 }
 
 void LvlRoomRenderer::EmitRunCommands(int r, RenderCounters* counters) const {

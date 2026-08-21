@@ -43,6 +43,23 @@ uint32_t material_color(uint16_t mat_id) {
     }
 }
 
+// The LVL2 UVs are UNWRAPPED world-scale texel coordinates (1 unit = 1 texel)
+// that can far exceed the 32-texel sprite — a single cell spans ~6000 texels.
+// The RDP must therefore WRAP the tile (sample ST modulo the tile size), not
+// clamp. libdragon's default tileparms (sprite has no embedded texparms and we
+// pass NULL) leave the tile descriptor all-zero, which rdpq_set_tile maps to
+// CLAMP on both axes (`clamp | (mask==0)` = 1) — that would pin out-of-range
+// UVs to edge texels instead of tiling. Force infinite repetition (wrap).
+//
+// The int16 overflow of extreme UVs is harmless once the tile wraps: the tile
+// is 32 texels = 1024 in s10.5, and 65536 (the int16 wrap modulus) is a
+// multiple of 1024, so (true_ST mod 65536) mod 1024 == true_ST mod 1024.
+constexpr rdpq_texparms_t kWrapTexparms = {
+    0, 0,
+    {0.0f, 0, REPEAT_INFINITE, false},  // s
+    {0.0f, 0, REPEAT_INFINITE, false},  // t
+};
+
 }  // namespace
 
 bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
@@ -133,12 +150,17 @@ bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
         p.posB[2] = toFp(vb.z - render_origin.z);
         p.normA = 0; p.normB = 0;
         p.rgbaA = 0xFFFFFFFF; p.rgbaB = 0xFFFFFFFF;
-        // UVs are in texture-repeat units; convert to pixel coords in 10.5
-        // fixed point (32px sprite * 32 = 1024). Mirrors lvl_room_renderer.
-        p.stA[0] = static_cast<int16_t>(va.u * 1024.0f);
-        p.stA[1] = static_cast<int16_t>(va.v * 1024.0f);
-        p.stB[0] = static_cast<int16_t>(vb.u * 1024.0f);
-        p.stB[1] = static_cast<int16_t>(vb.v * 1024.0f);
+        // UVs are in UNWRAPPED TEXEL units (1 unit = 1 texel, world-scale from
+        // the bake pipeline's compute_uv). Pack as s10.5 fixed point where
+        // 1 texel = 32 units (t3d.h: "UV fixed point 10.5 (pixel coords)").
+        // The tile wraps (see kWrapTexparms), so values beyond the 32-texel
+        // sprite are sampled modulo the tile size; the int16 overflow of the
+        // extreme unwrapped values is harmless (65536 is a multiple of the
+        // 1024-unit tile size in s10.5).
+        p.stA[0] = static_cast<int16_t>(va.u * 32.0f);
+        p.stA[1] = static_cast<int16_t>(va.v * 32.0f);
+        p.stB[0] = static_cast<int16_t>(vb.u * 32.0f);
+        p.stB[1] = static_cast<int16_t>(vb.v * 32.0f);
     }
 
     // Apply face normals.
@@ -450,7 +472,7 @@ void TexturedRoomRenderer::EmitRunState(uint16_t material_id,
         // primColor MUST be white here or the texture is tinted by whatever
         // primColor the distant pass (or a flat run) last left.
         rdpq_set_prim_color(RGBA32(0xFF, 0xFF, 0xFF, 0xFF));
-        rdpq_sprite_upload(TILE0, sprite, NULL);
+        rdpq_sprite_upload(TILE0, sprite, &kWrapTexparms);
         if (counters) ++counters->texture_uploads;  // Inc 1 / D7
     } else {
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
@@ -517,7 +539,7 @@ void TexturedRoomRenderer::EmitBatchCommands(int b, RenderCounters* counters) co
         rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
         // Same primColor-to-white requirement as the run path (see above).
         rdpq_set_prim_color(RGBA32(0xFF, 0xFF, 0xFF, 0xFF));
-        rdpq_sprite_upload(TILE0, sprite, NULL);
+        rdpq_sprite_upload(TILE0, sprite, &kWrapTexparms);
         if (counters) ++counters->texture_uploads;  // Inc 1 / D7
     } else {
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
