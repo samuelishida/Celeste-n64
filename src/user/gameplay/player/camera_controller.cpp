@@ -122,6 +122,14 @@ void CameraController::Reset(CameraState& camera, const Vec3& player_position) {
     camera.initialized = true;
 }
 
+void CameraController::OrientForward(CameraState& camera, const Vec3& forward) {
+    camera.target_forward = NormalizeXZ(forward);
+    camera.target = DesiredLookAt(camera, config_);
+    camera.position = DesiredPosition(camera, config_);
+    // Mark initialized so a later Step() does not Reset over the facing.
+    camera.initialized = true;
+}
+
 void CameraController::Step(
     CameraState& camera,
     const Vec3& player_position,
@@ -242,6 +250,30 @@ void CameraController::Step(
         const CeilingHit ceiling = QueryCeilingSource(*room, desired_position, kCeilingProbe);
         if (ceiling.hit) {
             desired_position.y = ceiling.point.y - kCeilingProbe;
+        }
+    }
+
+    // Inc 6: clamp the camera's minimum distance from the player so the cube
+    // (centered on the player, corner half-diagonal ~12.25) can never enter the
+    // near plane (5.0) even when wall/ceiling collision pushes the camera into
+    // the cube's extent. Without this, the wall-push case keeps clipping
+    // regardless of the near plane value. If the clamp moves the camera back
+    // into a wall (tight room), the camera sits inside geometry — accepted
+    // (same artifact class as today); tune the constant on device.
+    {
+        constexpr float kCameraMinDistance = 18.0f;
+        const Vec3 to_cam = {
+            desired_position.x - player_position.x,
+            desired_position.y - player_position.y,
+            desired_position.z - player_position.z,
+        };
+        const float cam_dist = std::sqrt(
+            to_cam.x * to_cam.x + to_cam.y * to_cam.y + to_cam.z * to_cam.z);
+        if (cam_dist > 0.0001f && cam_dist < kCameraMinDistance) {
+            const float scale = kCameraMinDistance / cam_dist;
+            desired_position.x = player_position.x + to_cam.x * scale;
+            desired_position.y = player_position.y + to_cam.y * scale;
+            desired_position.z = player_position.z + to_cam.z * scale;
         }
     }
 

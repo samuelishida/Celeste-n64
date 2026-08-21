@@ -21,4 +21,16 @@ inline constexpr bool kVerboseFrameLogging = false;
 // keep false so normal boot always uses the Start spawn.
 inline constexpr bool kDebugTeleportToMapCenter = false;
 
+// Temporary debug mode: when true, the player walks slowly forward every frame
+// so Ares can exercise chunk transitions and movement without controller
+// input. This is for reproducing the "crash after walking around" bug. NEVER
+// leave true in normal builds.
+inline constexpr bool kDebugAutoWalk = false;
+
+// Temporary reproduction knobs for the "spawn slightly left + rotate 5° + walk
+// sideways" glitch. Used to exercise the exact camera/frustum/ring boundary
+// where the geometry split appears. NEVER leave non-zero in normal builds.
+inline constexpr float kDebugSpawnOffsetLeft = 0.0f;   // world units, +X is right
+inline constexpr float kDebugCameraRotateDeg = 0.0f;  // degrees, rotates camera from map-center facing
+
 }  // namespace madeline_cube

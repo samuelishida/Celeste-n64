@@ -5,7 +5,6 @@
 
 #include "gameplay/math_types.hpp"
 #include "gameplay/render/batch_coalesce.hpp"  // FaceSpec, BatchRun, RunFace (Inc 3 / D3)
-#include "gameplay/render/dlod_format.hpp"     // DlodMesh (Inc 3 / compressed-LOD)
 
 namespace madeline_cube {
 
@@ -32,42 +31,11 @@ public:
     bool Load(const char* lvl_path, const Vec3& render_origin = {0.0f, 0.0f, 0.0f},
               float pos_scale = kDefaultPosScale);
 
-    // Load from a parsed DLOD direction (Inc 3 / compressed-LOD). Positions
-    // are already packed at `pos_scale` relative to `render_origin`; faces are
-    // contiguous vertex triples pre-grouped by material. Reuses the
-    // run-coalescing + RSPQ block capture path. REQUIRES pos_scale ==
-    // kLodScale (the no-repack shortcut is only valid at the baked scale) —
-    // asserted. Returns false on a null direction / 0 faces (cell skipped,
-    // non-fatal, matching today).
-    bool LoadFromDlod(const DlodMesh& mesh, int direction,
-                      const Vec3& render_origin, float pos_scale);
-
     // Free all allocated resources.
     void Free();
 
     // Draw all room geometry. Call within a t3d_frame_start/end pair.
     void Draw() const;
-
-    // Draw the precompiled RSPQ block WITHOUT touching the matrix stack
-    // (Inc 3 / D2). Used by the distant pass, which pushes ONE shared
-    // camera-relative matrix for the whole pass and draws every cell's block
-    // under it. Guards like Draw(): block_ null → legacy per-run/per-batch
-    // emission WITHOUT a matrix push (the caller's shared matrix is already
-    // on the stack — must not add one). Only valid when
-    // `uses_external_matrix_` is set (distant-loaded meshes).
-    void DrawBlockOnly() const;
-
-    // Draw the coalesced runs DIRECTLY (no RSPQ block) WITHOUT touching the
-    // matrix stack (streaming-memory-opt Inc 3). Used by the distant pass,
-    // which pushes ONE shared camera-relative matrix for the whole pass and
-    // emits every cell's runs under it. Unlike DrawBlockOnly, this NEVER plays
-    // back a block — it always emits the active path's runs (or fallback
-    // batches) directly: one vert_load + one tri_sync per run, flat color (no
-    // sprite upload). The (run, face) sequence is identical to the block
-    // path's (both replay the same coalesced runs), so silhouettes are
-    // unchanged. Only valid when `uses_external_matrix_` is set (distant-
-    // loaded meshes).
-    void DrawRunsDirect() const;
 
     bool IsLoaded() const { return verts_ != nullptr; }
 
@@ -77,23 +45,7 @@ public:
     // per-cell render origin (no per-frame re-packing). The near-pass view
     // must ALSO be camera-at-origin (see the CRITICAL coupling note in
     // gameplay_scene.cpp) or geometry is double-offset by `-camera`.
-    // No-op when `uses_external_matrix_` is set (the caller owns the matrix).
     void SetCameraPosition(const Vec3& camera_pos);
-
-    // Mark this renderer as drawing under an EXTERNAL (pass-shared) matrix
-    // (Inc 3 / D2). Set ONLY on distant-loaded meshes; the near pass's
-    // `TileStreamer` renderers keep their per-frame matrix rebuilds. When
-    // set, `SetCameraPosition` is a no-op and `DrawBlockOnly` is the draw path.
-    void SetExternalMatrixOwner() { uses_external_matrix_ = true; }
-
-    // Mark this renderer as NO-BLOCK (streaming-memory-opt Inc 3). When set,
-    // `BuildRunsAndBlock` skips the `rspq_block_begin/end` capture (block_
-    // stays null) so the cell allocates ZERO RSPQ blocks — the distant pass
-    // emits its runs directly via DrawRunsDirect instead of replaying a block.
-    // Set ONLY on distant-loaded meshes, BEFORE their BuildRunsAndBlock runs
-    // (i.e. before LoadFromDlod completes). The near pass's renderers keep
-    // block capture (this flag is never set on them).
-    void SetNoBlockMode() { no_block_ = true; }
 
     // Number of faces discarded because they exceeded the batch cap. Must
     // remain zero for a validated artifact.
@@ -145,12 +97,9 @@ private:
     // an unloaded renderer (both null). Nulls both pointers.
     void FreeRuns();
 
-    // Shared tail of Load()/LoadFromDlod(): build the coalesced runs + RSPQ
-    // block from an already-packed vertex array + a FaceSpec list. The LVL
-    // and DLOD paths both funnel through here so they can't drift. `faces`
-    // is the per-face spec list (already material-sorted for DLOD, or in
-    // original order for LVL — the sort happens inside). Returns true on
-    // success (runs or fallback batches built + block captured).
+    // Tail of Load(): build the coalesced runs + RSPQ block from an
+    // already-packed vertex array + a FaceSpec list. Returns true on success
+    // (runs or fallback batches built + block captured).
     bool BuildRunsAndBlock(const FaceSpec* faces, int face_count);
 
     // Release the heap-allocated batch array (Inc 5 / D6). Safe on an
@@ -218,14 +167,6 @@ private:
 
     Vec3 render_origin_ = {0.0f, 0.0f, 0.0f};
     RenderCounters* counters_ = nullptr;  // per-frame draw counters (Inc 1 / D7)
-    // Inc 3 / D2: when true, this renderer draws under an EXTERNAL
-    // (pass-shared) matrix — `SetCameraPosition` is a no-op and `DrawBlockOnly`
-    // is the draw path. Set only on distant-loaded meshes.
-    bool uses_external_matrix_ = false;
-    // streaming-memory-opt Inc 3: when true, BuildRunsAndBlock skips the RSPQ
-    // block capture (block_ stays null) and the cell draws via DrawRunsDirect.
-    // Set only on distant-loaded meshes (before LoadFromDlod completes).
-    bool no_block_ = false;
 };
 
 }  // namespace madeline_cube

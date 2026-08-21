@@ -3,8 +3,12 @@
 #include <cstdio>
 #include <cstring>
 
+#include <rdpq.h>
+#include <rdpq_mode.h>
+
 #include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/open_world_renderer.hpp"  // RenderCounters (Inc 1 / D7)
+#include "gameplay/render/lod_math.hpp"             // CellAabbInNearCone
 #include "gameplay/render/textured_room_renderer.hpp"
 #include "n64/profiler.hpp"  // FrameProfiler (Inc 1 / D7)
 
@@ -62,12 +66,21 @@ void TileStreamer::SetProfiler(n64::FrameProfiler* profiler) {
 
 bool TileStreamer::SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
                              const char* build_dir) {
-    // Inc 4 / D4: the near pass draws ALL residents every frame, so there is
-    // no per-frame visibility mask to reset here.
+    return SetCenterImpl(spec, center, Vec3{0.0f, 0.0f, 0.0f}, build_dir);
+}
 
-    // Resolve the distance ring (center + Chebyshev-1 neighbors).
+bool TileStreamer::SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
+                             const Vec3& camera_dir, const char* build_dir) {
+    return SetCenterImpl(spec, center, camera_dir, build_dir);
+}
+
+bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center,
+                                 const Vec3& camera_dir, const char* build_dir) {
+    // Resolve the resident set. With a camera direction we load a forward
+    // wedge (more cells in front, none behind); without one we fall back to
+    // the old square ring for compatibility.
     const V2RoomSpec* ring[kMaxRing] = {};
-    const int count = ResolveDistanceRing(spec, center, ring, kMaxRing);
+    const int count = ResolveForwardWedge(spec, center, camera_dir, ring, kMaxRing);
     if (count == 0) return false;
 
     // streaming-memory-opt Inc 1: diff the new ring against the current
@@ -145,12 +158,25 @@ bool TileStreamer::SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
 
     // Compact the parallel arrays to the new ring order (center first). For
     // each ring cell, reuse the kept renderer (and its last_used) or the newly
-    // loaded one (last_used = 0). Read all old data into a temp buffer first so
-    // the in-place rewrite never clobbers a slot we still need.
+    // loaded one (last_used = 0). Snapshot the ENTIRE old resident state
+    // (spec pointers + renderers + last_used) before the in-place rewrite so
+    // the kept-cell lookup never reads a slot that has already been clobbered.
+    //
+    // BUG FIX: the old code called `set_.IndexOf(s)` against the LIVE
+    // set_.spec[] while `set_.spec[n] = s` was overwriting it in place. The new
+    // center is ring[0] and is written to set_.spec[0] (the OLD center's slot)
+    // on the first iteration, so when the loop later reaches the old center
+    // (now a kept neighbor at ring[i>0]), IndexOf fails, the old center is
+    // treated as a brand-new cell, is not in diff.load, and is silently
+    // DROPPED. That drops the cell you just left (missing/broken geometry) and
+    // orphans its renderer (heap leak -> exhaustion -> mid-map crash).
+    // Searching the immutable snapshot fixes both.
+    const V2RoomSpec* old_spec[kMaxRing] = {};
     LvlRoomRenderer* old_flat[kMaxRing] = {};
     TexturedRoomRenderer* old_tex[kMaxRing] = {};
     uint32_t old_last_used[kMaxRing] = {};
     for (int k = 0; k < set_.count; ++k) {
+        old_spec[k] = set_.spec[k];
         old_flat[k] = renderers_[k];
         old_tex[k] = textured_renderers_[k];
         old_last_used[k] = set_.last_used[k];
@@ -162,7 +188,12 @@ bool TileStreamer::SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
         LvlRoomRenderer* flat = nullptr;
         TexturedRoomRenderer* tex = nullptr;
         uint32_t last_used = 0;
-        const int old_idx = set_.IndexOf(s);
+        // Look up the kept cell against the SNAPSHOT, not the live set_.spec[]
+        // (which is being rewritten in place below).
+        int old_idx = -1;
+        for (int k = 0; k < set_.count; ++k) {
+            if (old_spec[k] == s) { old_idx = k; break; }
+        }
         if (old_idx >= 0) {
             // Kept cell: reuse the existing renderer + last_used.
             flat = old_flat[old_idx];
@@ -199,16 +230,15 @@ bool TileStreamer::SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
     return n > 0;
 }
 
-void TileStreamer::UpdateCamera() {
-    // The ring is kept fresh by `SetCenter`, which the orchestrator calls on
-    // every cross-cell transition (GameplayScene::TransitionToRoom / BootMapPack).
-    // The near pass draws ALL residents every frame (the pool is bounded to the
-    // center + Chebyshev-1 ring, ≤9 cells), so there is no per-frame frustum
-    // visibility resolution: a brush is assigned to a cell by its center and
-    // can overflow into a neighbor cell, so cell-level culling would cut
-    // geometry at the cell boundary when the camera rotates. This hook only
-    // runs the over-capacity eviction safety net (currently unreachable — the
-    // ring never exceeds kMaxRing — but preserved for streaming robustness).
+bool TileStreamer::UpdateCamera(const CameraDesc& cam) {
+    // Per-frame resident visibility. We resolve which loaded resident cells
+    // are actually inside the camera cone and draw only those. The AABB-cone
+    // predicate widens the cone by atan(half_diag/dist) per corner, so a cell
+    // cannot pass through the frustum with all four corners outside.
+    visibility_.Clear();
+
+    // First run the over-capacity eviction safety net (currently unreachable
+    // because the wedge never exceeds kMaxRing, but preserved for robustness).
     evicted_this_frame_ = 0;
     if (set_.OverCapacity()) {
         while (set_.count > set_.capacity) {
@@ -234,6 +264,16 @@ void TileStreamer::UpdateCamera() {
             ++evicted_this_frame_;
         }
     }
+
+    // Build the visibility mask. With only a 3×3 resident ring, the per-cell
+    // AABB-cone cull is disabled; we draw all resident cells. This avoids
+    // screen-edge pop when a cell's AABB corner misses the widened cone while
+    // part of the cell is still on-screen. The ring size is the budget.
+    for (int i = 0; i < set_.count; ++i) {
+        visibility_.Set(i, true);
+    }
+
+    return true;
 }
 
 void TileStreamer::SetCameraPosition(const Vec3& camera_pos) {
@@ -248,86 +288,43 @@ void TileStreamer::DrawLowPriority(const CameraDesc&) {
     // Inc 5 fills it in.
 }
 
-void TileStreamer::CollectNearDrawSet(const CameraDesc& cam, int out_ix[],
-                                      int out_iz[], int& out_count,
-                                      int out_capacity) const {
-    out_count = 0;
-    if (!out_ix || !out_iz || out_capacity <= 0) return;
-    for (int i = 0; i < set_.count && out_count < out_capacity; ++i) {
-        const V2RoomSpec& rs = *set_.spec[i];
-        if (!CellAabbInNearCone(cam.pos, cam.target, cam.fov_deg, cam.near,
-                                cam.far, rs.world_aabb)) {
-            continue;
-        }
-        out_ix[out_count] = rs.cell_ix;
-        out_iz[out_count] = rs.cell_iz;
-        ++out_count;
-    }
-}
-
 void TileStreamer::DrawHighPriority(const CameraDesc& cam) {
-    // Inc 5 / D4: draw exactly the resident cells whose AABB intersects the
-    // camera cone (AABB-cone test, no grid-index cut). The old grid-index gate
-    // was removed because it cut geometry at cell boundaries during rotation;
-    // an AABB-cone test cannot cut mid-cell. The distant pass skips exactly
-    // this same set (computed once per frame by the orchestrator), so the two
-    // passes are disjoint — no double-draw band, no mid-cell cut.
+    // Draw exactly the resident cells whose AABB intersects the camera cone
+    // (AABB-cone test, no grid-index cut). The mask is built once per frame by
+    // `UpdateCamera`; an AABB-cone test cannot cut mid-cell.
 
-    // streaming-memory-opt Inc 4: the near pass is fully opaque (the depth
-    // buffer resolves order), so draws can be reordered by material without
-    // changing the visible result. When kEnableGlobalMaterialGrouping is on,
-    // we group the near pass per-material → per-cell so each TMEM sprite is
+    // The RDP depth test/write must be ON before any near geometry is emitted.
+    // T3D_FLAG_DEPTH only selects zbuf-capable triangle commands; forcing
+    // rdpq_mode_zbuf here guarantees SOM_Z_COMPARE/SOM_Z_WRITE are set even if
+    // a prior phase left them disabled.
+    rdpq_sync_pipe();
+    rdpq_mode_zbuf(true, true);
+
+    // The near pass is fully opaque (the depth buffer resolves order), so
+    // draws can be reordered by material without changing the visible result.
+    // We group the near pass per-material → per-cell so each TMEM sprite is
     // uploaded ONCE per material instead of once per (material, cell). The
     // flat (untextured) fallback renderers are drawn per-cell as before.
 
     // Pass 1: flat (untextured) fallback renderers, per-cell as before.
     for (int i = 0; i < set_.count; ++i) {
-        const V2RoomSpec& rs = *set_.spec[i];
-        if (!CellAabbInNearCone(cam.pos, cam.target, cam.fov_deg, cam.near,
-                                cam.far, rs.world_aabb)) {
-            continue;  // resident but off-cone — not drawn this frame
-        }
+        if (!visibility_.visible[i]) continue;
         if (renderers_[i]) {
             renderers_[i]->Draw();
         }
     }
 
-    // Pass 2: textured renderers.
-    if (!kEnableGlobalMaterialGrouping) {
-        // Legacy per-cell block path (A/B fallback).
-        for (int i = 0; i < set_.count; ++i) {
-            const V2RoomSpec& rs = *set_.spec[i];
-            if (!CellAabbInNearCone(cam.pos, cam.target, cam.fov_deg, cam.near,
-                                    cam.far, rs.world_aabb)) {
-                continue;
-            }
-            if (textured_renderers_[i]) {
-                if (profiler_) {
-                    profiler_->BeginPhase(n64::FrameProfiler::kPhaseTextureUpload);
-                    textured_renderers_[i]->Draw();
-                    profiler_->EndPhase(n64::FrameProfiler::kPhaseTextureUpload);
-                } else {
-                    textured_renderers_[i]->Draw();
-                }
-            }
-        }
-        return;
-    }
-
-    // Global near-pass material grouping (Inc 4). Build the per-frame triple
-    // list (material, cell, first_run, run_count) over the visible textured
-    // cells, sort it by material, then upload each sprite once and replay each
-    // cell's geometry under that material. The triple list is a small static
-    // buffer (9 cells × 32 materials = 288 × 8 B = 2.3 KB) — the plan's SF3
-    // allows a dedicated static buffer when FrameArena headroom is tight.
+    // Pass 2: textured renderers, globally grouped by material.
+    // Build the per-frame triple list (material, cell, first_run, run_count)
+    // over the visible textured cells, sort it by material, then upload each
+    // sprite once and replay each cell's geometry under that material. The
+    // triple list is a small static buffer (9 cells × 32 materials = 288 × 8 B
+    // = 2.3 KB) — the plan's SF3 allows a dedicated static buffer when
+    // FrameArena headroom is tight.
     static NearMaterialTriple s_triples[288];
     int triple_count = 0;
     for (int i = 0; i < set_.count; ++i) {
-        const V2RoomSpec& rs = *set_.spec[i];
-        if (!CellAabbInNearCone(cam.pos, cam.target, cam.fov_deg, cam.near,
-                                cam.far, rs.world_aabb)) {
-            continue;
-        }
+        if (!visibility_.visible[i]) continue;
         TexturedRoomRenderer* tr = textured_renderers_[i];
         if (!tr) continue;
         const int gc = tr->MaterialGroupCount();

@@ -10,8 +10,7 @@ namespace madeline_cube {
 // These are initial estimates; recalibrate at the first Ares measurement
 // (see the plan's "Budget recalibration process").
 inline constexpr int kMaxVisibleCells = 9;            // near ring: center + 8
-inline constexpr int kMaxDistantCellsPerFrame = 64;   // all 45 cells at coarse LOD
-inline constexpr int kMaxTrianglesPerFrame = 6000;    // near + distant combined
+inline constexpr int kMaxTrianglesPerFrame = 6000;    // near pass combined
 inline constexpr int kMaxMaterialChangesPerFrame = 128;
 inline constexpr int kMaxTextureUploadsPerFrame = 64;
 inline constexpr int kMaxStreamOpsPerFrame = 4;       // tile loads/evictions
@@ -21,7 +20,6 @@ inline constexpr int kMaxParticlesPerFrame = 128;     // reserved (deferred)
 // against the budgets after the frame.
 struct RenderCounts {
     int visible_cells = 0;
-    int distant_cells = 0;
     int triangles = 0;
     int material_changes = 0;
     int texture_uploads = 0;
@@ -32,7 +30,6 @@ struct RenderCounts {
 // Returns true if ANY count exceeds its cap.
 inline bool BudgetsExceeded(const RenderCounts& c) {
     return c.visible_cells > kMaxVisibleCells ||
-           c.distant_cells > kMaxDistantCellsPerFrame ||
            c.triangles > kMaxTrianglesPerFrame ||
            c.material_changes > kMaxMaterialChangesPerFrame ||
            c.texture_uploads > kMaxTextureUploadsPerFrame ||

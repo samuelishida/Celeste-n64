@@ -29,15 +29,16 @@ SCALE = 0.2
 
 
 def _parse_dlod(data):
-    """Parse a DLOD v1 buffer (mirror of dlod_format.hpp)."""
+    """Parse a DLOD v2/v3 buffer (mirror of dlod_format.hpp)."""
     magic, version, flags, dir_count, face_count, vert_count, mat_count = \
         struct.unpack_from(">IIIIIII", data, 0)
     ox, oy, oz = struct.unpack_from(">fff", data, 28)
     assert magic == DLOD_MAGIC, f"bad magic {magic:#x}"
-    assert version == DLOD_VERSION, f"bad version {version}"
+    assert version in (2, DLOD_VERSION), f"bad version {version}"
     assert dir_count >= 1 and dir_count <= 4, f"bad dir_count {dir_count}"
     offset = 44
     dirs = []
+    has_colors = False
     for _ in range(dir_count):
         d_faces, d_verts = struct.unpack_from(">II", data, offset)
         offset += 8
@@ -49,11 +50,19 @@ def _parse_dlod(data):
             verts.append((x, y, z))
         mats = list(data[offset:offset + d_faces])
         offset += d_faces
-        dirs.append((d_faces, verts, mats))
+        colors = None
+        if version >= 3:
+            color_flag = data[offset]
+            offset += 1
+            if color_flag:
+                colors = list(data[offset:offset + d_faces])
+                offset += d_faces
+                has_colors = True
+        dirs.append((d_faces, verts, mats, colors))
     return {
         "flags": flags, "dir_count": dir_count, "face_count": face_count,
         "vert_count": vert_count, "mat_count": mat_count,
-        "origin": (ox, oy, oz), "dirs": dirs,
+        "origin": (ox, oy, oz), "dirs": dirs, "has_colors": has_colors,
     }
 
 
@@ -79,6 +88,28 @@ def test_writer_roundtrip():
     assert d[1][0] == (-3, -5, -8) or d[1][0] == (-2, -5, -8), \
         f"first packed vert {d[1][0]}"
     print("PASS: writer roundtrip")
+
+
+def test_writer_v3_colors():
+    """Writer v3 color channel: per-face colors round-trip, flag set, and the
+    v2 layout (no colors) still parses with has_colors False."""
+    origin = (10.0, 20.0, 30.0)
+    verts = [(0, 0, 0), (10, 0, 0), (10, 0, 10), (0, 0, 10)]
+    faces = [((0, 1, 2), 1), ((0, 2, 3), 1)]
+    # v3 with colors.
+    data = dlod_bytes([(verts, faces)], material_count=4, origin=origin,
+                       vertex_colors=[2, 3])
+    p = _parse_dlod(data)
+    assert p["has_colors"], "v3 must set has_colors"
+    assert p["flags"] & 0x2, "v3 must set vertex-colors flag bit"
+    d = p["dirs"][0]
+    assert d[3] == [2, 3], f"v3 colors {d[3]}"
+    # v2 layout (no colors) still parses flat.
+    data2 = dlod_bytes([(verts, faces)], material_count=4, origin=origin)
+    p2 = _parse_dlod(data2)
+    assert not p2["has_colors"], "v2 must not set has_colors"
+    assert p2["dirs"][0][3] is None, "v2 colors must be None"
+    print("PASS: writer v3 colors + v2 flat path")
 
 
 def test_writer_errors():
@@ -136,7 +167,7 @@ def test_bake_geometry_equivalence():
             data = dlod_path.read_bytes()
             p = _parse_dlod(data)
             assert p["dir_count"] == 1, "single-direction .dlod expected"
-            d_faces, d_verts, d_mats = p["dirs"][0]
+            d_faces, d_verts, d_mats, d_colors = p["dirs"][0]
             # Decode the .dlod triangle set (packed s16 at kLodScale rel origin).
             origin = p["origin"]
             dlod_tris = []
@@ -200,7 +231,7 @@ def test_bake_four_directions():
             p = _parse_dlod(data)
             assert p["dir_count"] == 4, (
                 f"{dlod_path.name}: expected 4 directions, got {p['dir_count']}")
-            for d_faces, d_verts, d_mats in p["dirs"]:
+            for d_faces, d_verts, d_mats, d_colors in p["dirs"]:
                 assert d_faces <= 20, (
                     f"{dlod_path.name}: direction has {d_faces} faces > 20")
                 assert len(d_verts) == 3 * d_faces, "vert_count != 3×face_count"
@@ -213,6 +244,7 @@ def test_bake_four_directions():
 
 if __name__ == "__main__":
     test_writer_roundtrip()
+    test_writer_v3_colors()
     test_writer_errors()
     test_bake_geometry_equivalence()
     test_bake_four_directions()

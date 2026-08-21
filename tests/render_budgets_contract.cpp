@@ -31,7 +31,6 @@ int main() {
     {
         RenderCounts c;
         c.visible_cells = kMaxVisibleCells;
-        c.distant_cells = kMaxDistantCellsPerFrame;
         c.triangles = kMaxTrianglesPerFrame;
         c.material_changes = kMaxMaterialChangesPerFrame;
         c.texture_uploads = kMaxTextureUploadsPerFrame;
@@ -45,10 +44,6 @@ int main() {
         RenderCounts c;
         c.visible_cells = kMaxVisibleCells + 1;
         expect(BudgetsExceeded(c), "visible_cells over cap fails");
-
-        c = RenderCounts{};
-        c.distant_cells = kMaxDistantCellsPerFrame + 1;
-        expect(BudgetsExceeded(c), "distant_cells over cap fails");
 
         c = RenderCounts{};
         c.triangles = kMaxTrianglesPerFrame + 1;
@@ -73,8 +68,6 @@ int main() {
 
     // Budget constants are sane (positive, near ring >= 1).
     expect(kMaxVisibleCells >= 1, "kMaxVisibleCells >= 1");
-    expect(kMaxDistantCellsPerFrame >= kMaxVisibleCells,
-           "distant budget >= near ring");
     expect(kMaxTrianglesPerFrame > 0, "triangle budget positive");
     expect(kMaxStreamOpsPerFrame >= 1, "streaming budget >= 1");
 

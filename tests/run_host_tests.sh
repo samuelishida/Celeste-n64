@@ -63,35 +63,35 @@ run_py() {
 run_cpp camera_space_math tests/camera_space_math.cpp
 run_cpp pass_camera_math tests/pass_camera_math.cpp
 run_cpp tile_visibility_contract tests/tile_visibility_contract.cpp
-run_cpp frame_order_contract tests/frame_order_contract.cpp
 run_cpp lod_math tests/lod_math.cpp
-run_cpp distant_pass_order tests/distant_pass_order.cpp
 run_cpp fog_math tests/fog_math.cpp
 run_cpp skybox_transform tests/skybox_transform.cpp
 run_cpp render_budgets_contract tests/render_budgets_contract.cpp
 run_cpp debug_visualization_contract tests/debug_visualization_contract.cpp
 run_cpp debug_flags_contract tests/debug_flags_contract.cpp
-run_cpp distant_cull_contract tests/distant_cull_contract.cpp
-run_cpp distant_overlap_contract tests/distant_overlap_contract.cpp
-run_cpp distant_streaming_contract tests/distant_streaming_contract.cpp
-run_cpp distant_distance_contract tests/distant_distance_contract.cpp
 run_cpp batch_coalesce_contract tests/batch_coalesce_contract.cpp
 run_cpp material_sort_contract tests/material_sort_contract.cpp
-run_cpp distant_sort_contract tests/distant_sort_contract.cpp
 run_cpp near_visibility_contract tests/near_visibility_contract.cpp
 run_cpp renderer_memory_contract tests/renderer_memory_contract.cpp
 run_cpp render_counters_contract tests/render_counters_contract.cpp
-run_cpp distant_cellstats_contract tests/distant_cellstats_contract.cpp
-run_cpp distant_dedup_contract tests/distant_dedup_contract.cpp
-run_cpp distant_shared_matrix_contract tests/distant_shared_matrix_contract.cpp
-run_cpp dlod_format_contract tests/dlod_format_contract.cpp
 run_cpp directional_lod_contract tests/directional_lod_contract.cpp
 run_cpp input_system_smoke tests/input_system_smoke.cpp
 # Streaming & memory opt plan (Inc 1/3/4) — Pattern A, header-only.
-# (Inc 2 was skipped as infeasible, so there is no distant_shared_verts_smoke.)
 run_cpp tile_streamer_diff_smoke tests/tile_streamer_diff_smoke.cpp
-run_cpp distant_no_block_smoke tests/distant_no_block_smoke.cpp
 run_cpp near_global_sort_smoke tests/near_global_sort_smoke.cpp
+run_cpp boot_facing_smoke tests/boot_facing_smoke.cpp
+
+# ── Pattern B (links gameplay sources) ───────────────────────────────
+# Camera controller tests need the room raycast layer (world.cpp) and the
+# physics + runtime math it depends on.
+CAMERA_LINK=(
+    src/user/gameplay/player/camera_controller.cpp
+    src/user/gameplay/world/world.cpp
+    src/user/gameplay/physics/coll_mesh.cpp
+    src/user/gameplay/physics/geom.cpp
+    src/user/gameplay/runtime/math.cpp
+)
+run_cpp camera_min_distance_smoke tests/camera_min_distance_smoke.cpp "${CAMERA_LINK[@]}"
 
 # ── Pattern C (links mappack_loader.cpp) ─────────────────────────────
 # These need a baked map-pack fixture. Use the repo's baked staging dir if

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # capture_baseline.sh — capture the ROM's on-device telemetry at map center.
 #
-# Greps the [profiler] / [render-phases] / [counters] / [distant-cells] /
-# [memory] report lines from emulator stdout and writes them to
-# build/baseline-<date>.txt so the Inc 5 before/after comparison is
-# reproducible (pre-step / C3 of .plans/streaming-memory-opt/plan.md).
+# Greps the [profiler] / [render-phases] / [counters] / [memory] report
+# lines from emulator stdout and writes them to build/baseline-<date>.txt so
+# the before/after comparison is reproducible.
 #
 # Device emulator: Ares (sole validator per AGENTS.md). Ares prints the ROM's
 # USB-serial debugf() telemetry to stdout. Ares is GUI-only (opens a window and

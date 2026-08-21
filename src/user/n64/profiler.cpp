@@ -55,8 +55,7 @@ void FrameProfiler::EndFrame() {
         // every report interval even when silent. Only the debugf self-print
         // is gated (rom_main is the single report path when silent).
         static const char* kPhaseNames[kPhaseCount] = {
-            "distant", "low_priority", "high_priority",
-            "particles", "texture_upload", "streaming",
+            "high_priority", "texture_upload", "streaming",
         };
         for (int i = 0; i < kPhaseCount; ++i) {
             const float p_avg = (static_cast<float>(phase_accum_ticks_[i]) /

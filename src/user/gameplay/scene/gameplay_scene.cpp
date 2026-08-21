@@ -22,7 +22,7 @@
 #include "gameplay/input/input_system.hpp"
 #include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/open_world_renderer.hpp"
-#include "gameplay/render/fog_math.hpp"
+#include "gameplay/render/lod_math.hpp"
 #include "gameplay/render/material_catalog.hpp"
 #include "gameplay/render/model.hpp"
 #include "gameplay/render/texture.hpp"
@@ -226,6 +226,10 @@ struct GameplayScene::Impl {
     // Two-pass render orchestrator (Inc 2+). In map-pack mode this drives the
     // arch.md §21 frame order; near pass uses the TileStreamer (Inc 3).
     OpenWorldRenderer open_world_;
+
+    // Debug auto-walk bookkeeping: fixed-distance walk then stop.
+    Vec3 autowalk_start_ = {0.0f, 0.0f, 0.0f};
+    bool autowalk_recording_ = false;
     // Material catalog for the textured near pass (Inc 5). Loaded from the
     // map-pack's `.manifest`; owned by this Impl.
     MaterialCatalog material_catalog_;
@@ -262,6 +266,21 @@ struct GameplayScene::Impl {
     // player (preserves world pos/velocity). Used by the per-tick boundary
     // check. Returns true if the new room is now active.
     bool TransitionToRoom(const char* room_id);
+
+    // The camera's normalized XZ forward direction (target - position),
+    // used to shape the resident wedge. Zero vector when the camera faces
+    // its target exactly (degenerate → the streamer falls back to the ring).
+    Vec3 CameraForwardDir() const {
+        const Vec3 cam_dir = {
+            camera.target.x - camera.position.x,
+            0.0f,
+            camera.target.z - camera.position.z,
+        };
+        const float d2 = cam_dir.x * cam_dir.x + cam_dir.z * cam_dir.z;
+        if (d2 <= 1e-4f) return {0.0f, 0.0f, 0.0f};
+        const float inv = 1.0f / std::sqrt(d2);
+        return {cam_dir.x * inv, 0.0f, cam_dir.z * inv};
+    }
 };
 
 void GameplayScene::Impl::ResetPlayerToRoomStart() {
@@ -419,50 +438,13 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
         }
     }
 
-    // Configure the distant-pass fog (Inc 6). The horizon fades into a
-    // blue-grey atmosphere to hide the distant/near transition. The fog range
-    // is derived from the distant projection's far plane (full map diagonal)
-    // because t3d_fog_set_range operates in the projection's depth space, not
-    // world distance. Static-by-design (derived from static world_bounds); if
-    // the map ever becomes dynamic, move this into the per-frame distant render.
-    // Inc 4 / D4: cache the world bounds here (computed once) and reuse it in
-    // Render instead of re-running `UnionRoomsAABB` over all 45 rooms every
-    // frame.
-    //
-    // Inc 2 / D2 (distant-pass perf): retune the fog to complete WITHIN the
-    // distance² drop threshold so far cells are fully fogged when dropped —
-    // no pop at the drop edge. The drop threshold is `sqrt(kDistantMaxDist2)`
-    // (≈1330 for Forsaken City); the fog range is derived from that constant
-    // in code (`sqrt(kDistantMaxDist2) * 0.4 → * 0.9` ≈ 532 → 1197), keeping
-    // the drop/fog coupling in one place. This makes the horizon fade within
-    // the map (fog completes at ~1197, well inside the 3228 diagonal). The
-    // `0.4/0.9` ratios are a world-XZ approximation fed into depth-space fog;
-    // Inc 3 tunes them by feel. If `world_bounds` is invalid we keep the
-    // existing `distant_far * 0.4/0.9` range as the fallback so a null/empty
-    // bounds never produces an invalid `MakeFog(0,0,…)`.
+    // Cache the world bounds for any future CPU-side math. With the z-split
+    // distant pass removed, the near pass uses a fixed far plane of 800 and
+    // does not need a per-map far clip.
     {
         const MapSpecV2& spec = map_runtime_.Spec();
         world_bounds = UnionRoomsAABB(spec.rooms, spec.room_count);
         world_bounds_valid_ = spec.room_count > 0;
-        const float distant_far = MapFarClipDistance(&world_bounds, 1.15f);
-        FogParams fog;
-        if (world_bounds_valid_) {
-            // Fog completes before the drop threshold so dropped cells are
-            // fully fogged (no pop). kFogMaxMinDistance (4000) is high enough
-            // to not clamp the new min (~370).
-            // Inc 5 / D4: the fog-onset ratio is lowered to ~0.28 (≈370u) so
-            // the ring boundary (3×3 square, corner cells ~508u) sits INSIDE
-            // the fog ramp — the flat→tex transition is softened by fog. This
-            // ratio is the SINGLE tuning point for the ring boundary (D7).
-            const float drop_dist = sqrtf(kDistantMaxDist2);
-            fog = MakeFog(drop_dist * 0.28f, drop_dist * 0.9f,
-                          {120.0f, 150.0f, 180.0f});
-        } else {
-            // Fallback: keep the existing far-plane-derived range.
-            fog = MakeFog(distant_far * 0.4f, distant_far * 0.9f,
-                          {120.0f, 150.0f, 180.0f});
-        }
-        open_world_.SetFog(fog);
     }
 
     const ActiveRoomView* active = map_runtime_.Active();
@@ -552,10 +534,75 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
 
     ResetPlayerToRoomStart();
 
-    // Load the render-only neighbor ring for the start cell.
+    // Orient the player + camera toward the map center at boot. The default
+    // facing is +Z (player_state.hpp / camera_controller.cpp cold-start
+    // forward), but the start spawn is at the +Z edge of Forsaken City and the
+    // map extends in -Z. With the default facing, the camera looks AWAY from
+    // the map → the forward-wedge resident load (`ResolveForwardWedge`) keeps
+    // only the start cell, so the map content in front is not resident until
+    // the player turns around. Facing the map center fixes the boot-facing
+    // without changing any render logic.
+    if (world_bounds_valid_) {
+        const Vec3 map_center = {
+            (world_bounds.min.x + world_bounds.max.x) * 0.5f,
+            0.0f,  // Y is irrelevant for XZ facing
+            (world_bounds.min.z + world_bounds.max.z) * 0.5f,
+        };
+        Vec3 to_center = {
+            map_center.x - player.position.x,
+            0.0f,
+            map_center.z - player.position.z,
+        };
+        const float len2 = to_center.x * to_center.x + to_center.z * to_center.z;
+        if (len2 > 1e-4f) {
+            const float inv_len = 1.0f / std::sqrt(len2);
+            to_center.x *= inv_len;
+            to_center.z *= inv_len;
+            player.facing = to_center;
+            player.target_facing = to_center;
+            player.last_facing = to_center;
+            // Override the cold-start camera forward (+Z) so the camera looks
+            // into the map. ResetPlayerToRoomStart already called
+            // camera_controller.Reset (which set forward to +Z on cold start).
+            // OrientForward recomputes target/position from the new forward
+            // using the controller's own DesiredLookAt/DesiredPosition, so the
+            // next Step() sees a consistent state (no distance/height jump).
+            camera.origin = player.position;
+
+            // Temporary reproduction: nudge spawn left and rotate camera by a
+            // small fixed angle to match the reported trigger condition.
+            if (kDebugSpawnOffsetLeft != 0.0f) {
+                // "left" is perpendicular to to_center in world XZ.
+                // to_center is the map-center direction; left = (-to_center.z, 0, to_center.x).
+                player.position.x += -to_center.z * kDebugSpawnOffsetLeft;
+                player.position.z +=  to_center.x * kDebugSpawnOffsetLeft;
+                player.prev_position = player.position;
+                camera.origin = player.position;
+            }
+            Vec3 facing = to_center;
+            if (kDebugCameraRotateDeg != 0.0f) {
+                const float rad = kDebugCameraRotateDeg * (3.14159265358979f / 180.0f);
+                const float c = std::cos(rad);
+                const float s = std::sin(rad);
+                facing = {
+                    to_center.x * c - to_center.z * s,
+                    0.0f,
+                    to_center.x * s + to_center.z * c,
+                };
+                player.facing = facing;
+                player.target_facing = facing;
+                player.last_facing = facing;
+            }
+            camera_controller.OrientForward(camera, facing);
+        }
+    }
+
+    // Load the render-only neighbor ring for the start cell. The resident set
+    // is the full 3×3 Chebyshev-1 ring; the camera direction only reorders
+    // cells so the most forward ones are placed first.
     const V2RoomSpec* start_spec = map_runtime_.ActiveSpec();
     if (start_spec) {
-        open_world_.SetCenter(map_runtime_.Spec(), *start_spec, nullptr);
+        open_world_.SetCenter(map_runtime_.Spec(), *start_spec, CameraForwardDir(), nullptr);
     }
 
     debugf("[mappack] booted %s: %d rooms, start=%s\n",
@@ -582,10 +629,11 @@ bool GameplayScene::Impl::TransitionToRoom(const char* room_id) {
         debugf("[mappack] Active() returned null after CommitActive(%s)\n", room_id);
         return false;
     }
-    // Refresh the render-only neighbor ring to the new cell's neighbors.
+    // Refresh the render-only neighbor ring to the new cell's 3×3 neighbors.
+    // The camera direction only reorders cells so forward cells are first.
     const V2RoomSpec* active_spec = map_runtime_.ActiveSpec();
     if (active_spec) {
-        open_world_.SetCenter(map_runtime_.Spec(), *active_spec, nullptr);
+        open_world_.SetCenter(map_runtime_.Spec(), *active_spec, CameraForwardDir(), nullptr);
     }
     // Re-dispatch the new active room's entities and re-init cassette.
     actor_world = ActorWorld{};
@@ -639,20 +687,11 @@ const RenderCounters& GameplayScene::GetRenderCounters() const {
 }
 
 const n64::FrameProfiler& GameplayScene::Profiler() const {
-    // Forward the renderer's per-phase profiler (Inc 1 / instrumentation) so
-    // rom_main can print phase_average_ms(). If the scene isn't initialized,
-    // return a zeroed static fallback (never dereference a null impl_).
+    // Forward the renderer's per-phase profiler so rom_main can print
+    // phase_average_ms(). If the scene isn't initialized, return a zeroed
+    // static fallback (never dereference a null impl_).
     static const n64::FrameProfiler kEmpty(60);
     return impl_ ? impl_->open_world_.Profiler() : kEmpty;
-}
-
-const DistantWorldRenderer::DistantCellStat* GameplayScene::GetDistantCellStats(int* count) const {
-    // Forward the distant pass's per-cell cost capture (Inc 3 / instrumentation).
-    // If the scene isn't initialized, return nullptr with *count=0.
-    if (count) *count = 0;
-    if (!impl_) return nullptr;
-    if (count) *count = impl_->open_world_.Distant().CellStatCount();
-    return impl_->open_world_.Distant().CellStats();
 }
 
 void GameplayScene::Init() {
@@ -773,8 +812,27 @@ void GameplayScene::Update(float delta_seconds) {
         impl_->room_fixture_visible_ = !impl_->room_fixture_visible_;
         debugf("[fixture] room fixture %s\n", impl_->room_fixture_visible_ ? "ON" : "OFF");
     }
-    const PlayerInput input = ReadPlayerInput(impl_->input_system);
+    PlayerInput input = ReadPlayerInput(impl_->input_system);
     const CameraInput camera_input = ReadCameraInput(impl_->input_system);
+
+    // Temporary debug: auto-walk sideways so Ares can reproduce the
+    // side-cell loading glitch without controller input. Gated by kDebugAutoWalk.
+    // The walk is limited to 100 world units so the scene stabilizes for inspection.
+    if (kDebugAutoWalk) {
+        if (!impl_->autowalk_recording_) {
+            impl_->autowalk_start_ = impl_->player.position;
+            impl_->autowalk_recording_ = true;
+        }
+        const Vec3 delta = {
+            impl_->player.position.x - impl_->autowalk_start_.x,
+            impl_->player.position.y - impl_->autowalk_start_.y,
+            impl_->player.position.z - impl_->autowalk_start_.z,
+        };
+        const float dist = std::sqrt(delta.x * delta.x + delta.z * delta.z);
+        if (dist < 100.0f) {
+            input.move = {1.0f, 0.0f};  // camera-relative right/left (sideways)
+        }
+    }
     const Vec3 camera_forward = {
         impl_->camera.target.x - impl_->camera.position.x,
         impl_->camera.target.y - impl_->camera.position.y,
@@ -984,7 +1042,17 @@ void GameplayScene::Render() {
     // Dynamic FOV: base 45 degrees scaled by fov_multiplier (1.0 at rest,
     // up to 1.2 at high horizontal speed).
     const float fov_deg = 45.0f * impl_->camera.fov_multiplier;
-    t3d_viewport_set_projection(&impl_->viewport, T3D_DEG_TO_RAD(fov_deg), 20.0f, 800.0f);
+
+    // Single near-pass camera. After removing the z-split distant pass, the
+    // far plane returns to the good-era 800u value; the 9-cell resident ring
+    // fits comfortably inside it.
+    const CameraDesc cams = MakeNearCamera(
+        fov_deg, 5.0f, 800.0f,
+        impl_->camera.position, impl_->camera.target,
+        Vec3{0.0f, 1.0f, 0.0f});
+
+    t3d_viewport_set_projection(&impl_->viewport, T3D_DEG_TO_RAD(fov_deg), 5.0f,
+                                cams.far);
     // CRITICAL camera-at-origin coupling: model matrices are camera-relative
     // (LvlRoomRenderer::SetCameraPosition translates by render_origin -
     // camera_position). For the near-pass view to agree with those model
@@ -1025,30 +1093,13 @@ void GameplayScene::Render() {
         // Uses PRIM*SHADE combiner with per-material primColor set per batch.
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
         rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
-        // In map-pack mode, drive the two-pass orchestrator (arch.md §21
-        // order: distant Z-off, low-priority Z-off, high-priority Z-on). Inc 2
-        // keeps the legacy ring as the high-priority near pass (no regression);
-        // Inc 3 swaps it for TileStreamer. Otherwise use the legacy single-room
-        // renderer.
+        // In map-pack mode, drive the single near-pass orchestrator.
+        // Otherwise use the legacy single-room renderer.
         if (impl_->use_map_pack_) {
-            // Reset the frame-scoped arena + profiler phases (Inc 7). The arena
-            // + counters are reset in BeginFrame (top of Update); only the
-            // near-pass update + render follow here.
-            impl_->open_world_.UpdateCamera();
-
-            const MapSpecV2& spec = impl_->map_runtime_.Spec();
-            // Inc 4 / D4: use the cached world bounds (computed once at
-            // map-pack init) instead of re-running `UnionRoomsAABB` over all
-            // 45 rooms every frame.
-            const PassCameras cams = BuildPassCameras(
-                impl_->camera.position, impl_->camera.target,
-                fov_deg, 20.0f, 800.0f,
-                /*tile_size=*/spec.chunk_size * spec.scale,
-                /*lod_scale=*/0.25f,
-                /*world_bounds=*/impl_->world_bounds_valid_ ? &impl_->world_bounds : nullptr);
-            // Inc 2 / z-split: hand the viewport to the orchestrator so it can
-            // switch projections between the distant and near passes.
+            // The viewport is already attached above with the gameplay
+            // projection. SetViewport is kept for host-test compatibility.
             impl_->open_world_.SetViewport(&impl_->viewport);
+            impl_->open_world_.UpdateCamera(cams);
             impl_->open_world_.Render(cams);
         } else {
             impl_->room_renderer.Draw();

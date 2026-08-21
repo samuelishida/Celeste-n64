@@ -33,26 +33,94 @@ inline constexpr bool kEnableTextures = true;
 // the same `kMaxVisibleCells` budget the plan caps the near pass at.
 constexpr int kMaxRing = 9;
 
-// Resolve the near-pass resident ring: the center cell plus every manifest
-// room within Chebyshev distance 1 on the 2D XZ grid (|dx|<=1 && |dz|<=1).
-// The center is always `out[0]`; map-edge cells simply have fewer neighbors
-// (never fatal). Returns the count (1..kMaxRing). `out` must have room for
-// `out_capacity` entries. Host-safe — no N64 types.
-inline int ResolveDistanceRing(const MapSpecV2& spec, const V2RoomSpec& center,
-                               const V2RoomSpec* out[], int out_capacity) {
+// Resolve the near-pass resident set. The center cell is always loaded, plus
+// all Chebyshev-1 neighbors (the 3×3 ring) that exist in the manifest. The
+// 9-cell budget exactly matches `kMaxRing`, so no neighbor is dropped due to
+// capacity. The camera direction is used only to prioritize the sort order
+// (forward cells are placed first), not to cull side/back cells; this avoids
+// the screen-edge gaps caused by an aggressive forward half-space cut.
+//
+// `camera_dir` is the normalized world-space XZ forward direction. It is used
+// as a tie-breaker; pass a zero-length vector to disable prioritization. The
+// legacy `ResolveDistanceRing` alias does exactly that. `out[0]` is the center;
+// map-edge cells simply have fewer neighbors. Returns 1..kMaxRing.
+// Host-safe — no N64 types.
+inline int ResolveForwardWedge(const MapSpecV2& spec, const V2RoomSpec& center,
+                               const Vec3& camera_dir,
+                               const V2RoomSpec* out[], int out_capacity,
+                               int max_cheb = 1) {
     if (!out || out_capacity <= 0) return 0;
     int n = 0;
     out[n++] = &center;
-    for (int i = 0; i < spec.room_count && n < out_capacity; ++i) {
+
+    const bool has_dir = camera_dir.x != 0.0f || camera_dir.z != 0.0f;
+
+    struct Candidate {
+        const V2RoomSpec* spec = nullptr;
+        int cheb = 0;
+        float dot = 0.0f;
+    };
+    Candidate candidates[64];
+    int candidate_count = 0;
+
+    const int cx = center.cell_ix;
+    const int cz = center.cell_iz;
+    for (int i = 0; i < spec.room_count; ++i) {
         const V2RoomSpec& r = spec.rooms[i];
         if (r.id[0] == '\0') continue;
         if (&r == &center) continue;
-        const int dx = r.cell_ix - center.cell_ix;
-        const int dz = r.cell_iz - center.cell_iz;
-        if (dx < -1 || dx > 1 || dz < -1 || dz > 1) continue;
-        out[n++] = &r;
+        const int dx = r.cell_ix - cx;
+        const int dz = r.cell_iz - cz;
+        if (dx == 0 && dz == 0) continue;
+
+        const int cheb = (dx < 0 ? -dx : dx) > (dz < 0 ? -dz : dz)
+                             ? (dx < 0 ? -dx : dx)
+                             : (dz < 0 ? -dz : dz);
+        if (cheb > max_cheb) continue;
+
+        float dot = 0.0f;
+        if (has_dir) {
+            const float cell_size = spec.chunk_size * spec.scale;
+            const float wx = dx * cell_size;
+            const float wz = dz * cell_size;
+            const float len = std::sqrt(wx * wx + wz * wz);
+            if (len > 1e-6f) {
+                dot = (wx * camera_dir.x + wz * camera_dir.z) / len;
+            }
+        }
+
+        if (candidate_count < 64) {
+            candidates[candidate_count++] = {&r, cheb, dot};
+        }
+    }
+
+    // Sort by cheb ascending, then by dot descending so forward cells are placed
+    // first. Because the 3×3 ring fits in kMaxRing, the sort only affects order,
+    // not coverage.
+    for (int a = 1; a < candidate_count; ++a) {
+        const Candidate key = candidates[a];
+        int b = a - 1;
+        while (b >= 0 &&
+               (candidates[b].cheb > key.cheb ||
+                (candidates[b].cheb == key.cheb && candidates[b].dot < key.dot))) {
+            candidates[b + 1] = candidates[b];
+            --b;
+        }
+        candidates[b + 1] = key;
+    }
+
+    for (int i = 0; i < candidate_count && n < out_capacity; ++i) {
+        out[n++] = candidates[i].spec;
     }
     return n;
+}
+
+// Backward-compatible alias: the old 3×3 Chebyshev distance-1 ring, with no
+// camera-direction prioritization. Existing tests continue to work.
+inline int ResolveDistanceRing(const MapSpecV2& spec, const V2RoomSpec& center,
+                               const V2RoomSpec* out[], int out_capacity) {
+    return ResolveForwardWedge(spec, center, Vec3{0.0f, 0.0f, 0.0f}, out,
+                               out_capacity, /*max_cheb=*/1);
 }
 
 // Resolve the visible tile set from a top-view frustum projection. Projects
@@ -135,6 +203,23 @@ struct ResidentSet {
 
     // True if the pool is over capacity (needs eviction).
     bool OverCapacity() const { return count > capacity; }
+};
+
+// Per-frame visibility mask for the resident pool. Host-safe: a small fixed-size
+// bitmask so `TileStreamer` can resolve visibility once per frame and both the
+// orchestrator (distant skip) and `DrawHighPriority` reuse the same decision.
+struct ResidentVisibility {
+    // `visible[i]` is true iff `set.spec[i]` is inside the camera frustum this
+    // frame. The mask is recomputed every frame by `TileStreamer::UpdateCamera`.
+    bool visible[kMaxRing] = {};
+
+    void Clear() {
+        for (int i = 0; i < kMaxRing; ++i) visible[i] = false;
+    }
+
+    void Set(int i, bool v) {
+        if (i >= 0 && i < kMaxRing) visible[i] = v;
+    }
 };
 
 // streaming-memory-opt Inc 4: per-frame (material, cell, first_run, run_count)
@@ -233,6 +318,12 @@ public:
     bool SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
                    const char* build_dir = nullptr);
 
+    // Same as SetCenter but uses the camera direction to load a forward wedge
+    // instead of a fixed 3×3 square. `camera_dir` is a normalized world-space
+    // XZ forward vector; pass `{0,0,0}` to fall back to the square ring.
+    bool SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
+                   const Vec3& camera_dir, const char* build_dir = nullptr);
+
     // Set the material catalog used by the textured near pass (Inc 5). The
     // catalog is owned by the caller (GameplayScene) and must outlive the
     // streamer. Pass nullptr to force the flat-color fallback.
@@ -247,33 +338,34 @@ public:
     // upload cost is measured separately from the high-priority pass total.
     void SetProfiler(n64::FrameProfiler* profiler);
 
-    void UpdateCamera();
+    // Per-frame resident visibility resolution. `cam` describes the near
+    // camera so the AABB-cone test can be applied to decide which residents
+    // are on-screen. Returns true if visibility was resolved.
+    bool UpdateCamera(const CameraDesc& cam);
 
     void SetCameraPosition(const Vec3& camera_pos);
 
     void DrawLowPriority(const CameraDesc& cam);
     void DrawHighPriority(const CameraDesc& cam);
 
-    // Inc 5 / D4: collect the near-draw cell indices — the resident cells
-    // whose AABB intersects the camera cone (the exact set DrawHighPriority
-    // will draw). The orchestrator passes this to the distant pass so it can
-    // skip exactly those cells (overlap handoff). `out_ix`/`out_iz` are filled
-    // with `*out_count` entries (bounded by `out_capacity`). Host-safe.
-    void CollectNearDrawSet(const CameraDesc& cam, int out_ix[], int out_iz[],
-                            int& out_count, int out_capacity) const;
-
     int ResidentCount() const { return set_.count; }
     int EvictedThisFrame() const { return evicted_this_frame_; }
     const ResidentSet& Set() const { return set_; }
+    const ResidentVisibility& Visibility() const { return visibility_; }
 
 private:
     ResidentSet set_;
+    ResidentVisibility visibility_;
     LvlRoomRenderer* renderers_[kMaxRing] = {};
     TexturedRoomRenderer* textured_renderers_[kMaxRing] = {};
     const MaterialCatalog* catalog_ = nullptr;
     RenderCounters* counters_ = nullptr;      // per-frame draw counters (Inc 1 / D7)
-    n64::FrameProfiler* profiler_ = nullptr;  // per-phase profiler (Inc 1 / D7)
+    n64::FrameProfiler* profiler_ = nullptr;    // per-phase profiler (Inc 1 / D7)
     int evicted_this_frame_ = 0;
+
+    // Shared implementation of SetCenter with an optional camera direction.
+    bool SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center,
+                       const Vec3& camera_dir, const char* build_dir);
 };
 
 }  // namespace madeline_cube
