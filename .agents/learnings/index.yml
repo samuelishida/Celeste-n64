@@ -4,3 +4,6 @@ rsp-bound-frame-and-material-grouping:
 tile-streamer-compaction:
   file: tile-streamer-compaction.md
   description: When touching tile streaming / resident-set compaction — in-place array rewrite while searching the same array silently drops the old center (missing geometry + heap-leak crash); snapshot old state first; check streaming telemetry (kept cells reloaded?) before render math.
+n64-opt-device-verify-and-telemetry:
+  file: n64-opt-device-verify-and-telemetry.md
+  description: When verifying N64 ROM changes autonomously (no controller, user away) — kDebugAutoWalk + tools/capture_baseline.sh (rom, wall_seconds, label) is the walk mechanism; near_batches 56 stationary vs 94 walking is the fast signal ([memory] fires only every 3600 frames); elf size delta proves a debug flag is in/out of the build; docs drift from device telemetry — cite the latest capture, not the doc (real arena 2.16 MB stationary / 2.29 MB walking, not the stale 5.48 MB); measure before micro-optimizing (update was 0.194 ms = 0.6% of the RSP-bound frame, gate failed, opt skipped).

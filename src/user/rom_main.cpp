@@ -79,7 +79,9 @@ int main() {
         // frame (~1/30 s under the cap); the FixedStepAccumulator inside
         // GameplayScene::Update converts that into the right number of 60 Hz
         // physics ticks, keeping the simulation in real time at any frame rate.
+        profiler.BeginPhase(n64::FrameProfiler::kPhaseUpdate);
         scene_mgr.Update(display_get_delta_time());
+        profiler.EndPhase(n64::FrameProfiler::kPhaseUpdate);
         scene_mgr.Render();
 
         // RSPQ-block-render Inc 3 / D8 (async-RSP sync): wait for the RSP to
@@ -118,12 +120,18 @@ int main() {
             counter_report_counter = 0;
             const madeline_cube::RenderCounters& c = gameplay.GetRenderCounters();
 
-            // Whole-frame avg from the local profiler (unchanged).
-            debugf("[profiler] avg frame time over 60 frames: %.3f ms (%.1f fps)\n",
+            // Whole-frame avg from the local profiler, plus the gameplay-update
+            // phase (Inc 5 measurement gate): the actor/motor/camera ticks that
+            // drive the BVH collision sweep. If `update` is not costing real ms,
+            // the sqrt micro-opt collapses to a note.
+            debugf("[profiler] avg frame time over 60 frames: %.3f ms (%.1f fps) "
+                   "update=%.3f ms\n",
                    static_cast<double>(profiler.last_average_ms()),
                    profiler.last_average_ms() > 0.0f
                        ? static_cast<double>(1000.0f / profiler.last_average_ms())
-                       : 0.0);
+                       : 0.0,
+                   static_cast<double>(
+                       profiler.phase_average_ms(n64::FrameProfiler::kPhaseUpdate)));
 
             // Per-phase ms from the renderer's profiler. These are the
             // remaining per-pass costs after removing the z-split distant pass.

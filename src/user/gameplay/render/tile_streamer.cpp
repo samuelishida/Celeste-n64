@@ -265,12 +265,31 @@ bool TileStreamer::UpdateCamera(const CameraDesc& cam) {
         }
     }
 
-    // Build the visibility mask. With only a 3×3 resident ring, the per-cell
-    // AABB-cone cull is disabled; we draw all resident cells. This avoids
-    // screen-edge pop when a cell's AABB corner misses the widened cone while
-    // part of the cell is still on-screen. The ring size is the budget.
+    // Build the visibility mask. Default (kEnableNearCulling OFF): draw all
+    // resident cells. With only a 3×3 resident ring, the per-cell AABB-cone
+    // cull is disabled by default; it avoids screen-edge pop when a cell's
+    // AABB corner misses the widened cone while part of the cell is still
+    // on-screen. The ring size is the budget.
+    //
+    // Gated (kEnableNearCulling ON): run CellAabbInNearCone per resident cell
+    // (lod_math.hpp). The predicate widens the cone by kCullMargin (1.15f)
+    // plus a per-corner atan(half_diag / dist) slack, so the cone cannot pass
+    // through a cell interior with all four corners outside. The center cell
+    // (set_.spec[0] — ring[0] is always the center) is EXEMPT: it is always
+    // drawn as a guard so a future predicate change cannot cull the cell the
+    // player is standing on. It also passes the predicate for the real
+    // reason: the camera sits inside its AABB, so the near-side corners of
+    // that cell are at depth 5..800 and inside the cone — it is NOT a
+    // "degenerate facing" case. (The predicate's degenerate-facing branch
+    // returns draw-safe-true, so even a zero-length facing cannot cull.)
     for (int i = 0; i < set_.count; ++i) {
-        visibility_.Set(i, true);
+        bool visible = true;
+        if (kEnableNearCulling && i != 0) {
+            visible = CellAabbInNearCone(cam.pos, cam.target, cam.fov_deg,
+                                         cam.near, cam.far,
+                                         set_.spec[i]->world_aabb);
+        }
+        visibility_.Set(i, visible);
     }
 
     return true;

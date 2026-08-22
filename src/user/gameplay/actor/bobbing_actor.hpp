@@ -7,6 +7,8 @@ namespace madeline_cube {
 
 class BobbingActor : public Actor {
 public:
+    static constexpr uint16_t kTypeId = static_cast<uint16_t>(ActorTypeId::kBobbing);
+    BobbingActor() { type_id_ = kTypeId; }
     ~BobbingActor() override = default;
 
     void Init() override { InitBobbing(); }
