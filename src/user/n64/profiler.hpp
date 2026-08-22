@@ -17,6 +17,7 @@ public:
         kPhaseHighPriority = 0,
         kPhaseTextureUpload,
         kPhaseStreaming,
+        kPhaseUpdate,
         kPhaseCount,
     };
 

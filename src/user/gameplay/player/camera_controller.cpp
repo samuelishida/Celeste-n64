@@ -55,8 +55,8 @@ float SanitizeCoordinateBits(float value) {
 }
 
 Vec3 RotateAroundUp(const Vec3& direction, float radians) {
-    const float cosine = std::cos(radians);
-    const float sine = std::sin(radians);
+    const float cosine = CosRadians(radians);
+    const float sine = SinRadians(radians);
     return NormalizeXZ({
         (direction.x * cosine) - (direction.z * sine),
         0.0f,

@@ -201,7 +201,6 @@ src = \
 	src/user/gameplay/world/collectible.cpp \
 	src/user/gameplay/world/respawn_system.cpp \
 	src/user/gameplay/placeholder_catalog.cpp \
-	src/user/gameplay/arena.cpp \
 	src/user/gameplay/scene/scene_manager.cpp \
 	src/user/gameplay/debug_hud.cpp \
 	src/user/gameplay/scene/gameplay_scene.cpp \
@@ -239,6 +238,18 @@ src = \
 	src/user/gameplay/actor/moving_solid_actor.cpp \
 	src/user/gameplay/rom_telemetry.cpp \
 	src/user/n64/profiler.cpp
+
+# Per-TU optimization overrides (n64-optimization Inc 1). The toolchain base is
+# -O2 (n64.mk), but the global `N64_CXXFLAGS += ... -Os` above is appended last
+# and wins, so every TU currently compiles at -Os. These target-specific
+# CXXFLAGS appends add -O2 *after* the -Os for the hot TUs only, so the last
+# -O wins and those TUs compile at -O2 while the rest stay at -Os.
+$(BUILD_DIR)/src/user/gameplay/render/tile_streamer.o: CXXFLAGS += -O2
+$(BUILD_DIR)/src/user/gameplay/render/textured_room_renderer.o: CXXFLAGS += -O2
+$(BUILD_DIR)/src/user/gameplay/render/lvl_room_renderer.o: CXXFLAGS += -O2
+$(BUILD_DIR)/src/user/gameplay/render/open_world_renderer.o: CXXFLAGS += -O2
+$(BUILD_DIR)/src/user/gameplay/player/camera_controller.o: CXXFLAGS += -O2
+$(BUILD_DIR)/src/user/gameplay/player/player_motor.o: CXXFLAGS += -O2
 
 all: madeline_cube_rom.z64
 

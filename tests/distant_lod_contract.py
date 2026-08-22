@@ -15,8 +15,8 @@ requirements from arch.md §3 / the plan are:
 
 This bakes the real 1.map, reads the map-pack manifest, computes `distant_far`
 (= tile_size * 1.4, arch.md §5) and the world half-extent, and asserts both
-conditions. `kLodScale` must match the runtime `DistantWorldRenderer::kLodScale`
-(0.25).
+conditions. `kLodScale` must match the bake-time `KLOD_SCALE`
+(`tools/ogworld/distant_lod.py`, 0.25).
 
 Run:
     python3 tests/distant_lod_contract.py
@@ -36,7 +36,7 @@ MAIN_MAP = REPO / "assets" / "og_converted" / "maps" / "1.map"
 CHUNK_SIZE = 1200.0
 SCALE = 0.2
 
-# Must match DistantWorldRenderer::kLodScale (src/.../distant_world_renderer.hpp).
+# Must match KLOD_SCALE (tools/ogworld/distant_lod.py).
 K_LOD_SCALE = 0.25
 # Max int16.
 MAX_INT16 = 32767.0

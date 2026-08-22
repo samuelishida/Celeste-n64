@@ -27,6 +27,19 @@ struct RenderCounters;  // defined in open_world_renderer.hpp (Inc 1 / D7)
 // cost is too high.
 inline constexpr bool kEnableTextures = true;
 
+// Near-pass cone-cull gate (n64-optimization Inc 3). When true,
+// `TileStreamer::UpdateCamera` runs the `CellAabbInNearCone` AABB-cone test
+// per resident cell and draws only the cells inside the (margined) camera
+// cone; when false, every resident cell is force-drawn (the current
+// behavior). Defaults OFF: with a 3×3 resident ring the cone is the only
+// effective cull (the ring cells are all within far), and the screen-edge
+// pop risk is the exact artifact class previously reverted (forward-wedge
+// rationale, AGENTS.md). The cone width is controlled by `kCullMargin`
+// (lod_math.hpp, 1.15f, hardcoded inside the predicate); widen it ±0.05 and
+// re-test a full 360° orbit if a cell's AABB barely clips the cone corner.
+// Rollback is a clean flag flip.
+inline constexpr bool kEnableNearCulling = false;
+
 // ── Resident-pool constants ──────────────────────────────────────────
 // `kMaxRing` is the near-pass resident capacity: the center cell + its
 // up-to-8 ring neighbors (Chebyshev distance 1 in the 2D XZ grid). This is

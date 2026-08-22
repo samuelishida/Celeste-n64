@@ -93,6 +93,16 @@ CAMERA_LINK=(
 )
 run_cpp camera_min_distance_smoke tests/camera_min_distance_smoke.cpp "${CAMERA_LINK[@]}"
 
+# Inc 4 actor type-id query test: needs the actor world + the concrete actor
+# .cpp files (their Init/Update/OnCollect definitions).
+ACTOR_LINK=(
+    src/user/gameplay/world/actor_world.cpp
+    src/user/gameplay/actor/strawberry_actor.cpp
+    src/user/gameplay/actor/refill_actor.cpp
+    src/user/gameplay/actor/spring_actor.cpp
+)
+run_cpp actor_type_id_smoke tests/actor_type_id_smoke.cpp "${ACTOR_LINK[@]}"
+
 # ── Pattern C (links mappack_loader.cpp) ─────────────────────────────
 # These need a baked map-pack fixture. Use the repo's baked staging dir if
 # present; otherwise skip with a warning (they can be run after `make bake`).

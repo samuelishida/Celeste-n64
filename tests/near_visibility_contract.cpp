@@ -13,11 +13,18 @@
 //
 // Build:
 //   g++ -std=c++17 -Isrc/user tests/near_visibility_contract.cpp
+//
+// n64-optimization Inc 3 extends this test (no duplicate file) with the
+// `CellAabbInNearCone` predicate that `TileStreamer::UpdateCamera` runs when
+// `kEnableNearCulling` is ON: for a given camera, a resident cell outside the
+// (margined) cone is NOT drawn while the center cell always is (explicit
+// exemption), and a degenerate facing (pos == target) draws safe-true.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
+#include "gameplay/render/lod_math.hpp"
 #include "gameplay/render/tile_streamer.hpp"
 #include "gameplay/render/tile_visibility.hpp"
 
@@ -174,6 +181,74 @@ int main() {
         expect(n == 0, "empty frustum resolves 0 rooms");
         expect(vis[0] && !vis[1] && !vis[2],
                "empty frustum still marks the center (fallback)");
+    }
+
+    // --- n64-optimization Inc 3: CellAabbInNearCone (UpdateCamera wiring) ---
+    // 3×3 grid of 240u cells (chunk 1200 * scale 0.2), minus two corners. The
+    // camera sits at the center of cell (0,0) looking +X. The cone is the
+    // vertical 45° FOV widened to horizontal (4:3) then by kCullMargin (1.15f),
+    // plus a per-corner atan(half_diag / dist) slack. That per-corner slack is
+    // generous: a 240u cell at 240u range widens the cone by ~35°, so the
+    // effective half-angle is ~68° — off-axis ring cells whose NEAR corner
+    // falls inside ~60° are drawn, and only cells behind the camera cull.
+    // That is the intended draw-safe behavior (no screen-edge pop); the
+    // back-diagonal cell below is the strong "resident outside the cone is
+    // NOT drawn" assertion.
+    {
+        const float kCell = 240.0f;
+        MapSpecV2 cone_spec = {};
+        cone_spec.chunk_size = 1200.0f;
+        cone_spec.scale = 0.2f;
+        cone_spec.room_count = 6;
+        auto place = [&](int i, const char* id, int ix, int iz) {
+            std::strcpy(cone_spec.rooms[i].id, id);
+            cone_spec.rooms[i].cell_ix = ix;
+            cone_spec.rooms[i].cell_iz = iz;
+            cone_spec.rooms[i].world_aabb = {
+                {ix * kCell, 0.0f, iz * kCell},
+                {(ix + 1) * kCell, 0.0f, (iz + 1) * kCell}};
+        };
+        place(0, "c00", 0, 0);   // center
+        place(1, "c10", 1, 0);   // +X neighbor
+        place(2, "c01", 0, 1);   // +Z neighbor
+        place(3, "cm10", -1, 0); // -X neighbor
+        place(4, "c0m1", 0, -1); // -Z neighbor
+        place(5, "cm11", -1, 1); // back-diagonal neighbor
+
+        const CameraDesc cam = MakeNearCamera(45.0f, 5.0f, 800.0f,
+                                              Vec3{0.0f, 0.0f, 0.0f},
+                                              Vec3{1000.0f, 0.0f, 0.0f},
+                                              Vec3{0.0f, 1.0f, 0.0f});
+        // Mirror UpdateCamera's mask logic: center exempt, cone test for the
+        // rest.
+        auto resolve_cone_mask = [&](const CameraDesc& c, bool vis[kMaxRing]) {
+            for (int i = 0; i < kMaxRing; ++i) vis[i] = false;
+            vis[0] = true;  // center always drawn (explicit exemption)
+            for (int i = 1; i < cone_spec.room_count; ++i) {
+                vis[i] = CellAabbInNearCone(c.pos, c.target, c.fov_deg, c.near,
+                                            c.far, cone_spec.rooms[i].world_aabb);
+            }
+        };
+
+        bool vis[kMaxRing] = {};
+        resolve_cone_mask(cam, vis);
+        expect(vis[0], "cone: center cell always drawn (exemption)");
+        expect(vis[1], "cone: +X neighbor (in front) is drawn");
+        expect(vis[2], "cone: +Z neighbor drawn (near corner inside widened cone)");
+        expect(!vis[3], "cone: -X neighbor (behind) is culled");
+        expect(vis[4], "cone: -Z neighbor drawn (corner on forward axis)");
+        expect(!vis[5], "cone: back-diagonal neighbor is culled");
+
+        // Degenerate facing (pos == target): the predicate returns
+        // draw-safe-true for every cell — nothing is culled by a zero-length
+        // facing.
+        const CameraDesc deg = MakeNearCamera(45.0f, 5.0f, 800.0f,
+                                              Vec3{0.0f, 0.0f, 0.0f},
+                                              Vec3{0.0f, 0.0f, 0.0f},
+                                              Vec3{0.0f, 1.0f, 0.0f});
+        resolve_cone_mask(deg, vis);
+        expect(vis[0] && vis[1] && vis[2] && vis[3] && vis[4] && vis[5],
+               "cone: degenerate facing draws all residents (safe-true)");
     }
 
     if (failures == 0) {

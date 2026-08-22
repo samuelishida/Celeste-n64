@@ -1,14 +1,8 @@
 #pragma once
 #include <cstdint>
 #include "gameplay/actor/actor.hpp"
-#include "gameplay/world/world.hpp"
 namespace madeline_cube {
 using ActorId = uint16_t;
-template<class T> struct ActorView {
-    T* items[64] = {};
-    uint16_t count = 0;
-    T* begin() const { return count ? items[0] : nullptr; }
-};
 class ActorWorld {
 public:
     static constexpr uint16_t kMaxActors = 64;
@@ -17,29 +11,19 @@ public:
     void ResolvePending();
     void Update(float delta_seconds);
     uint16_t Count() const { return count_; }
+    // First active actor of EXACTLY type T, or null. Resolves by comparing
+    // `type_id_` against `T::kTypeId` (Inc 4) instead of `dynamic_cast`, so
+    // no RTTI is needed on the N64 hot path. Exact-type semantics: the old
+    // `dynamic_cast` also matched derived types, but the only live query
+    // targets a concrete leaf type (`StrawberryActor`), so the behavior is
+    // unchanged there. `T` must be a concrete actor class carrying `kTypeId`.
     template<class T> T* Get() const {
-        for (uint16_t i=0;i<kMaxActors;++i) if (actors_[i] && active_[i]) if (auto* found=dynamic_cast<T*>(actors_[i])) return found;
-        return nullptr;
-    }
-    template<class T> ActorView<T> All() const {
-        ActorView<T> out;
-        for (uint16_t i=0;i<kMaxActors;++i) if (actors_[i] && active_[i]) if (auto* found=dynamic_cast<T*>(actors_[i])) out.items[out.count++]=found;
-        return out;
-    }
-    template<class T> T* OverlapsFirst(const Vec3& point) const {
-        for (uint16_t i=0;i<kMaxActors;++i) if (actors_[i] && active_[i]) if (auto* found=dynamic_cast<T*>(actors_[i])) {
-            const AABB world = WorldBounds(*actors_[i]); if (world.Contains(point)) return found;
-        }
+        for (uint16_t i=0;i<kMaxActors;++i)
+            if (actors_[i] && active_[i] && actors_[i]->TypeId() == T::kTypeId)
+                return static_cast<T*>(actors_[i]);
         return nullptr;
     }
 private:
-    static AABB WorldBounds(const Actor& actor) {
-        const float r = actor.pickup_radius;
-        return {
-            {actor.position.x - r, actor.position.y - r, actor.position.z - r},
-            {actor.position.x + r, actor.position.y + r, actor.position.z + r},
-        };
-    }
     Actor* actors_[kMaxActors] = {};
     bool active_[kMaxActors] = {};
     bool pending_add_[kMaxActors] = {};
