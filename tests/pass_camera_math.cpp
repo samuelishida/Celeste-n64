@@ -58,7 +58,7 @@ int main() {
     // Defaults are sane for the single-pass renderer.
     const CameraDesc def;
     expect(near_eq(def.near, 5.0f), "default near == 5.0");
-    expect(near_eq(def.far, 800.0f), "default far == 800.0");
+    expect(near_eq(def.far, 800.0f), "default far == 800.0 (2000 when distant tier ON)");
 
     if (failures == 0) {
         std::printf("pass_camera_math: all checks passed\n");

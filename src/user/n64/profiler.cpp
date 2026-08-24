@@ -42,6 +42,14 @@ void FrameProfiler::EndFrame() {
     accumulated_ticks_ += elapsed;
     ++frame_count_;
 
+    // Streaming-experience Inc 1: track the per-phase PEAK (max single-frame
+    // cost) over the report window. phase_accum_ticks_ is final after the
+    // frame's last EndPhase, so the peak taken here covers the whole frame.
+    for (int i = 0; i < kPhaseCount; ++i) {
+        if (phase_accum_ticks_[i] > phase_peak_ticks_[i])
+            phase_peak_ticks_[i] = phase_accum_ticks_[i];
+    }
+
     if (frame_count_ >= report_interval_) {
         const float avg_ticks = static_cast<float>(accumulated_ticks_) / static_cast<float>(frame_count_);
         // TIMER_TICKS_LL(1000) returns ticks per millisecond; dividing by it
@@ -62,6 +70,11 @@ void FrameProfiler::EndFrame() {
                                   static_cast<float>(frame_count_)) /
                                 static_cast<float>(TIMER_TICKS_LL(1000));
             phase_avg_ms_[i] = p_avg;
+            // Convert the tick peak to ms (host-safe accessor reads the ms).
+            phase_peak_ms_[i] =
+                static_cast<float>(phase_peak_ticks_[i]) /
+                static_cast<float>(TIMER_TICKS_LL(1000));
+            phase_peak_ticks_[i] = 0;  // next report window starts fresh
         }
 
         if (!silent_) {

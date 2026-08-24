@@ -1,0 +1,47 @@
+services:
+  zoom:
+    build:
+      context: .
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    image: zoom-workspace:latest
+    container_name: zoom-workspace
+    # Run as the host user so X11 + pulse sockets are accessible.
+    user: "${UID:-1000}:${GID:-1000}"
+
+    environment:
+      DISPLAY: "${DISPLAY:-:0}"
+      # Where the container will find the forwarded pulse socket.
+      XDG_RUNTIME_DIR: /run/user/${UID:-1000}
+      PULSE_SERVER: unix:/run/user/${UID:-1000}/pulse/native
+      QT_X11_NO_MITSHM: "1"
+
+    volumes:
+      # X11 GUI
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Audio: PulseAudio native socket + PipeWire socket
+      - /run/user/${UID:-1000}/pulse:/run/user/${UID:-1000}/pulse:rw
+      - /run/user/${UID:-1000}/pipewire-0:/run/user/${UID:-1000}/pipewire-0:rw
+      # Share config and a host folder for downloads/recordings
+      - /home/${USER:-smk}/.config/pulse:/home/zoom/.config/pulse:ro
+      - /home/${USER:-smk}/zoom-workspace:/home/zoom/ZoomWorkspace:rw
+
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/video1:/dev/video1
+
+    # audio gid (29) + video gid (44). Override via AUDIO_GID/VIDEO_GID if your
+    # distro differs (e.g. `getent group audio` / `getent group video`).
+    group_add:
+      - "${AUDIO_GID:-29}"
+      - "${VIDEO_GID:-44}"
+
+    ipc: host
+    shm_size: "2gb"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    stdin_open: true
+    tty: true

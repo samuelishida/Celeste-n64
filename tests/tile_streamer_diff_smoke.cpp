@@ -123,18 +123,18 @@ ResidentSet ApplyDiff(const RingDiffResult& d, const V2RoomSpec* const new_ring[
 }  // namespace
 
 int main() {
-    // A 4x3 grid (ix -1..2, iz -1..1). A 3x3 grid would clip the destination
-    // ring of a 1-step move, so 4 columns are needed to demonstrate loading
-    // new cells. 12 rooms total.
+    // A 6×5 grid (ix -2..3, iz -2..2). Large enough that a 5×5 resident ring
+    // (cheb≤2) centered at A=(0,0) and B=(1,0) both resolve the full 25 cells
+    // (streaming-experience Inc 3), while the 3×3 rings still fit. 30 rooms.
     MapSpecV2 spec;
-    const int nrooms = BuildGrid(spec, -1, 2, -1, 1);
-    assert(nrooms == 12);
+    const int nrooms = BuildGrid(spec, -2, 3, -2, 2);
+    assert(nrooms == 30);
     printf("built %d-room grid\n", nrooms);
 
     const V2RoomSpec* A = FindCell(spec, 0, 0);
     const V2RoomSpec* B = FindCell(spec, 1, 0);
     const V2RoomSpec* C = FindCell(spec, 2, 0);
-    const V2RoomSpec* E = FindCell(spec, -1, 0);  // left-edge center
+    const V2RoomSpec* E = FindCell(spec, -2, 0);  // left-edge center
     assert(A && B && C && E);
 
     // ── 1. A→B: a 1-step move. The rings overlap in 6 cells; B's ring adds 3
@@ -205,9 +205,9 @@ int main() {
         printf("PASS: A->B->A->C sequence (no double-free / leak)\n");
     }
 
-    // ── 3. Map-edge center: E=(-1,0) has a clipped ring (ix -1..0, 6 cells).
-    //    Moving E→A keeps all 6 (the overlap) and loads the 3 new ix=1 cells;
-    //    nothing departs (free = 0).
+    // ── 3. Map-edge center: E=(-2,0) has a clipped ring (ix -2..-1, 6 cells).
+    //    Moving E→A keeps the overlap (the ix=-1 column, 3 cells) and loads
+    //    A's 6 new cells; 3 depart.
     {
         const V2RoomSpec* ringE[kMaxRing] = {};
         const int nE = ResolveDistanceRing(spec, *E, ringE, kMaxRing);
@@ -221,16 +221,16 @@ int main() {
         const RingDiffResult d = ResolveRingDiff(setE, ringA, nA);
         printf("E->A: keep=%d load=%d free=%d\n", d.keep_count, d.load_count,
                d.free_count);
-        assert(d.keep_count == 6);
-        assert(d.load_count == 3);
-        assert(d.free_count == 0);  // nothing departed
+        assert(d.keep_count == 3);
+        assert(d.load_count == 6);
+        assert(d.free_count == 3);
         for (int i = 0; i < nE; ++i) AssertExclusive(d, ringE[i]);
         for (int i = 0; i < nA; ++i) AssertExclusive(d, ringA[i]);
-        printf("PASS: map-edge center E->A (6 keep / 3 load / 0 free)\n");
+        printf("PASS: map-edge center E->A (3 keep / 6 load / 3 free)\n");
     }
 
-    // ── 4. 0-overlap "teleport": E=(-1,0) ring (ix -1..0) and C=(2,0) ring
-    //    (ix 1..2) share no cells. Everything reloads — identical to the old
+    // ── 4. 0-overlap "teleport": E=(-2,0) ring (ix -2..-1) and C=(2,0) ring
+    //    (ix 1..3) share no cells. Everything reloads — identical to the old
     //    free-all + load-all behavior (no regression).
     {
         const V2RoomSpec* ringE[kMaxRing] = {};
@@ -240,17 +240,46 @@ int main() {
 
         const V2RoomSpec* ringC[kMaxRing] = {};
         const int nC = ResolveDistanceRing(spec, *C, ringC, kMaxRing);
-        assert(nC == 6);
+        assert(nC == 9);
 
         const RingDiffResult d = ResolveRingDiff(setE, ringC, nC);
         printf("E->C (teleport): keep=%d load=%d free=%d\n", d.keep_count,
                d.load_count, d.free_count);
         assert(d.keep_count == 0);
-        assert(d.load_count == 6);  // all reload
+        assert(d.load_count == 9);  // all reload
         assert(d.free_count == 6);  // all free
         for (int i = 0; i < nE; ++i) AssertExclusive(d, ringE[i]);
         for (int i = 0; i < nC; ++i) AssertExclusive(d, ringC[i]);
-        printf("PASS: 0-overlap teleport E->C (0 keep / 6 load / 6 free)\n");
+        printf("PASS: 0-overlap teleport E->C (0 keep / 9 load / 6 free)\n");
+    }
+
+    // ── 5. streaming-experience Inc 3: the 5×5 RESIDENT ring (cheb≤2). A
+    //    1-step move keeps 20 overlapping residents (a 5×5 block shifted by 1
+    //    shares a 4×5 = 20 region) and loads/frees only 5 — far fewer parses
+    //    per transition than the 3×3's 3. (The plan's Inc 3 text says "12";
+    //    review pass 2 corrected it to 20 — the load-bearing invariant is
+    //    "load = new cells, not 25".)
+    {
+        const V2RoomSpec* ringA[kMaxResident] = {};
+        const int nA = ResolveForwardWedge(spec, *A, Vec3{0, 0, 0}, ringA,
+                                           kMaxResident, /*max_cheb=*/2);
+        assert(nA == 25);
+        ResidentSet setA = MakeSet(ringA, nA);
+
+        const V2RoomSpec* ringB[kMaxResident] = {};
+        const int nB = ResolveForwardWedge(spec, *B, Vec3{0, 0, 0}, ringB,
+                                           kMaxResident, /*max_cheb=*/2);
+        assert(nB == 25);
+
+        const RingDiffResult d = ResolveRingDiff(setA, ringB, nB);
+        printf("5x5 A->B: keep=%d load=%d free=%d\n", d.keep_count,
+               d.load_count, d.free_count);
+        assert(d.keep_count == 20);
+        assert(d.load_count == 5);  // the new ix=3 column, not 25
+        assert(d.free_count == 5);  // the departed ix=-2 column
+        for (int i = 0; i < nA; ++i) AssertExclusive(d, ringA[i]);
+        for (int i = 0; i < nB; ++i) AssertExclusive(d, ringB[i]);
+        printf("PASS: 5x5 A->B diff (20 keep / 5 load / 5 free)\n");
     }
 
     printf("tile_streamer_diff_smoke: all assertions passed\n");

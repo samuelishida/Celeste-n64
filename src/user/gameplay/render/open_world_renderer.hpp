@@ -19,6 +19,7 @@ struct RenderCounters {
 // N64-only renderer types, forward-declared so this header stays host-safe.
 class TileStreamer;
 class Skybox;
+class DistantTierRenderer;  // render-distance Inc 4
 
 // Device-only render orchestrator. Drives a single near pass plus skybox.
 class OpenWorldRenderer {
@@ -37,8 +38,9 @@ public:
     void SetCameraPosition(const Vec3& camera_pos);
 
     // Per-frame resident visibility update. The streamer resolves which
-    // resident cells are inside the camera cone and draws only those.
-    void UpdateCamera(const CameraDesc& cam);
+    // resident cells are inside the camera cone and draws only those. `dt` is
+    // the frame delta in seconds (streaming-experience Inc 4: ages the reveal).
+    void UpdateCamera(const CameraDesc& cam, float dt = 1.0f / 30.0f);
 
     // Set the material catalog for the textured near pass. The catalog is
     // owned by the caller.
@@ -68,11 +70,22 @@ public:
     // pass. Read by the profiler report / device walk.
     const RenderCounters& Counters() const { return counters_; }
 
+    // streaming-experience Inc 5: streaming telemetry for the [counters]
+    // report line — cells still in the pending-load backlog (queued/in-flight)
+    // and resident pool depth. `pending=0` = full ring READY.
+    int PendingLoads() const;
+    int ResidentLoads() const;
+
+    // render-distance Inc 4: load the whole-map horizon tier (all `.dlod`
+    // cells) once at boot. `build_dir` is null on device.
+    void LoadDistantTier(const MapSpecV2& spec, const char* build_dir);
+
 private:
     void RenderHighPriority(const CameraDesc& cam);
 
     TileStreamer* tile_streamer_ = nullptr;
     Skybox* skybox_ = nullptr;
+    DistantTierRenderer* distant_tier_ = nullptr;  // render-distance Inc 4
     void* viewport_ = nullptr;
     Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};
     n64::FrameArena arena_;

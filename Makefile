@@ -36,7 +36,31 @@ DFS_TEX_FILES := \
     filesystem/tex/rock_2.sprite \
     filesystem/tex/metal_floor_1.sprite \
     filesystem/tex/floor_dirty_concrete.sprite \
-    filesystem/tex/TB_empty.sprite
+    filesystem/tex/TB_empty.sprite \
+    filesystem/tex/girder.sprite \
+    filesystem/tex/girder_16.sprite \
+    filesystem/tex/girder_v.sprite \
+    filesystem/tex/girder_v_16.sprite \
+    filesystem/tex/girder_wood.sprite \
+    filesystem/tex/rock_3.sprite \
+    filesystem/tex/rock_4.sprite \
+    filesystem/tex/rock_5.sprite \
+    filesystem/tex/wood_1.sprite \
+    filesystem/tex/wood_2.sprite \
+    filesystem/tex/wood_3.sprite \
+    filesystem/tex/wood_4.sprite \
+    filesystem/tex/wood_fragile.sprite \
+    filesystem/tex/wall_ruined_1.sprite \
+    filesystem/tex/wall_ruined_2.sprite \
+    filesystem/tex/wall_ruined_3.sprite \
+    filesystem/tex/wall_ruined_4.sprite \
+    filesystem/tex/wall_ruined_5.sprite \
+    filesystem/tex/wall_ruined_6.sprite \
+    filesystem/tex/wall_ruined_7.sprite \
+    filesystem/tex/road1.sprite \
+    filesystem/tex/glass_1.sprite \
+    filesystem/tex/special_floor_1.sprite \
+    filesystem/tex/big_decals_1.sprite
 
 DFS_FNT_FILES := filesystem/fnt/Renogare.font64
 
@@ -226,6 +250,8 @@ src = \
 	src/user/gameplay/render/open_world_renderer.cpp \
 	src/user/gameplay/render/tile_streamer.cpp \
 	src/user/gameplay/render/skybox.cpp \
+	src/user/gameplay/render/distant_tier_renderer.cpp \
+	src/user/gameplay/render/dlod_loader.cpp \
 	src/user/gameplay/render/t3dm_room_renderer.cpp \
 	src/user/gameplay/world/level_loader.cpp \
 	src/user/gameplay/world/mappack_loader.cpp \

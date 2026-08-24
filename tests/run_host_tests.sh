@@ -80,6 +80,12 @@ run_cpp input_system_smoke tests/input_system_smoke.cpp
 run_cpp tile_streamer_diff_smoke tests/tile_streamer_diff_smoke.cpp
 run_cpp near_global_sort_smoke tests/near_global_sort_smoke.cpp
 run_cpp boot_facing_smoke tests/boot_facing_smoke.cpp
+# streaming-experience Inc 1: pending-load state machine (mock is_finished).
+run_cpp pending_load_smoke tests/pending_load_smoke.cpp
+# streaming-experience Inc 3: drawn mask = exactly the 3×3 (cheb<=1).
+run_cpp drawn_mask_contract tests/drawn_mask_contract.cpp
+# streaming-experience Inc 4: reveal state machine + pivot-scale matrix formula.
+run_cpp reveal_state_machine tests/reveal_state_machine.cpp
 
 # ── Pattern B (links gameplay sources) ───────────────────────────────
 # Camera controller tests need the room raycast layer (world.cpp) and the
@@ -103,6 +109,25 @@ ACTOR_LINK=(
 )
 run_cpp actor_type_id_smoke tests/actor_type_id_smoke.cpp "${ACTOR_LINK[@]}"
 
+# Gameplay smoke test (AGENTS.md): grounded jump, air dash, pickup, respawn.
+# Needs the full player+world+physics link set (motor sweeps the BVH collision).
+GAMEPLAY_LINK=(
+    src/user/gameplay/player/player_controller.cpp
+    src/user/gameplay/player/camera_controller.cpp
+    src/user/gameplay/player/player_motor.cpp
+    src/user/gameplay/runtime/math.cpp
+    src/user/gameplay/world/world.cpp
+    src/user/gameplay/world/collectible.cpp
+    src/user/gameplay/world/respawn_system.cpp
+    src/user/gameplay/physics/coll_mesh.cpp
+    src/user/gameplay/physics/geom.cpp
+    "${ACTOR_LINK[@]}"
+    src/user/gameplay/world/entity_dispatch.cpp
+    src/user/gameplay/world/actor_factory.cpp
+    src/user/gameplay/actor/moving_solid_actor.cpp
+)
+run_cpp gameplay_smoke tests/gameplay_smoke.cpp "${GAMEPLAY_LINK[@]}"
+
 # ── Pattern C (links mappack_loader.cpp) ─────────────────────────────
 # These need a baked map-pack fixture. Use the repo's baked staging dir if
 # present; otherwise skip with a warning (they can be run after `make bake`).
@@ -114,6 +139,12 @@ if [ -f "$STAGING/forsyken-city.mappack" ]; then
         src/user/gameplay/world/mappack_loader.cpp
     run_cpp material_catalog_test tests/material_catalog_test.cpp \
         src/user/gameplay/world/mappack_loader.cpp -- "$STAGING"
+    # streaming-experience Inc 2: per-cell resident cost table + MaxLvlSize check.
+    run_cpp streaming_memory_measure tests/streaming_memory_measure.cpp \
+        src/user/gameplay/world/mappack_loader.cpp -- "$STAGING" "$STAGING/forsyken-city.mappack"
+    # streaming-experience Inc 3: autowalk distance guarantees a seam crossing.
+    run_cpp autowalk_distance_contract tests/autowalk_distance_contract.cpp \
+        src/user/gameplay/world/mappack_loader.cpp -- "$STAGING/forsyken-city.mappack"
 else
     echo "SKIP: Pattern C tests (no baked fixture at $STAGING; run 'make bake-forsaken-city')"
 fi

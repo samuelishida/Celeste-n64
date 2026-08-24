@@ -5,15 +5,13 @@
 namespace madeline_cube {
 
 // Single near-pass camera derivation math, shared between the N64 renderer
-// and host tests. After the z-split distant pass was removed, only one camera
-// is needed: normal gameplay clip planes (near=5, far=800) that cover the
-// 9-cell resident ring. This header uses only `Vec3` and `float` — no N64
-// types.
-
+// and host tests. The default far=800 covers the 9-cell resident ring; the
+// render-distance Inc 5 distant tier widens it to 2000 at build time when
+// kEnableDistantTier is ON.
 struct CameraDesc {
     float fov_deg = 45.0f;
-    float near = 5.0f;  // Inc 6: lowered from 20.0 (matches near-pass clip plane)
-    float far = 800.0f;
+    float near = 5.0f;  // matches near-pass clip plane
+    float far = 800.0f;  // 2000 when kEnableDistantTier (Inc 5)
     Vec3 pos;     // world-space camera position
     Vec3 target;  // world-space look target
     Vec3 up;      // world-space up

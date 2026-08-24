@@ -17,6 +17,13 @@ int main() {
         std::fprintf(stderr, "FAIL: kVerboseFrameLogging must default to false\n");
         return 1;
     }
+    // render-distance Inc 1: backface culling must be ON by default (the near
+    // pass culls backfaces on the RSP). If a device regression forces it OFF,
+    // this contract is the first place to revert.
+    if (!kEnableBackCull) {
+        std::fprintf(stderr, "FAIL: kEnableBackCull must default to true\n");
+        return 1;
+    }
     std::printf("debug_flags_contract: all checks passed\n");
     return 0;
 }

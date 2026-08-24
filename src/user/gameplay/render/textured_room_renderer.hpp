@@ -7,6 +7,10 @@
 #include "gameplay/render/batch_coalesce.hpp"  // FaceSpec, BatchRun, RunFace (Inc 3 / D3)
 #include "gameplay/render/material_catalog.hpp"
 
+#if defined(__mips64) || defined(__mips)
+#define MADCUBE_IS_N64 1
+#endif
+
 namespace madeline_cube {
 
 struct RenderCounters;  // defined in open_world_renderer.hpp (Inc 1 / D7)
@@ -30,17 +34,40 @@ public:
     // Load faces + vertices from a .lvl file, packing against `render_origin`
     // at `pos_scale` (near default 32). `catalog` is the material catalog used
     // to resolve each batch's sprite at draw time. Returns true on success.
+    // Synchronous (blocking fopen/fread) — kept as the fallback path
+    // (streaming-experience Inc 1): boot center, async-pool exhaustion, or any
+    // async DMA issue failure.
     bool Load(const char* lvl_path, const Vec3& render_origin,
               const MaterialCatalog* catalog,
               float pos_scale = kDefaultPosScale);
 
+    // streaming-experience Inc 1: async read + staged parse.
+    //
+    // `LoadAsync` resolves the .lvl's PI address (`dfs_rom_addr`, dragonfs.h)
+    // and issues a NON-BLOCKING `dma_read_async` of `file_size` bytes into
+    // `staging` (an uncached buffer the streamer owns — the device DMA engine
+    // writes RDRAM directly at the PI speed; the CPU must not read the buffer
+    // until `dma_finished` confirms completion). Returns the DMA ticket
+    // (always non-zero on success; libdragon `dma.h`), or 0 on any failure
+    // (bad path, size larger than the staging buffer, DMA queue unavailable).
+    // The caller (TileStreamer) then records the ticket and polls
+    // `dma_finished` each frame via the streamer's pending-load pump.
+    //
+    // `ParseStaged` runs the existing parse (vertex transform + batches +
+    // coalesced runs + material groups + RSPQ block precompilation) against
+    // the `file_size` bytes already in `staging`. It is the former Load body
+    // with the fio swapped for a memory read. Only call it once the DMA for
+    // those bytes has completed, and while no other DMA is writing the buffer
+    // (the streamer serializes: one in-flight DMA at a time).
+    static bool LoadAsync(const char* lvl_path, uint32_t file_size,
+                          uint8_t* staging, uint32_t staging_size,
+                          uint64_t* out_ticket);
+    bool ParseStaged(const uint8_t* staging, uint32_t file_size,
+                     const Vec3& render_origin, const MaterialCatalog* catalog,
+                     float pos_scale = kDefaultPosScale);
+
     // Free all allocated resources.
     void Free();
-
-    // Draw all room geometry with per-batch textured combiners. Call within a
-    // t3d_frame_start/end pair. A batch whose material has no sprite falls
-    // back to the flat primColor (never a crash).
-    void Draw() const;
 
     // streaming-memory-opt Inc 4: per-material run accessors for the global
     // near-pass material grouping. The active path's coalesced runs are
@@ -59,18 +86,41 @@ public:
     // combiner + primColor) for `material_id`. The global near-pass material
     // grouping calls this ONCE per material per frame (instead of once per
     // (material, cell)), then replays each cell's geometry via
+    // combiner + primColor) for `material_id`. The global near-pass material
+    // grouping calls this ONCE per material per frame (instead of once per
+    // (material, cell)), then replays each cell's geometry via
     // `DrawMaterialRun`. A material with no sprite falls back to the flat
     // primColor (never a crash). Call within a t3d_frame_start/end pair.
     void UploadMaterial(uint16_t material_id, RenderCounters* counters) const;
+
+    // Draw all room geometry with per-batch textured combiners. Call within a
+    // t3d_frame_start/end pair. A batch whose material has no sprite falls
+    // back to the flat primColor (never a crash).
+    //
+    // `reveal_scale` (streaming-experience Inc 4): the per-frame pivot-scale
+    // the streamer animates onto cells that became visible while still
+    // loading (a masked pop-in instead of a hard pop). `reveal_scale == 1.0f`
+    // is the legacy behavior byte-for-byte (the baked `matrix_fp_` is pushed
+    // as today). Below 1.0 the pushed matrix scales basis rows by `s` and
+    // scales the translation by `(1-s)` so the pivot stays at the render
+    // origin `o` (M'(v) = s·B·v + (1-s)·B·o; the vertex at `v == o` maps to
+    // `o` for any `s`, and relative distances scale by `s`). The RSPQ block
+    // is UNCHANGED — the matrix is pushed AFTER the block is compiled
+    // (outside it), so the reveal adds zero RSP cost. Values below
+    // `kRevealEpsilon` clamp to it (degenerate point), above 1.0 clamp to 1.0
+    // (reveals only ramp up).
+    void Draw(float reveal_scale = 1.0f) const;
 
     // streaming-memory-opt Inc 4: emit the runs of ONE material group for this
     // cell WITHOUT uploading the sprite (the caller uploads it once per
     // material before replaying the group). Pushes/pops the cell's
     // camera-relative matrix around the run geometry. Call within a
     // t3d_frame_start/end pair. A run whose material has no sprite falls back
-    // to the flat primColor (never a crash).
+    // to the flat primColor (never a crash). `reveal_scale` composes a
+    // pivot-scale about the render origin (streaming-experience Inc 4 — see
+    // `Draw`); 1.0 is the byte-identical today path.
     void DrawMaterialRun(int first_run, int run_count,
-                         RenderCounters* counters) const;
+                         RenderCounters* counters, float reveal_scale = 1.0f) const;
 
     bool IsLoaded() const { return verts_ != nullptr; }
 
@@ -112,6 +162,26 @@ private:
     // Release the precompiled RSPQ block (RSPQ-block-render plan / D5). Safe
     // on an unloaded renderer. Nulls `block_` so a double-free is impossible.
     void FreeBlock();
+
+    // streaming-experience Inc 1: the shared parse body. Reads the LVL2
+    // header + faces + vertices from an in-memory image (`data`/`size` — the
+    // whole .lvl file), then runs the vertex transform + batch build +
+    // coalesced runs + material groups + RSPQ block precompilation. Both the
+    // synchronous `Load` (after a blocking whole-file read) and the async
+    // `ParseStaged` (after the DMA completes) delegate here, so the parse is
+    // written once. Device-only (uses t3d/rdpq).
+    bool ParseFromBytes(const uint8_t* data, uint32_t size,
+                        const Vec3& render_origin,
+                        const MaterialCatalog* catalog, float pos_scale);
+
+    // streaming-experience Inc 4: build the camera-relative model matrix with
+    // a reveal scale `s`. `s == 1.0` is the byte-identical today matrix
+    // (scale = 1/ps, translation = origin - camera); below 1.0 the basis rows
+    // scale by `s` and the translation is unchanged, so in camera space the
+    // vertex map is `v' = s·B·v + (o - cam)` — the pivot is the camera (a
+    // late-loaded cell grows/contracts toward the camera plane), and the
+    // render origin maps to `o + (1 - s)·(o - cam)`. Writes into `out`.
+    void BuildRevealMatrix(T3DMat4FP* out, float s) const;
 
     // Emit the per-material STATE for `material_id`: sprite upload + textured
     // combiner + white primColor (or flat PRIM*SHADE primColor when the
@@ -187,6 +257,9 @@ private:
 
     T3DMat4FP* matrix_fp_ = nullptr;
     Vec3 render_origin_ = {0.0f, 0.0f, 0.0f};
+    Vec3 camera_pos_ = {0.0f, 0.0f, 0.0f};  // streaming-experience Inc 4: last
+                                            // SetCameraPosition (for the reveal
+                                            // matrix rebuild)
     const MaterialCatalog* catalog_ = nullptr;
     RenderCounters* counters_ = nullptr;  // per-frame draw counters (Inc 1 / D7)
 };

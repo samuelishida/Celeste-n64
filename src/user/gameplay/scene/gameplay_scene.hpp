@@ -32,6 +32,13 @@ public:
     // initialized.
     const n64::FrameProfiler& Profiler() const;
 
+    // streaming-experience Inc 5: streaming-telemetry passthrough for the
+    // [counters] report line (cells in the pending-load backlog / resident
+    // depth). Returns 0 before the scene is initialized (the counters block
+    // in rom_main only runs once the map has booted, so impl_ is live there).
+    int PendingLoads() const;
+    int ResidentLoads() const;
+
 private:
     struct Impl;
     Impl* impl_ = nullptr;

@@ -8,7 +8,14 @@
 #include <t3d/t3d.h>
 #include <t3d/t3dmath.h>
 
+// streaming-experience Inc 1: async DMA read + DFS→PI address resolution.
+// `dragonfs.h` (NOT `dfs.h` — the SDK header is dragonfs.h) exposes
+// `dfs_rom_addr`; `dma.h` exposes `dma_read_async`/`dma_finished`.
+#include <dma.h>
+#include <dragonfs.h>
+
 #include "gameplay/render/open_world_renderer.hpp"  // RenderCounters (Inc 1 / D7)
+#include "gameplay/debug_flags.hpp"  // kEnableCellReveal / kRevealEpsilon (Inc 4)
 
 namespace madeline_cube {
 
@@ -21,15 +28,6 @@ struct LvlFace   { uint32_t vs, vc; uint16_t mid, flags; float nx, ny, nz; };
 // Load() captures the cell's active-path command sequence into a block and
 // Draw() plays it back; when false, Draw() re-emits commands per frame.
 constexpr bool kEnableRspqBlocks = true;
-
-uint32_t ReadU32(FILE* f) {
-    uint8_t b[4]; fread(b, 1, 4, f);
-    return (uint32_t(b[0])<<24)|(uint32_t(b[1])<<16)|(uint32_t(b[2])<<8)|b[3];
-}
-uint16_t ReadU16(FILE* f) {
-    uint8_t b[2]; fread(b, 1, 2, f);
-    return uint16_t((uint16_t(b[0])<<8)|b[1]);
-}
 
 // Per-material flat fallback color (same table as lvl_room_renderer.cpp).
 uint32_t material_color(uint16_t mat_id) {
@@ -62,9 +60,67 @@ constexpr rdpq_texparms_t kWrapTexparms = {
 
 }  // namespace
 
+// streaming-experience Inc 1: a bounds-checked big-endian reader over an
+// in-memory .lvl image. The LVL2 format is big-endian (the baker writes it
+// that way; the N64 is big-endian). `ParseFromBytes` uses this instead of the
+// old FILE* cursor so the same parse body serves the sync `Load` (whole-file
+// read) and the async `ParseStaged` (DMA-staged bytes).
+struct LvlMemReader {
+    const uint8_t* p;
+    uint32_t size;
+    uint32_t off = 0;
+    bool ok = true;
+
+    uint32_t u32() {
+        if (off + 4 > size) { ok = false; return 0; }
+        const uint32_t v = (uint32_t(p[off]) << 24) | (uint32_t(p[off + 1]) << 16) |
+                           (uint32_t(p[off + 2]) << 8) | uint32_t(p[off + 3]);
+        off += 4;
+        return v;
+    }
+    uint16_t u16() {
+        if (off + 2 > size) { ok = false; return 0; }
+        const uint16_t v = uint16_t((uint16_t(p[off]) << 8) | p[off + 1]);
+        off += 2;
+        return v;
+    }
+    void f32(float& out) {
+        if (off + 4 > size) { ok = false; out = 0.0f; return; }
+        std::memcpy(&out, p + off, 4);
+        off += 4;
+    }
+    void skip(uint32_t n) { off += n; if (off > size) ok = false; }
+    void seek(uint32_t n) { off = n; if (off > size) ok = false; }
+};
+
 bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
                                 const MaterialCatalog* catalog,
                                 float pos_scale) {
+    // Synchronous fallback (streaming-experience Inc 1): read the whole file
+    // into a temp buffer, then run the shared parse. Used at boot (center
+    // cell) and whenever the async path is unavailable (pool exhausted, DMA
+    // issue failure, queue full).
+    FILE* f = fopen(lvl_path, "rb");
+    if (!f) { debugf("[texroom] open FAILED: %s\n", lvl_path); return false; }
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+    const long file_size = ftell(f);
+    if (file_size <= 0) { fclose(f); return false; }
+    fseek(f, 0, SEEK_SET);
+    uint8_t* buf = static_cast<uint8_t*>(malloc((size_t)file_size));
+    if (!buf) { fclose(f); return false; }
+    const size_t got = fread(buf, 1, (size_t)file_size, f);
+    fclose(f);
+    if (got != (size_t)file_size) { free(buf); return false; }
+    const bool ok = ParseFromBytes(buf, (uint32_t)file_size, render_origin,
+                                   catalog, pos_scale);
+    free(buf);
+    return ok;
+}
+
+bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
+                                          const Vec3& render_origin,
+                                          const MaterialCatalog* catalog,
+                                          float pos_scale) {
     // Free the previous block + arrays before rebuilding (streaming re-loads
     // / SetCenter call Load repeatedly and would leak otherwise).
     FreeBlock();
@@ -74,58 +130,60 @@ bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
                                                           : kDefaultPosScale;
     kInvScale = 1.0f / kPosScale;
 
-    FILE* f = fopen(lvl_path, "rb");
-    if (!f) { debugf("[texroom] open FAILED: %s\n", lvl_path); return false; }
-
-    char magic[4]; fread(magic, 1, 4, f);
+    LvlMemReader rd{data, size};
+    char magic[4];
+    if (size < 4) return false;
+    std::memcpy(magic, data, 4);
     if (magic[0]!='L'||magic[1]!='V'||magic[2]!='L'||magic[3]!='2') {
-        debugf("[texroom] bad magic\n"); fclose(f); return false;
+        debugf("[texroom] bad magic\n"); return false;
     }
-    uint32_t ver = ReadU32(f);
-    if (ver != 2) { debugf("[texroom] bad version\n"); fclose(f); return false; }
+    rd.skip(4);  // the magic was read directly; advance past it (the old FILE
+                 // cursor advanced via fread, so the reader must too)
+    const uint32_t ver = rd.u32();
+    if (ver != 2) { debugf("[texroom] bad version\n"); return false; }
 
-    ReadU32(f);  // collider_count
-    uint32_t face_count   = ReadU32(f);
-    uint32_t vertex_count = ReadU32(f);
-    ReadU32(f);  // entity_count
-    ReadU32(f);  // string_count
+    rd.u32();  // collider_count
+    const uint32_t face_count   = rd.u32();
+    const uint32_t vertex_count = rd.u32();
+    rd.u32();  // entity_count
+    rd.u32();  // string_count
 
-    fseek(f, 16, SEEK_CUR);  // atmosphere
-    ReadU32(f);  // off_strings
-    ReadU32(f);  // off_colliders
-    uint32_t off_faces    = ReadU32(f);
-    uint32_t off_vertices = ReadU32(f);
-    ReadU32(f);  // off_entities
-    ReadU32(f);  // off_props
+    rd.skip(16);  // atmosphere
+    rd.u32();  // off_strings
+    rd.u32();  // off_colliders
+    const uint32_t off_faces    = rd.u32();
+    const uint32_t off_vertices = rd.u32();
+    rd.u32();  // off_entities
+    rd.u32();  // off_props
 
-    if (face_count == 0 || vertex_count == 0) {
-        debugf("[texroom] empty level\n"); fclose(f); return false;
+    if (!rd.ok || face_count == 0 || vertex_count == 0) {
+        debugf("[texroom] empty level\n"); return false;
     }
 
     LvlFace* faces = static_cast<LvlFace*>(malloc(sizeof(LvlFace) * face_count));
-    fseek(f, (long)off_faces, SEEK_SET);
+    rd.seek(off_faces);
     for (uint32_t i = 0; i < face_count; ++i) {
         LvlFace& lf = faces[i];
-        lf.vs    = ReadU32(f);
-        lf.vc    = ReadU32(f);
-        lf.mid   = ReadU16(f);
-        lf.flags = ReadU16(f);
-        fread(&lf.nx, 4, 1, f);
-        fread(&lf.ny, 4, 1, f);
-        fread(&lf.nz, 4, 1, f);
+        lf.vs    = rd.u32();
+        lf.vc    = rd.u32();
+        lf.mid   = rd.u16();
+        lf.flags = rd.u16();
+        rd.f32(lf.nx);
+        rd.f32(lf.ny);
+        rd.f32(lf.nz);
     }
 
     LvlVertex* lvl_verts = static_cast<LvlVertex*>(malloc(sizeof(LvlVertex) * vertex_count));
-    fseek(f, (long)off_vertices, SEEK_SET);
+    rd.seek(off_vertices);
     for (uint32_t i = 0; i < vertex_count; ++i) {
         LvlVertex& lv = lvl_verts[i];
-        fread(&lv.x, 4, 1, f);
-        fread(&lv.y, 4, 1, f);
-        fread(&lv.z, 4, 1, f);
-        fread(&lv.u, 4, 1, f);
-        fread(&lv.v, 4, 1, f);
+        rd.f32(lv.x);
+        rd.f32(lv.y);
+        rd.f32(lv.z);
+        rd.f32(lv.u);
+        rd.f32(lv.v);
     }
-    fclose(f);
+    if (!rd.ok) { free(faces); free(lvl_verts); return false; }
 
     pair_count_ = (vertex_count + 1) / 2;
     vert_count_ = vertex_count;
@@ -267,9 +325,9 @@ bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
     matrix_fp_ = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
     T3DMat4 m;
     const float s[3] = {kInvScale, kInvScale, kInvScale};
-    const float r[3] = {0, 0, 0};
+    const float rot[3] = {0, 0, 0};
     const float p[3] = {render_origin_.x, render_origin_.y, render_origin_.z};
-    t3d_mat4_from_srt_euler(&m, s, r, p);
+    t3d_mat4_from_srt_euler(&m, s, rot, p);
     t3d_mat4_to_fixed(matrix_fp_, &m);
 
     // Precompute the per-frame counter sums (RSPQ-block-render plan / D2)
@@ -351,6 +409,64 @@ bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
     return true;
 }
 
+bool TexturedRoomRenderer::LoadAsync(const char* lvl_path, uint32_t file_size,
+                                     uint8_t* staging, uint32_t staging_size,
+                                     uint64_t* out_ticket) {
+    // Device-only (streaming-experience Inc 1). Resolve the .lvl's PI address
+    // and issue a non-blocking DMA read into the caller's staging buffer.
+    // The manifest carries the exact `rom:/lvl/<pack>/<chunk>.lvl` path, but
+    // `dfs_rom_addr` (dragonfs.h) expects the RAW path (NO `rom:/` prefix —
+    // libdragon's own callers strip it, e.g. model64.c passes `anim_name+5`).
+    // Skipping the 5-char `rom:/` prefix here is load-bearing: passing the
+    // prefixed path returns 0 (file not found) and every async load silently
+    // fell back to sync, defeating the async-load goal (Inc 1). The returned
+    // PI address is guaranteed 2-byte aligned (even), so the raw DMA path
+    // (real-HW ROM is not io_accessible) is safe with an even read length.
+    if (!out_ticket) return false;
+    *out_ticket = 0;
+    if (file_size == 0 || file_size > staging_size) {
+        debugf("[texroom] async size %lu > staging %lu\n", (unsigned long)file_size, (unsigned long)staging_size);
+        return false;
+    }
+    const char* rom_path = lvl_path;
+    if (strncmp(rom_path, "rom:/", 5) == 0) rom_path += 5;
+    const pi_addr_t pi = dfs_rom_addr(rom_path);
+    if (pi == 0) {
+        debugf("[texroom] async open FAILED: %s\n", lvl_path);
+        return false;
+    }
+    // Round the read length up to even. `| 1` does NOT round up (it is a no-op
+    // on the odd .lvl sizes in the current manifest), so the original odd
+    // length actually relied on `dma_read_async`'s odd-length handling, which
+    // is valid only under the 1-bit-alignment contract — RAM and PI addresses
+    // must share their low bit (both even here: `malloc_uncached` staging is
+    // 8-aligned, and `dfs_rom_addr` returns an even ROM offset). Even-rounding
+    // is a harmless defensive preference: it keeps the transfer on the plain
+    // raw-DMA path (multiple-of-2 length) with no CPU-fixup, and the extra
+    // byte lands harmlessly in the (oversized) staging buffer and is never
+    // parsed (ParseStaged bounds by the exact file_size).
+    const uint32_t read_len = (file_size + 1u) & ~1u;
+    const uint64_t ticket = dma_read_async(staging, pi, read_len);
+    if (ticket == 0) {
+        debugf("[texroom] async DMA issue FAILED: %s\n", lvl_path);
+        return false;
+    }
+    *out_ticket = ticket;
+    return true;
+}
+
+bool TexturedRoomRenderer::ParseStaged(const uint8_t* staging, uint32_t file_size,
+                                       const Vec3& render_origin,
+                                       const MaterialCatalog* catalog,
+                                       float pos_scale) {
+    // streaming-experience Inc 1: parse the DMA-staged bytes into the renderer
+    // (the former Load body, reading from `staging` instead of a FILE). The
+    // caller must have confirmed `dma_finished` for the ticket that filled
+    // `staging`, and must not issue another DMA into the same buffer until
+    // this returns (the streamer serializes one in-flight read at a time).
+    return ParseFromBytes(staging, file_size, render_origin, catalog, pos_scale);
+}
+
 void TexturedRoomRenderer::Free() {
     if (verts_) { free_uncached(verts_); verts_ = nullptr; }
     if (matrix_fp_) { free_uncached(matrix_fp_); matrix_fp_ = nullptr; }
@@ -390,22 +506,51 @@ void TexturedRoomRenderer::FreeRuns() {
 
 void TexturedRoomRenderer::SetCameraPosition(const Vec3& camera_pos) {
     if (!matrix_fp_) return;
-    T3DMat4 m;
-    const float s[3] = {kInvScale, kInvScale, kInvScale};
-    const float r[3] = {0, 0, 0};
-    const float p[3] = {
-        render_origin_.x - camera_pos.x,
-        render_origin_.y - camera_pos.y,
-        render_origin_.z - camera_pos.z
-    };
-    t3d_mat4_from_srt_euler(&m, s, r, p);
-    t3d_mat4_to_fixed(matrix_fp_, &m);
+    camera_pos_ = camera_pos;
+    BuildRevealMatrix(matrix_fp_, 1.0f);
 }
 
-void TexturedRoomRenderer::Draw() const {
+void TexturedRoomRenderer::BuildRevealMatrix(T3DMat4FP* out, float s) const {
+    // streaming-experience Inc 4: the camera-relative model matrix with a
+    // reveal pivot-scale `s` about the render origin. `s == 1.0` is the
+    // byte-identical today matrix (scale = 1/ps, translation = origin -
+    // camera). Below 1.0 the basis rows scale by `s` while the translation is
+    // unchanged, so in camera space the vertex map for world point `w` is
+    //   c'(w) = s·(w - o) + (o - cam)
+    // The render origin `o` (local L = 0) maps to `o - cam` for EVERY `s`
+    // — the pivot is fixed at the cell center — and a cell's extent shrinks
+    // by `s` about `o` (a late-loaded cell scales in toward its own center).
+    // The RSPQ block is untouched (the matrix is pushed outside it).
+    T3DMat4 m;
+    const float sc[3] = {kInvScale * s, kInvScale * s, kInvScale * s};
+    const float rot[3] = {0, 0, 0};
+    const float p[3] = {
+        render_origin_.x - camera_pos_.x,
+        render_origin_.y - camera_pos_.y,
+        render_origin_.z - camera_pos_.z
+    };
+    t3d_mat4_from_srt_euler(&m, sc, rot, p);
+    t3d_mat4_to_fixed(out, &m);
+}
+
+void TexturedRoomRenderer::Draw(float reveal_scale) const {
     if (!verts_ || !matrix_fp_) return;
 
-    t3d_matrix_push(matrix_fp_);
+    // streaming-experience Inc 4: compose the reveal pivot-scale into the
+    // pushed matrix. At `reveal_scale >= 1.0` push the baked `matrix_fp_`
+    // (byte-identical today path); below 1.0 rebuild with the scale (the pivot
+    // stays at the render origin). The RSPQ block is unchanged — the matrix is
+    // pushed AFTER the block is compiled (outside it), so the reveal adds zero
+    // RSP cost.
+    T3DMat4FP reveal;
+    const float s = reveal_scale < kRevealEpsilon ? kRevealEpsilon
+                    : (reveal_scale > 1.0f ? 1.0f : reveal_scale);
+    if (s >= 1.0f) {
+        t3d_matrix_push(matrix_fp_);
+    } else {
+        BuildRevealMatrix(&reveal, s);
+        t3d_matrix_push(&reveal);
+    }
 
     // RSPQ block path (RSPQ-block-render plan / D1): the cell's full command
     // sequence (sprite uploads + combiners + fans) was captured at Load; per
@@ -449,11 +594,21 @@ void TexturedRoomRenderer::MaterialGroupAt(
 }
 
 void TexturedRoomRenderer::DrawMaterialRun(int first_run, int run_count,
-                                           RenderCounters* counters) const {
+                                           RenderCounters* counters,
+                                           float reveal_scale) const {
     if (first_run < 0 || run_count <= 0 || !runs_ || !run_faces_) return;
     if (first_run + run_count > run_count_) run_count = run_count_ - first_run;
     if (run_count <= 0) return;
-    t3d_matrix_push(matrix_fp_);
+    // streaming-experience Inc 4: compose the reveal pivot-scale (see `Draw`).
+    T3DMat4FP reveal;
+    const float s = reveal_scale < kRevealEpsilon ? kRevealEpsilon
+                    : (reveal_scale > 1.0f ? 1.0f : reveal_scale);
+    if (s >= 1.0f) {
+        t3d_matrix_push(matrix_fp_);
+    } else {
+        BuildRevealMatrix(&reveal, s);
+        t3d_matrix_push(&reveal);
+    }
     for (int r = first_run; r < first_run + run_count; ++r) {
         EmitRunGeometry(r, counters);
     }
@@ -466,7 +621,7 @@ void TexturedRoomRenderer::EmitRunState(uint16_t material_id,
     // else fall back to flat primColor for the whole run.
     sprite_t* sprite = catalog_ ? catalog_->MaterialFor(material_id) : nullptr;
     if (sprite) {
-        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH));
+        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0)));
         rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
         // RDPQ_COMBINER_TEX_FLAT = (TEX0,0,PRIM,0) = TEX0 * PRIM, so
         // primColor MUST be white here or the texture is tinted by whatever
@@ -475,7 +630,7 @@ void TexturedRoomRenderer::EmitRunState(uint16_t material_id,
         rdpq_sprite_upload(TILE0, sprite, &kWrapTexparms);
         if (counters) ++counters->texture_uploads;  // Inc 1 / D7
     } else {
-        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
+        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0)));
         rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
         uint32_t color = material_color(material_id);
         rdpq_set_prim_color(RGBA32(
@@ -535,14 +690,14 @@ void TexturedRoomRenderer::EmitBatchCommands(int b, RenderCounters* counters) co
     sprite_t* sprite = catalog_ ? catalog_->MaterialFor(batch.material_id)
                                 : nullptr;
     if (sprite) {
-        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH));
+        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0)));
         rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
         // Same primColor-to-white requirement as the run path (see above).
         rdpq_set_prim_color(RGBA32(0xFF, 0xFF, 0xFF, 0xFF));
         rdpq_sprite_upload(TILE0, sprite, &kWrapTexparms);
         if (counters) ++counters->texture_uploads;  // Inc 1 / D7
     } else {
-        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
+        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0)));
         rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
         uint32_t color = material_color(batch.material_id);
         rdpq_set_prim_color(RGBA32(

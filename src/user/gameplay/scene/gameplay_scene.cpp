@@ -208,6 +208,8 @@ struct GameplayScene::Impl {
 
     FixedStepAccumulator fixed_step;
     float render_alpha = 1.0f;
+    float last_delta = 1.0f / 30.0f;  // streaming-experience Inc 4: last frame
+                                      // delta (for the reveal animation age)
 
     DebugHUD debug_hud;
     RomTelemetry telemetry;
@@ -492,23 +494,36 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
     if (kDebugTeleportToMapCenter) {
         const MapSpecV2& spec = map_runtime_.Spec();
         if (spec.room_count > 0) {
-            int min_ix = spec.rooms[0].cell_ix, max_ix = spec.rooms[0].cell_ix;
-            int min_iz = spec.rooms[0].cell_iz, max_iz = spec.rooms[0].cell_iz;
-            for (int i = 1; i < spec.room_count; ++i) {
-                if (spec.rooms[i].cell_ix < min_ix) min_ix = spec.rooms[i].cell_ix;
-                if (spec.rooms[i].cell_ix > max_ix) max_ix = spec.rooms[i].cell_ix;
-                if (spec.rooms[i].cell_iz < min_iz) min_iz = spec.rooms[i].cell_iz;
-                if (spec.rooms[i].cell_iz > max_iz) max_iz = spec.rooms[i].cell_iz;
-            }
-            const float center_ix = 0.5f * (float)(min_ix + max_ix);
-            const float center_iz = 0.5f * (float)(min_iz + max_iz);
-            int best = 0;
-            float best_d2 = 1e30f;
+            // render-distance A/B walker: prefer the dense "house" cell so the
+            // perf capture exercises the worst-case geometry instead of the
+            // sparse geometric-center cell. The house is cell_n01_n02 (the
+            // biggest building, ~920 faces); the authored "After Tutorial"
+            // anchor there is on solid ground. Fall back to the geometric
+            // center cell if the house cell isn't in the manifest.
+            int best = -1;
             for (int i = 0; i < spec.room_count; ++i) {
-                const float dx = (float)spec.rooms[i].cell_ix - center_ix;
-                const float dz = (float)spec.rooms[i].cell_iz - center_iz;
-                const float d2 = dx * dx + dz * dz;
-                if (d2 < best_d2) { best_d2 = d2; best = i; }
+                if (std::strncmp(spec.rooms[i].id, "cell_n01_n02",
+                                 V2RoomSpec::kIdLen) == 0) { best = i; break; }
+            }
+            if (best < 0) {
+                int min_ix = spec.rooms[0].cell_ix, max_ix = spec.rooms[0].cell_ix;
+                int min_iz = spec.rooms[0].cell_iz, max_iz = spec.rooms[0].cell_iz;
+                for (int i = 1; i < spec.room_count; ++i) {
+                    if (spec.rooms[i].cell_ix < min_ix) min_ix = spec.rooms[i].cell_ix;
+                    if (spec.rooms[i].cell_ix > max_ix) max_ix = spec.rooms[i].cell_ix;
+                    if (spec.rooms[i].cell_iz < min_iz) min_iz = spec.rooms[i].cell_iz;
+                    if (spec.rooms[i].cell_iz > max_iz) max_iz = spec.rooms[i].cell_iz;
+                }
+                const float center_ix = 0.5f * (float)(min_ix + max_ix);
+                const float center_iz = 0.5f * (float)(min_iz + max_iz);
+                best = 0;
+                float best_d2 = 1e30f;
+                for (int i = 0; i < spec.room_count; ++i) {
+                    const float dx = (float)spec.rooms[i].cell_ix - center_ix;
+                    const float dz = (float)spec.rooms[i].cell_iz - center_iz;
+                    const float d2 = dx * dx + dz * dz;
+                    if (d2 < best_d2) { best_d2 = d2; best = i; }
+                }
             }
             const V2RoomSpec& center_room = spec.rooms[best];
             // Prefer a PlayerSpawn (Start/Anchor) on solid ground; fall back to
@@ -603,6 +618,13 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
     const V2RoomSpec* start_spec = map_runtime_.ActiveSpec();
     if (start_spec) {
         open_world_.SetCenter(map_runtime_.Spec(), *start_spec, CameraForwardDir(), nullptr);
+        // render-distance Inc 4: load the whole-map horizon tier once at boot.
+        // 45 × ~1.4 KB decimated `.dlod` cells — cheap to keep resident for
+        // the map lifetime. Gated by kEnableDistantTier (default OFF — the
+        // merged approach regressed perf).
+        if (kEnableDistantTier) {
+            open_world_.LoadDistantTier(map_runtime_.Spec(), nullptr);
+        }
     }
 
     debugf("[mappack] booted %s: %d rooms, start=%s\n",
@@ -692,6 +714,18 @@ const n64::FrameProfiler& GameplayScene::Profiler() const {
     // static fallback (never dereference a null impl_).
     static const n64::FrameProfiler kEmpty(60);
     return impl_ ? impl_->open_world_.Profiler() : kEmpty;
+}
+
+int GameplayScene::PendingLoads() const {
+    // streaming-experience Inc 5: pending-load backlog depth (queued +
+    // in-flight) for the [counters] report line. 0 before init.
+    return impl_ ? impl_->open_world_.PendingLoads() : 0;
+}
+
+int GameplayScene::ResidentLoads() const {
+    // Resident pool depth (the 5x5 preload ring that has been set up). 0
+    // before init.
+    return impl_ ? impl_->open_world_.ResidentLoads() : 0;
 }
 
 void GameplayScene::Init() {
@@ -792,6 +826,7 @@ void GameplayScene::Shutdown() {
 
 void GameplayScene::Update(float delta_seconds) {
     if (impl_ == nullptr) return;
+    impl_->last_delta = delta_seconds;  // streaming-experience Inc 4: for the reveal age
 
     // Open the renderer's per-frame profiler + reset arena/counters at the TOP
     // of Update (Inc 1 / instrumentation, D1). This MUST precede SetCenter/
@@ -829,7 +864,7 @@ void GameplayScene::Update(float delta_seconds) {
             impl_->player.position.z - impl_->autowalk_start_.z,
         };
         const float dist = std::sqrt(delta.x * delta.x + delta.z * delta.z);
-        if (dist < 100.0f) {
+        if (dist < kDebugAutoWalkDistance) {
             input.move = {1.0f, 0.0f};  // camera-relative right/left (sideways)
         }
     }
@@ -1043,11 +1078,11 @@ void GameplayScene::Render() {
     // up to 1.2 at high horizontal speed).
     const float fov_deg = 45.0f * impl_->camera.fov_multiplier;
 
-    // Single near-pass camera. After removing the z-split distant pass, the
-    // far plane returns to the good-era 800u value; the 9-cell resident ring
-    // fits comfortably inside it.
+    // Single near-pass camera. The far plane is 800u for the 9-cell ring; when
+    // the distant tier is enabled (render-distance Inc 5), widen it to cover
+    // the whole-map horizon (.dlod cells up to ~2400u).
     const CameraDesc cams = MakeNearCamera(
-        fov_deg, 5.0f, 800.0f,
+        fov_deg, 5.0f, kEnableDistantTier ? 2000.0f : 800.0f,
         impl_->camera.position, impl_->camera.target,
         Vec3{0.0f, 1.0f, 0.0f});
 
@@ -1099,7 +1134,7 @@ void GameplayScene::Render() {
             // The viewport is already attached above with the gameplay
             // projection. SetViewport is kept for host-test compatibility.
             impl_->open_world_.SetViewport(&impl_->viewport);
-            impl_->open_world_.UpdateCamera(cams);
+            impl_->open_world_.UpdateCamera(cams, impl_->last_delta);
             impl_->open_world_.Render(cams);
         } else {
             impl_->room_renderer.Draw();

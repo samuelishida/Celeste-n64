@@ -9,6 +9,7 @@
 
 #include "gameplay/render/open_world_renderer.hpp"  // RenderCounters (Inc 1 / D7)
 #include "gameplay/world/entity_ids.hpp"
+#include "gameplay/debug_flags.hpp"  // kEnableBackCull (render-distance Inc 1)
 
 namespace madeline_cube {
 
@@ -23,6 +24,11 @@ struct LvlFace   { uint32_t vs, vc; uint16_t mid, flags; float nx, ny, nz; };
 // Draw() re-emits commands per frame as before. Flip to false for an A/B
 // comparison on device.
 constexpr bool kEnableRspqBlocks = true;
+
+// Fixed-point scale the DLOD baker packs coordinates at (tools/writers/
+// dlod_writer.py KLOD_SCALE). LoadFromDlod's no-repack shortcut is only valid
+// at this scale, so it is checked against kPosScale on load.
+constexpr float kLodScale = 0.25f;
 
 uint32_t ReadU32(FILE* f) {
     uint8_t b[4]; fread(b, 1, 4, f);
@@ -229,6 +235,184 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
     return true;
 }
 
+bool LvlRoomRenderer::LoadFromDlod(const DlodMesh& mesh, int direction,
+                                   const Vec3& render_origin, float pos_scale) {
+    // The no-repack shortcut is only valid at the baked scale.
+    if (pos_scale != kLodScale) return false;
+    if (direction < 0 || direction >= mesh.direction_count) return false;
+    const DlodDirection& dir = mesh.dirs[direction];
+    if (!dir.verts || dir.face_count <= 0 || dir.vert_count <= 0) return false;
+
+    // Free the previous block + arrays before rebuilding (streaming re-loads
+    // call Load repeatedly and would leak otherwise).
+    FreeBlock();
+    render_origin_ = render_origin;
+    kPosScale = pos_scale;
+    kInvScale = 1.0f / kPosScale;
+
+    // Copy the direction's consecutive per-face triples into T3DVertPacked
+    // pairs (with the odd-pair padding the existing path already handles).
+    // Each face is 3 verts; the DLOD stores them as contiguous triples, so
+    // face i uses verts[3i..3i+2].
+    const int face_count = dir.face_count;
+    const int vertex_count = dir.vert_count;  // = 3 × face_count
+    pair_count_ = (vertex_count + 1) / 2;
+    vert_count_ = static_cast<uint32_t>(vertex_count);
+    verts_ = static_cast<T3DVertPacked*>(
+        malloc_uncached(sizeof(T3DVertPacked) * pair_count_));
+    if (!verts_) return false;
+
+    for (int pi = 0; pi < static_cast<int>(pair_count_); ++pi) {
+        T3DVertPacked& p = verts_[pi];
+        const int ia = pi * 2;
+        const int ib = pi * 2 + 1;
+        const DlodVertex& va = dir.verts[ia];
+        const DlodVertex& vb = (ib < vertex_count) ? dir.verts[ib] : dir.verts[ia];
+        p.posA[0] = va.x(); p.posA[1] = va.y(); p.posA[2] = va.z();
+        p.posB[0] = vb.x(); p.posB[1] = vb.y(); p.posB[2] = vb.z();
+        p.normA = 0; p.normB = 0;
+        p.rgbaA = 0xFFFFFFFF; p.rgbaB = 0xFFFFFFFF;
+        p.stA[0] = 0; p.stA[1] = 0;
+        p.stB[0] = 0; p.stB[1] = 0;
+    }
+
+    // Build the per-face batch array (one batch per face, each a 3-vert fan).
+    FreeBatches();
+    {
+        const int batch_cap = face_count < kMaxBatches ? face_count : kMaxBatches;
+        if (batch_cap > 0) {
+            batches_ = static_cast<Batch*>(malloc(sizeof(Batch) * batch_cap));
+            if (!batches_) return false;
+        }
+    }
+    batch_count_ = 0;
+    discarded_faces_ = 0;
+    for (int f = 0; f < face_count; ++f) {
+        if (batch_count_ >= kMaxBatches) {
+            ++discarded_faces_;
+            continue;
+        }
+        // Face f uses verts[3f..3f+2] (contiguous triples).
+        const uint32_t first_vertex = static_cast<uint32_t>(3 * f);
+        batches_[batch_count_++] = {first_vertex, 3u, 1u, dir.materials[f]};
+    }
+
+    // Build the coalesced runs + RSPQ block (shared with the LVL path).
+    {
+        FaceSpec* specs = static_cast<FaceSpec*>(malloc(sizeof(FaceSpec) * batch_count_));
+        if (specs) {
+            for (int s = 0; s < batch_count_; ++s) {
+                specs[s] = {batches_[s].first_vertex, batches_[s].vertex_count,
+                            batches_[s].tri_count, batches_[s].material_id};
+            }
+            BuildRunsAndBlock(specs, batch_count_);
+            free(specs);
+        }
+    }
+
+    // Model matrix: compensate for kPosScale AND translate back to world
+    // space (same as Load()).
+    matrix_fp_ = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
+    T3DMat4 m;
+    const float s[3] = {kInvScale, kInvScale, kInvScale};
+    const float r[3] = {0, 0, 0};
+    const float p[3] = {render_origin_.x, render_origin_.y, render_origin_.z};
+    t3d_mat4_from_srt_euler(&m, s, r, p);
+    t3d_mat4_to_fixed(matrix_fp_, &m);
+
+    debugf("[lvlroom] dlod loaded: %d verts, %d faces, block=%s\n",
+           vertex_count, face_count, block_ ? "yes" : "no");
+    return true;
+}
+
+bool LvlRoomRenderer::AppendFromDlod(const DlodMesh& mesh, int direction,
+                                     float pos_scale) {
+    // Append one DLOD direction's geometry to the accumulator (verts_ grows,
+    // faces accumulate). All DLOD cells share the map-center origin, so the
+    // packed verts stay in that shared frame — no per-cell origin offset.
+    if (pos_scale != kLodScale) return false;
+    if (direction < 0 || direction >= mesh.direction_count) return false;
+    const DlodDirection& dir = mesh.dirs[direction];
+    if (!dir.verts || dir.face_count <= 0 || dir.vert_count <= 0) return false;
+    if (kPosScale != pos_scale) {
+        kPosScale = pos_scale;
+        kInvScale = 1.0f / kPosScale;
+    }
+    const int face_count = dir.face_count;
+    const int vertex_count = dir.vert_count;  // = 3 × face_count
+    // The shared map-center origin (v3) is the render origin for ALL merged
+    // cells — record it once so the model matrix + SetCameraPosition rebase
+    // the same way a single LoadFromDlod does.
+    if (pair_count_ == 0) {
+        render_origin_ = {mesh.origin[0], mesh.origin[1], mesh.origin[2]};
+    }
+
+    // Grow the packed vertex array to hold the new triples.
+    const uint32_t new_pairs = pair_count_ + (uint32_t)((vertex_count + 1) / 2);
+    T3DVertPacked* grown = static_cast<T3DVertPacked*>(
+        realloc(verts_, sizeof(T3DVertPacked) * new_pairs));
+    if (!grown) return false;
+    verts_ = grown;
+    const uint32_t base = pair_count_ * 2;  // logical vertex base index
+    for (int pi = 0; pi < static_cast<int>(new_pairs - pair_count_); ++pi) {
+        T3DVertPacked& p = verts_[pair_count_ + pi];
+        const int ia = base + pi * 2;
+        const int ib = base + pi * 2 + 1;
+        const DlodVertex& va = dir.verts[ia];
+        const DlodVertex& vb = (ib < static_cast<int>(base) + vertex_count) ? dir.verts[ib] : dir.verts[ia];
+        p.posA[0] = va.x(); p.posA[1] = va.y(); p.posA[2] = va.z();
+        p.posB[0] = vb.x(); p.posB[1] = vb.y(); p.posB[2] = vb.z();
+        p.normA = 0; p.normB = 0;
+        p.rgbaA = 0xFFFFFFFF; p.rgbaB = 0xFFFFFFFF;
+        p.stA[0] = 0; p.stA[1] = 0;
+        p.stB[0] = 0; p.stB[1] = 0;
+    }
+    pair_count_ = new_pairs;
+    vert_count_ += (uint32_t)vertex_count;
+
+    // Append one batch per face (each a 3-vert fan) offset into the array.
+    for (int f = 0; f < face_count; ++f) {
+        if (appended_count_ >= appended_cap_) {
+            const int cap = appended_cap_ == 0 ? 64 : appended_cap_ * 2;
+            Batch* nb = static_cast<Batch*>(realloc(appended_batches_, sizeof(Batch) * cap));
+            if (!nb) return false;
+            appended_batches_ = nb;
+            appended_cap_ = cap;
+        }
+        const uint32_t first_vertex = base + (uint32_t)(3 * f);
+        appended_batches_[appended_count_++] = {first_vertex, 3u, 1u, dir.materials[f]};
+    }
+    return true;
+}
+
+bool LvlRoomRenderer::FinishAppend() {
+    if (appended_count_ == 0 || !verts_) return false;
+    // Build the FaceSpec list from the appended batches and coalesce once.
+    if (appended_faces_cap_ < appended_count_) {
+        FaceSpec* nf = static_cast<FaceSpec*>(realloc(appended_faces_, sizeof(FaceSpec) * appended_count_));
+        if (!nf) return false;
+        appended_faces_ = nf;
+        appended_faces_cap_ = appended_count_;
+    }
+    for (int i = 0; i < appended_count_; ++i) {
+        appended_faces_[i] = {appended_batches_[i].first_vertex,
+                              appended_batches_[i].vertex_count,
+                              appended_batches_[i].tri_count,
+                              appended_batches_[i].material_id};
+    }
+    // Matrix uses the shared map-center origin; SetCameraPosition will rebase.
+    if (!matrix_fp_) {
+        matrix_fp_ = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
+        T3DMat4 m;
+        const float s[3] = {kInvScale, kInvScale, kInvScale};
+        const float r[3] = {0, 0, 0};
+        const float p[3] = {0.0f, 0.0f, 0.0f};
+        t3d_mat4_from_srt_euler(&m, s, r, p);
+        t3d_mat4_to_fixed(matrix_fp_, &m);
+    }
+    return BuildRunsAndBlock(appended_faces_, appended_count_);
+}
+
 bool LvlRoomRenderer::BuildRunsAndBlock(const FaceSpec* faces, int face_count) {
     // Coalesce the per-face specs into material runs (Inc 3 / D3). Adjacent
     // same-material faces merge into runs capped at `kMaxRunSpan` loaded
@@ -348,6 +532,10 @@ void LvlRoomRenderer::Free() {
     FreeBatches();
     FreeRuns();
     FreeBlock();
+    // render-distance Inc 4 append-state cleanup (growable lists).
+    if (appended_batches_) { free(appended_batches_); appended_batches_ = nullptr; }
+    if (appended_faces_) { free(appended_faces_); appended_faces_ = nullptr; }
+    appended_count_ = 0; appended_cap_ = 0; appended_faces_cap_ = 0;
     vert_count_ = 0;
     pair_count_ = 0;
     counted_batches_ = 0;
@@ -414,6 +602,12 @@ void LvlRoomRenderer::Draw() const {
     if (!verts_ || !matrix_fp_) return;
 
     t3d_matrix_push(matrix_fp_);
+    DrawNoMatrix();
+    t3d_matrix_pop(1);
+}
+
+void LvlRoomRenderer::DrawNoMatrix() const {
+    if (!verts_ || !matrix_fp_) return;
 
     // RSPQ block path (RSPQ-block-render plan / D1): the cell's full command
     // sequence was captured at Load; per frame we only push the
@@ -441,8 +635,6 @@ void LvlRoomRenderer::Draw() const {
             EmitBatchCommands(b, counters_);
         }
     }
-
-    t3d_matrix_pop(1);
 }
 
 void LvlRoomRenderer::EmitRunCommands(int r, RenderCounters* counters) const {
@@ -450,6 +642,11 @@ void LvlRoomRenderer::EmitRunCommands(int r, RenderCounters* counters) const {
     if (run.face_count == 0 || run.vertex_count == 0) return;
     // Inc 1 / D7: count near-pass batches (one per run).
     if (counters) ++counters->near_batches;
+
+    // render-distance Inc 1: backface-cull the flat fallback identically to
+    // the textured renderer so the two paths agree on winding (SHOULD-FIX).
+    t3d_state_set_drawflags(static_cast<T3DDrawFlags>(
+        T3D_FLAG_SHADED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0)));
 
     // Set per-material primColor once per run.
     uint32_t color = material_color(run.material_id);
@@ -486,6 +683,11 @@ void LvlRoomRenderer::EmitBatchCommands(int b, RenderCounters* counters) const {
     if (batch.tri_count == 0) return;
     // Inc 1 / D7: count near-pass batches.
     if (counters) ++counters->near_batches;
+
+    // render-distance Inc 1: backface-cull the flat fallback identically
+    // to the textured renderer (SHOULD-FIX).
+    t3d_state_set_drawflags(static_cast<T3DDrawFlags>(
+        T3D_FLAG_SHADED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0)));
 
     // Set per-material primColor
     uint32_t color = material_color(batch.material_id);

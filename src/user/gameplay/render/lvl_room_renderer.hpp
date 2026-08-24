@@ -5,6 +5,7 @@
 
 #include "gameplay/math_types.hpp"
 #include "gameplay/render/batch_coalesce.hpp"  // FaceSpec, BatchRun, RunFace (Inc 3 / D3)
+#include "gameplay/render/dlod_format.hpp"     // DlodMesh (Inc 4 / render-distance)
 
 namespace madeline_cube {
 
@@ -31,13 +32,43 @@ public:
     bool Load(const char* lvl_path, const Vec3& render_origin = {0.0f, 0.0f, 0.0f},
               float pos_scale = kDefaultPosScale);
 
+    // Load geometry from a parsed DLOD v3 distant mesh (Inc 4 / render-distance
+    // plan). `direction` selects which per-direction section to load; the
+    // renderer packs its s16 triples into `T3DVertPacked` (no-repack shortcut —
+    // only valid at the baked kLodScale, so `pos_scale` must equal it).
+    bool LoadFromDlod(const DlodMesh& mesh, int direction,
+                      const Vec3& render_origin, float pos_scale);
+
+    // render-distance Inc 4: append one direction of a DLOD mesh into an
+    // EXISTING renderer (accumulating verts + faces) so all distant cells can
+    // be merged into ONE block (SM64-style batching — one matrix, one block,
+    // one vert_load per run instead of one per cell). All DLOD cells share the
+    // map-center origin (v3), so one model matrix covers them. Call
+    // `FinishAppend()` once after appending all cells. Returns true on
+    // success; the renderer is invalid until FinishAppend() runs.
+    bool AppendFromDlod(const DlodMesh& mesh, int direction, float pos_scale);
+
+    // Finalize a renderer built via AppendFromDlod (allocate runs + block).
+    bool FinishAppend();
+
     // Free all allocated resources.
     void Free();
 
     // Draw all room geometry. Call within a t3d_frame_start/end pair.
     void Draw() const;
 
+    // Draw the block WITHOUT pushing/poping a matrix (render-distance Inc 4).
+    // The caller must have already pushed a shared model matrix (e.g. the DLOD
+    // map-center matrix) once around all distant cells, which all share that
+    // origin. Saves a matrix op + a per-cell dispatch per distant cell.
+    void DrawNoMatrix() const;
+
     bool IsLoaded() const { return verts_ != nullptr; }
+
+    // Accessor for the pushed camera-relative model matrix (render-distance
+    // Inc 4: the distant tier pushes the shared map-center matrix once and
+    // draws all cells under it).
+    const T3DMat4FP* CurrentMatrixFP() const { return matrix_fp_; }
 
     // Recompute the model-matrix translation so the drawn world is expressed
     // camera-relative: the matrix translates by `render_origin_ - camera_pos`
@@ -145,6 +176,15 @@ private:
     BatchRun* runs_ = nullptr;
     RunFace* run_faces_ = nullptr;
     int run_count_ = 0;
+
+    // render-distance Inc 4 append state: a growable batch/facelist across
+    // multiple DLOD cells, merged into ONE block (SM64-style batching). The
+    // vertex array `verts_` grows by realloc on each AppendFromDlod.
+    Batch* appended_batches_ = nullptr;  // heap list of appended faces
+    int appended_count_ = 0;             // faces appended so far
+    int appended_cap_ = 0;               // allocated appended_batches_ slots
+    FaceSpec* appended_faces_ = nullptr;  // for FinishAppend -> BuildRunsAndBlock
+    int appended_faces_cap_ = 0;
 
     // Precompiled RSPQ block (RSPQ-block-render plan / D1). Captured at the
     // end of Load(): the active path's full command sequence (runs, or the

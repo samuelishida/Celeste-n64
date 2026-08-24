@@ -21,23 +21,26 @@
 using namespace madeline_cube;
 
 int main() {
-    // A small mock manifest so we have distinct V2RoomSpec objects.
+    // A small mock manifest so we have distinct V2RoomSpec objects. The center
+    // is cell_0; residents are placed at cheb>=2 (preloaded outer cells) so
+    // they are all evictable — the drawn 3×3 (cheb<=1) is never evictable
+    // (streaming-experience Inc 3).
     MapSpecV2 spec;
-    spec.room_count = 5;
-    for (int i = 0; i < 5; ++i) {
+    spec.room_count = 6;
+    for (int i = 0; i < 6; ++i) {
         std::snprintf(spec.rooms[i].id, V2RoomSpec::kIdLen, "cell_%d_0", i);
         spec.rooms[i].cell_ix = i;
         spec.rooms[i].cell_iz = 0;
     }
     const V2RoomSpec* center = &spec.rooms[0];
-    const V2RoomSpec* a = &spec.rooms[1];
-    const V2RoomSpec* b = &spec.rooms[2];
-    const V2RoomSpec* c = &spec.rooms[3];
-    const V2RoomSpec* d = &spec.rooms[4];
+    const V2RoomSpec* a = &spec.rooms[2];  // cheb=2 (preloaded, evictable)
+    const V2RoomSpec* b = &spec.rooms[3];  // cheb=3
+    const V2RoomSpec* c = &spec.rooms[4];  // cheb=4
+    const V2RoomSpec* d = &spec.rooms[5];  // cheb=5
 
     ResidentSet set;
     assert(set.count == 0);
-    assert(set.capacity == kMaxRing);
+    assert(set.capacity == kMaxResident);  // Inc 3: resident pool is 5×5
 
     // Populate: center + 4 residents, all "used" at distinct frames.
     set.spec[set.count++] = center;
@@ -55,7 +58,7 @@ int main() {
     // IndexOf.
     assert(set.IndexOf(center) == 0);
     assert(set.IndexOf(d) == 4);
-    assert(set.IndexOf(&spec.rooms[3]) == 3);
+    assert(set.IndexOf(&spec.rooms[3]) == 2);  // 'b' is at slot 2 (rooms[1] skipped)
 
     // EvictCandidate never picks the center, even when it is the LRU.
     {
@@ -108,6 +111,20 @@ int main() {
         only_center.spec[only_center.count++] = center;
         assert(only_center.EvictCandidate(center) == -1);
         printf("PASS: center-only set has no evictable candidate\n");
+    }
+
+    // streaming-experience Inc 3: the drawn 3×3 (cheb<=1) is never evictable.
+    {
+        ResidentSet set2;
+        set2.spec[set2.count++] = center;      // cell_0 (center)
+        set2.spec[set2.count++] = &spec.rooms[1];  // cell_1 (cheb=1, drawn)
+        set2.spec[set2.count++] = &spec.rooms[2];  // cell_2 (cheb=2, preloaded)
+        set2.last_used[0] = 10;
+        set2.last_used[1] = 20;  // drawn cell is the LRU
+        set2.last_used[2] = 30;
+        const int victim = set2.EvictCandidate(center);
+        assert(victim == 2);  // the drawn cheb=1 cell is skipped
+        printf("PASS: drawn 3×3 (cheb<=1) is never evictable\n");
     }
 
     printf("ALL PASS\n");

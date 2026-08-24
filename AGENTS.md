@@ -187,25 +187,12 @@ Clean build artifacts:
 
 ## Local smoke test
 
-The host-side gameplay smoke test does not need the N64 toolchain:
+The host-side test suite does not need the N64 toolchain. `gameplay_smoke`
+(jump / dash / pickup / respawn) is wired into the runner alongside the other
+host tests:
 
 ```sh
-g++ -std=c++17 -Isrc/user \
-  tests/gameplay_smoke.cpp \
-  src/user/gameplay/player/player_controller.cpp \
-  src/user/gameplay/player/camera_controller.cpp \
-  src/user/gameplay/world/collectible.cpp \
-  src/user/gameplay/world/respawn_system.cpp \
-  src/user/gameplay/actor/strawberry_actor.cpp \
-  src/user/gameplay/actor/refill_actor.cpp \
-  src/user/gameplay/actor/spring_actor.cpp \
-  src/user/gameplay/world/actor_world.cpp \
-  src/user/gameplay/world/entity_dispatch.cpp \
-  src/user/gameplay/world/actor_factory.cpp \
-  src/user/gameplay/world/moving_solid_actor.cpp \
-  -o /tmp/madeline_cube_smoke
-
-/tmp/madeline_cube_smoke
+./tests/run_host_tests.sh   # or: make test
 ```
 
 Current smoke coverage:

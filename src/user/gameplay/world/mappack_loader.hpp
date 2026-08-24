@@ -131,6 +131,16 @@ struct MapSpecV2 {
     const V2RoomSpec* FindRoom(const char* id) const;
     // Find the Start spawn record (kind == kSpawnStart). Returns null if none.
     const V2SpawnSpec* FindStartSpawn() const;
+
+    // streaming-experience Inc 2: the largest per-room .lvl file size in the
+    // pack. The async staging pool is sized from this (never assumed), so a
+    // whole-file DMA read of any cell fits the pool. Host-safe, pure.
+    uint32_t MaxLvlSize() const {
+        uint32_t m = 0;
+        for (int i = 0; i < room_count; ++i)
+            if (rooms[i].lvl_size > m) m = rooms[i].lvl_size;
+        return m;
+    }
 };
 
 // Load a baked map-pack v2 binary manifest. Returns false on failure.

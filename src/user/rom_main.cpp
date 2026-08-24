@@ -125,28 +125,40 @@ int main() {
             // drive the BVH collision sweep. If `update` is not costing real ms,
             // the sqrt micro-opt collapses to a note.
             debugf("[profiler] avg frame time over 60 frames: %.3f ms (%.1f fps) "
-                   "update=%.3f ms\n",
+                   "update=%.3f (%.3f peak) ms\n",
                    static_cast<double>(profiler.last_average_ms()),
                    profiler.last_average_ms() > 0.0f
                        ? static_cast<double>(1000.0f / profiler.last_average_ms())
                        : 0.0,
                    static_cast<double>(
-                       profiler.phase_average_ms(n64::FrameProfiler::kPhaseUpdate)));
+                       profiler.phase_average_ms(n64::FrameProfiler::kPhaseUpdate)),
+                   static_cast<double>(
+                       profiler.phase_peak_ms(n64::FrameProfiler::kPhaseUpdate)));
 
             // Per-phase ms from the renderer's profiler. These are the
             // remaining per-pass costs after removing the z-split distant pass.
+            // `peak=` is the worst single frame in the 60-frame window
+            // (streaming-experience Inc 1) — averages dilute transition spikes.
             const n64::FrameProfiler& rp = gameplay.Profiler();
-            debugf("[render-phases] high_priority=%.3f streaming=%.3f ms\n",
+            debugf("[render-phases] high_priority=%.3f (%.3f peak) "
+                   "streaming=%.3f (%.3f peak) ms\n",
                    static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseHighPriority)),
-                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseStreaming)));
+                   static_cast<double>(rp.phase_peak_ms(n64::FrameProfiler::kPhaseHighPriority)),
+                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseStreaming)),
+                   static_cast<double>(rp.phase_peak_ms(n64::FrameProfiler::kPhaseStreaming)));
 
-            // Draw counters for the single near pass.
+            // Draw counters for the single near pass. `pending=` = cells still
+            // in the async-load backlog (queued + in-flight); `resident=` =
+            // resident pool depth (streaming-experience Inc 5: the backlog
+            // drains to 0 as the full 5×5 ring reaches READY).
             debugf("[counters] near_batches=%u texture_uploads=%u "
-                   "vert_loads=%u syncs=%u\n",
+                   "vert_loads=%u syncs=%u pending=%d resident=%d\n",
                    static_cast<unsigned int>(c.near_batches),
                    static_cast<unsigned int>(c.texture_uploads),
                    static_cast<unsigned int>(c.vert_loads),
-                   static_cast<unsigned int>(c.syncs));
+                   static_cast<unsigned int>(c.syncs),
+                   gameplay.PendingLoads(),
+                   gameplay.ResidentLoads());
         }
     }
 

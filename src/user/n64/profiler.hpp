@@ -43,6 +43,14 @@ public:
     float last_average_ms() const { return last_average_ms_; }
     // Rolling average ms for a phase (0 if not yet reported).
     float phase_average_ms(Phase phase) const { return phase_avg_ms_[phase]; }
+    // Per-phase PEAK in ms over the current report window (streaming-experience
+    // Inc 1): the max single-frame phase cost since the last report refresh.
+    // A 60-frame AVERAGE dilutes a one-frame transition spike below visibility;
+    // the done criterion for the async-load increment is a bounded peak, so the
+    // report exposes it. Reset on each report refresh (same cadence as the avg).
+    // Stored in ms (like `phase_average_ms`) so the header stays host-safe
+    // (no N64 `TIMER_TICKS_LL` dependency in a host-included header).
+    float phase_peak_ms(Phase phase) const { return phase_peak_ms_[phase]; }
 
 private:
     uint32_t report_interval_;
@@ -57,6 +65,11 @@ private:
     uint64_t phase_accum_ticks_[kPhaseCount] = {};
     bool phase_open_[kPhaseCount] = {};
     float phase_avg_ms_[kPhaseCount] = {};
+    // Per-phase peak (single-frame max) in ms over the current window
+    // (streaming-experience Inc 1). Computed in EndFrame from the tick peak
+    // (where TIMER_TICKS_LL is available), reset on report refresh.
+    float phase_peak_ms_[kPhaseCount] = {};
+    uint64_t phase_peak_ticks_[kPhaseCount] = {};
 };
 
 // Captures heap statistics via mallinfo().
