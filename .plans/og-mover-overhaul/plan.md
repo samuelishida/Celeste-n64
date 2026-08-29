@@ -586,7 +586,7 @@ downhill/uphill modulates max speed; partial stick maps to
 - Done: suite green + the feel section in movement_spec ("Demake
   implementation") updated.
 
-### Inc 5 — Close-out: telemetry, docs, device gate (S)
+### Inc 5 — Close-out: telemetry, docs, device gate (S) — [done; device capture pending]
 **Depends on:** 2, 3, 4
 **Unblocks:** none
 **Done criteria:** continuous Ares session (≥120 s, kDebugAutoWalk walk +
