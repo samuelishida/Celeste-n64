@@ -57,6 +57,25 @@ struct MovementConfig {
     // the r4 sustain probe governs. NOT a deprecated alias — the entry probe
     // is its only consumer and it stays.
     float wall_probe_radius = 5.0f;                 // == MoveServiceConfig::wall_radius (3)/motor radius (5) legacy
+
+    // ── OG feel (og-mover-overhaul Inc 4) ──────────────────────────────
+    // Skidding state (Player.cs:42-48, 1356-1429).
+    float skid_dot_threshold = -0.7f;         // SkidDotThreshold
+    float skidding_start_accel = 300.0f;      // SkiddingStartAccel
+    float skidding_accel = 500.0f;            // SkiddingAccel
+    float end_skid_speed = 51.2f;             // MaxSpeed * 0.8
+    float skid_jump_speed = 120.0f;           // SkidJumpSpeed
+    float skid_jump_hold_time = 0.16f;        // SkidJumpHoldTime
+    float skid_jump_xy_speed = 89.6f;         // MaxSpeed * 1.4
+    float no_skid_jump_time = 0.10f;          // tNoSkidJump (StSkiddingEnter)
+    float dash_rotate_speed = 1.884956f;      // Tau * 0.3 (dash steering)
+    float dash_buffer_time = 0.10f;           // OG VirtualButton press buffer for Dash
+    float jump_buffer_time = 0.10f;           // OG device jump buffer (was 0.08)
+    float coyote_time = 0.12f;                // OG CoyoteTime
+    float rotate_threshold = 12.8f;           // OG RotateThreshold
+    float rotate_speed = 9.424778f;           // Tau * 1.5
+    float rotate_speed_above_max = 3.769911f; // Tau * 0.6
+    float ledge_sweep_dist = 4.0f;            // OG ledge-avoid d = 4
 };
 
 struct MovementProfile {

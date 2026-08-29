@@ -229,7 +229,8 @@ int main() {
         PlayerInput reverse_input;
         reverse_input.move = {-1.0f, 0.0f};
         controller.Step(player, reverse_input, camera_forward, 1.0f / 60.0f);
-        assert(player.movement_state == PlayerMovementState::Normal);
+        // Running fast with reversed input enters Skidding (Inc 4 OG parity).
+        assert(player.movement_state == PlayerMovementState::Skidding);
 
         PlayerInput dash_input;
         dash_input.dash_pressed = true;

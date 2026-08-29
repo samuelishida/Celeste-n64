@@ -49,6 +49,7 @@ enum class PlayerMovementState : uint8_t {
     Normal = 0,
     Dashing,
     Climbing,
+    Skidding,  // og-mover-overhaul Inc 4 (OG States.Skidding)
 };
 
 enum class LocomotionState : uint8_t {
@@ -145,6 +146,12 @@ struct PlayerState {
 
     // Skid state: running fast and pushing opposite direction.
     bool skidding = false;
+    // tNoSkidJump (OG StSkiddingEnter): skid-jump unlock delay after entering
+    // skid (0.10 s). Counts down in the timer block.
+    float no_skid_jump_remaining = 0.0f;
+    // Dash input buffer (og-mover-overhaul Inc 4): a dash press with no dash
+    // opportunity stores this grace timer; TryDash drains it within dash_buffer_time.
+    float dash_buffer_remaining = 0.0f;
 
     // Surface material flags (set by the motor alongside `grounded`).
     bool on_ice = false;

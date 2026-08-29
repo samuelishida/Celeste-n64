@@ -403,14 +403,22 @@ PlayerController::StepContext PlayerController::TimerInputPhase(
     }
 
     if (input.jump_pressed) {
-        state.jump_buffer_remaining = profile_.jump_buffer_time;
+        state.jump_buffer_remaining = config_.jump_buffer_time;
     } else {
         state.jump_buffer_remaining = Approach(state.jump_buffer_remaining, 0.0f, delta_seconds);
+    }
+    // Dash input buffer (Inc 4): set on an unconsumed dash press; drained only
+    // by TryDash once a dash opportunity opens, else decays to 0.
+    if (input.dash_pressed && !input.dash_press_consumed) {
+        state.dash_buffer_remaining = config_.dash_buffer_time;
+    } else if (state.movement_state != PlayerMovementState::Dashing) {
+        state.dash_buffer_remaining = Approach(state.dash_buffer_remaining, 0.0f, delta_seconds);
     }
 
     state.dash_cooldown_remaining = Approach(state.dash_cooldown_remaining, 0.0f, delta_seconds);
     state.dash_reset_cooldown_remaining = Approach(state.dash_reset_cooldown_remaining, 0.0f, delta_seconds);
     state.no_dash_jump_remaining = Approach(state.no_dash_jump_remaining, 0.0f, delta_seconds);
+    state.no_skid_jump_remaining = Approach(state.no_skid_jump_remaining, 0.0f, delta_seconds);
     state.climb.cooldown_remaining = Approach(state.climb.cooldown_remaining, 0.0f, delta_seconds);
     state.no_move_time_remaining = Approach(state.no_move_time_remaining, 0.0f, delta_seconds);
     state.contact.ground_snap_cooldown_remaining = Approach(
@@ -930,7 +938,11 @@ void PlayerController::StatePhase(
         }
     }
 
-    if (input.dash_pressed &&
+    // Dash input-buffer acceptance (og-mover-overhaul Inc 4, S1): a dash press
+    // within the 0.10 s grace window opens a dash once an opportunity arrives.
+    // Consume the press edge on acceptance; the buffer drains in TimerInputPhase.
+    const bool dash_want = input.dash_pressed || state.dash_buffer_remaining > 0.0f;
+    if (dash_want &&
         state.air_dash_available &&
         state.dash_cooldown_remaining <= 0.0f) {
         if (has_move_input) {
@@ -948,8 +960,10 @@ void PlayerController::StatePhase(
         state.dash_time_remaining = profile_.dash_hitstop_time + profile_.dash_active_time;
         state.dash_reset_cooldown_remaining = config_.dash_reset_cooldown;
         state.no_dash_jump_remaining = 0.10f;
+        state.dash_buffer_remaining = 0.0f;  // buffer consumed
         context.dash_momentum = {};
         state.velocity = {};
+        input.ConsumeDashPress();
     }
 
     {
@@ -961,6 +975,14 @@ void PlayerController::StatePhase(
                 return;
             }
             state.dash_active_remaining = Approach(state.dash_active_remaining, 0.0f, delta_seconds);
+            // Dash steering (og-mover-overhaul Inc 4, OG Player.cs:1288-1293):
+            // while dashing, rotate toward move input and re-set dash speed so
+            // the player can arc the dash. OG: steer while Dot(move, facing) >= -0.2.
+            const Vec3 dash_dir = NormalizeXZ(state.target_facing, state.last_facing);
+            if (has_move_input && DotXZ(move_input, dash_dir) >= -0.2f) {
+                state.target_facing = RotateTowardXZ(
+                    dash_dir, move_input, config_.dash_rotate_speed * delta_seconds);
+            }
             state.velocity.x = state.target_facing.x * profile_.dash_speed;
             state.velocity.y = 0.0f;
             state.velocity.z = state.target_facing.z * profile_.dash_speed;
@@ -992,7 +1014,22 @@ void PlayerController::StatePhase(
             const bool move_active = has_move_input && !move_locked;
             const Vec3 horizontal_velocity = {state.velocity.x, 0.0f, state.velocity.z};
             const float speed_xz = LengthXZ(horizontal_velocity);
-            const float desired_speed = profile_.run_max_speed * AnalogMagnitude(raw_input_length);
+            // Base max speed, then apply slope modulation when grounded on a
+            // non-flat normal (OG Player.cs:1017-1029): slopeDot grows with the
+            // angle + along-slope input direction, scaling max UP or DOWN.
+            float max_speed = profile_.run_max_speed;
+            if (state.grounded && (state.contact.ground_normal.y < 0.999f)) {
+                const float slope_dot_c =
+                    1.0f - Clamp(state.contact.ground_normal.y, 0.0f, 1.0f);
+                // Along-slope input: project move_input onto the ground normal's
+                // XZ. OG uses Dot(groundNormal.XY().Normalized(), targetFacing)*2.
+                const Vec3 gxz = NormalizeXZ(
+                    {state.contact.ground_normal.x, 0.0f, state.contact.ground_normal.z},
+                    move_input);
+                const float along = DotXZ(gxz, move_active ? move_input : state.target_facing);
+                max_speed += max_speed * (slope_dot_c * along * 2.0f);
+            }
+            const float desired_speed = max_speed * AnalogMagnitude(raw_input_length);
             const Vec3 target_velocity = move_active
                 ? Vec3{move_input.x * desired_speed, state.velocity.y, move_input.z * desired_speed}
                 : Vec3{0.0f, state.velocity.y, 0.0f};
@@ -1000,6 +1037,20 @@ void PlayerController::StatePhase(
             if (state.grounded) {
                 // OG: rotation-based turning when above rotate threshold.
                 if (move_active && speed_xz > profile_.rotate_threshold) {
+                    // Skid trigger (og-mover-overhaul Inc 4, OG Player.cs:1072-1078):
+                    // when moving fast AND the camera-relative input opposes the
+                    // velocity direction past SkidDotThreshold, enter Skidding.
+                    const Vec3 vel_norm = NormalizeXZ(horizontal_velocity, move_input);
+                    const float turn_dot = DotXZ(vel_norm, move_input);
+                    if (turn_dot <= config_.skid_dot_threshold) {
+                        state.movement_state = PlayerMovementState::Skidding;
+                        state.skidding = true;
+                        state.no_skid_jump_remaining = config_.no_skid_jump_time;
+                        state.target_facing = move_input;
+                        state.facing = move_input;
+                        state.locomotion_state = LocomotionState::Idle;
+                        return;
+                    }
                     state.target_facing = RotateTowardXZ(state.target_facing, move_input, profile_.rotate_speed * delta_seconds);
                     const float accel = profile_.ground_acceleration;
                     const Vec3 rotated_target = {
@@ -1057,6 +1108,50 @@ void PlayerController::StatePhase(
             }
 
             ApplyJumpAndGravity(state, input, move_input, config_, profile_, delta_seconds);
+        }
+
+        // Skidding state (og-mover-overhaul Inc 4, OG StSkiddingUpdate
+        // Player.cs:1371-1429). Skid decel toward the input direction; exit on
+        // (a) no/low input, (b) skid-done (aligned + up to EndSkidSpeed),
+        // (c) leaving the ground, (d) skid-jump into Normal.
+        if (state.movement_state == PlayerMovementState::Skidding) {
+            const Vec3 skid_vel = {state.velocity.x, 0.0f, state.velocity.z};
+            const Vec3 skid_norm = NormalizeXZ(skid_vel, move_input);
+            // cancel conditions (OG: input < .2, dot < .7 with facing, or !onGround)
+            const float mag2 = (input.move.x * input.move.x) + (input.move.y * input.move.y);
+            const float input_to_facing = has_move_input ? DotXZ(move_input, state.target_facing) : 0.0f;
+            if (mag2 < 0.2f * 0.2f || (has_move_input && input_to_facing < 0.7f) || !state.grounded) {
+                state.movement_state = PlayerMovementState::Normal;
+                state.skidding = false;
+            } else {
+                // skid-jump
+                if (state.no_skid_jump_remaining <= 0.0f && input.ConsumeJumpPress()) {
+                    state.movement_state = PlayerMovementState::Normal;
+                    state.skidding = false;
+                    state.velocity.x = move_input.x * config_.skid_jump_xy_speed;
+                    state.velocity.z = move_input.z * config_.skid_jump_xy_speed;
+                    state.velocity.y = config_.skid_jump_speed;
+                    state.hold_jump_speed = config_.skid_jump_speed;
+                    state.hold_jump_time_remaining = config_.skid_jump_hold_time;
+                    state.locomotion_state = LocomotionState::Jump;
+                } else {
+                    // decel toward input direction
+                    const bool dot_matches = DotXZ(skid_norm, move_input) >= 0.7f;
+                    const float accel = dot_matches ? config_.skidding_accel
+                                                    : config_.skidding_start_accel;
+                    const Vec3 target = {
+                        move_input.x * profile_.run_max_speed,
+                        state.velocity.y,
+                        move_input.z * profile_.run_max_speed,
+                    };
+                    state.velocity = ApproachXZ(state.velocity, target, accel * delta_seconds);
+                    // reached EndSkidSpeed while aligned → exit to Normal
+                    if (dot_matches && LengthXZ({state.velocity.x, 0.0f, state.velocity.z}) >= config_.end_skid_speed) {
+                        state.movement_state = PlayerMovementState::Normal;
+                        state.skidding = false;
+                    }
+                }
+            }
         }
     }
 
