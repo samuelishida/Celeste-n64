@@ -213,7 +213,7 @@ gate never got a clean confirming capture):
 
 ## Increments
 
-### Inc 1 — Unified climb wall query + OG anchors (M)
+### Inc 1 — Unified climb wall query + OG anchors (M) — DONE
 **Depends on:** none
 **Unblocks:** 2, 3, 4, 5
 **Done criteria:** a host fixture proves that the SAME `QueryWallClosestToFace`
@@ -315,7 +315,7 @@ lip, (c) a 90° corner — i.e. one query family now drives all climb decisions.
   `movement_config.hpp` (as the deprecated Inc-4 aliases) + the ledge-probe
   consumer lines.
 
-### Inc 2 — OG climb entry (`TryClimb` parity) + wall_contact de-OR (M)
+### Inc 2 — OG climb entry (`TryClimb` parity) + wall_contact de-OR (M) — DONE
 **Depends on:** 1
 **Unblocks:** 4, 5
 **Done criteria:** climb entry behaves as OG's TryClimb: own waist-plane query
@@ -430,7 +430,7 @@ Host fixtures: no-entry-when-facing-away 90° fixture passes; suite green.
   the old flag path.
 - Done: all green; grep shows `RunWallFlagFromWaist` gone.
 
-### Inc 3 — OG corner system in ClimbState (L)
+### Inc 3 — OG corner system in ClimbState (L) — DONE
 **Depends on:** 1
 **Unblocks:** 4, 5
 **Done criteria:** host corner fixtures prove: (a) climbing into an inner
@@ -521,7 +521,7 @@ Zero uncommanded climb exits across all three fixtures.
   ticks). Wire into `tests/run_host_tests.sh` GAMEPLAY_LINK block.
 - Done: all green, zero uncommanded exits in the three fixtures.
 
-### Inc 4 — Ledge/mantle probe unification (M)
+### Inc 4 — Ledge/mantle probe unification (M) — DONE
 **Depends on:** 2, 3 (serialized after 3 — both touch the climb-sustain
 block's pre-movement region; the mantle gate must slot around Inc 3's
 corner-branch ordering, per review pass 2 S1)
@@ -573,7 +573,7 @@ radius-4 probe.
   `grip_face_id` equality in the fixture path).
 - Done: green; `grep -rn QueryWallPresent src/user/gameplay/player` is empty.
 
-### Inc 5 — Device validation + telemetry + docs (S)
+### Inc 5 — Device validation + telemetry + docs (S) — DONE (telemetry + docs; device capture pending toolchain)
 **Depends on:** 2, 3, 4
 **Unblocks:** none
 **Done criteria:** rebuilt ROM boots on Ares; scripted capture (no-input walk
