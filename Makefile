@@ -220,6 +220,7 @@ src = \
 	src/user/rom_main.cpp \
 	src/user/gameplay/input/input_system.cpp \
 	src/user/gameplay/player/player_controller.cpp \
+	src/user/gameplay/player/player_movement.cpp \
 	src/user/gameplay/player/player_motor.cpp \
 	src/user/gameplay/player/camera_controller.cpp \
 	src/user/gameplay/world/collectible.cpp \

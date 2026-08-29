@@ -185,7 +185,7 @@ formulas, is what closes the clip and the divergent-repair-path bugs.
 
 ## Increments
 
-### Inc 0 — Commit pending fixes (S)
+### Inc 0 — Commit pending fixes (S) — [done]
 **Depends on:** none
 **Unblocks:** 1
 **Done criteria:** working tree clean; the frozen-climb plane-bound fix,
@@ -211,7 +211,7 @@ logically-separated commits; host suite green.
 #### Verification
 - Run: `./tests/run_host_tests.sh` (green), `git status` (clean).
 
-### Inc 1 — OG collision queries + MoveService core (M) — depends on: 0
+### Inc 1 — OG collision queries + MoveService core (M) — [done]
 **Depends on:** 0
 **Unblocks:** 2
 **Done criteria:** a new `MoveService` passes a fixture suite proving OG-exact

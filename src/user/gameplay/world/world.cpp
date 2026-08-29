@@ -695,6 +695,25 @@ WallHit QueryWallClosestToFace(const Room& room, const Vec3& point, float radius
     return best;
 }
 
+// OG SolidWallCheckNearest parity (World.cs:556-571): the plane-projected wall
+// with the LARGEST pushout (most overlap). Reuses the unified plane query
+// (QueryWallsFacePlane) so the OG near-vertical gate + geometry bounding stay
+// single-sourced (M3: no near-duplicate wall family).
+WallHit QueryWallPushout(const Room& room, const Vec3& point, float radius) {
+    WallHit hits[kMaxWallHits];
+    const int count = QueryWallsFacePlane(room, point, radius, hits, kMaxWallHits);
+    if (count == 0) return WallHit{};
+
+    WallHit best = hits[0];
+    for (int i = 1; i < count; ++i) {
+        // Reversed comparison: keep the MOST pushout (deepest overlap), like OG.
+        if (hits[i].pushout > best.pushout) {
+            best = hits[i];
+        }
+    }
+    return best;
+}
+
 // ── Unified climb wall queries (climb-parity-3 Inc 1) ───────────────
 
 // OG ClimbNormalCheck (Player.cs ClimbCheckAt gate): a face is climbable when

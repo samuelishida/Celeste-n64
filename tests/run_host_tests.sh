@@ -137,6 +137,18 @@ run_cpp motor_wall_rest_smoke tests/motor_wall_rest_smoke.cpp \
     src/user/gameplay/physics/coll_mesh.cpp \
     src/user/gameplay/physics/geom.cpp
 
+# og-mover-overhaul Inc 1: MoveService single-mover fixture suite
+# (anti-tunnel dash, step-down snap, slope ground, waist+head popout,
+#  wall-rest equilibrium). MoveService is dead code at this increment.
+MOVE_LINK=(
+    src/user/gameplay/player/player_movement.cpp
+    src/user/gameplay/runtime/math.cpp
+    src/user/gameplay/world/world.cpp
+    src/user/gameplay/physics/coll_mesh.cpp
+    src/user/gameplay/physics/geom.cpp
+)
+run_cpp move_service_smoke tests/move_service_smoke.cpp "${MOVE_LINK[@]}"
+
 # climb-wall-physics Inc 2/3: motor-integrated climb + mantle behavior.
 run_cpp climb_mantle_smoke tests/climb_mantle_smoke.cpp "${GAMEPLAY_LINK[@]}"
 

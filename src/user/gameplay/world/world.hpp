@@ -238,6 +238,15 @@ int QueryWallsFacePlane(const Room& room, const Vec3& point, float radius,
 // normal is closest to `normal` (used for climb entry/sustain grip identity).
 WallHit QueryWallClosestToFace(const Room& room, const Vec3& point, float radius, const Vec3& normal);
 
+// OG SolidWallCheckNearest parity for the MoveService Popout wall test
+// (Player.cs:688-714; World.cs:556-571): the plane-projected wall with the
+// LARGEST pushout (most overlap). Wrapper over the unified plane family
+// (QueryWallsFacePlane — near-vertical gate |n.y|<0.35 + geometry bounding),
+// NOT a new near-duplicate wall query (M3). `point` is a single probe centre
+// (waist or head); Popout calls it once per test height. Returns the wall to
+// push out along with its true face `plane_normal`.
+WallHit QueryWallPushout(const Room& room, const Vec3& point, float radius);
+
 // ── Unified climb wall queries (climb-parity-3 Inc 1) ───────────────
 //
 // ONE query family drives ALL climb decisions (grip, ledge, corners): the
