@@ -144,8 +144,9 @@ struct PlayerState {
     // Movement timer.
     float no_move_time_remaining = 0.0f;
 
-    // Skid state: running fast and pushing opposite direction.
-    bool skidding = false;
+    // Skid state lives in `movement_state == Skidding` (enum is authoritative);
+    // the old redundant `skidding` bool was removed in review (desynced from
+    // the FSM when a dash was accepted mid-skid).
     // tNoSkidJump (OG StSkiddingEnter): skid-jump unlock delay after entering
     // skid (0.10 s). Counts down in the timer block.
     float no_skid_jump_remaining = 0.0f;
@@ -153,12 +154,14 @@ struct PlayerState {
     // opportunity stores this grace timer; TryDash drains it within dash_buffer_time.
     float dash_buffer_remaining = 0.0f;
 
-    // Surface material flags (set by the motor alongside `grounded`).
+    // Surface material flags (set by the mover alongside `grounded`).
     bool on_ice = false;
     bool on_oneway = false;
+    // Set by MoveService::Popout when the repaired contact face carries
+    // MAT_DEATH (spikes/lava). Consumed by the scene's death evaluation — the
+    // old PlayerMotor owned this check; the single mover owns it now.
+    bool death_contact = false;
 
-    // Source bookkeeping retained explicitly for the later motor migration.
-    int8_t dash_count = 1;
     ContactState contact;
     PlatformCarryState platform_carry;
     ClimbState climb;

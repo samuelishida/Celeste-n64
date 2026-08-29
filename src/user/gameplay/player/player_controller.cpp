@@ -26,10 +26,11 @@ inline float ShortestAngle(float a) {
     return a - 3.14159265358979323846f;
 }
 
-// Climb-parity-3 Inc 1: single parity anchor between the controller's copy of
-// the half-height and the motor's. Fixture configs that override one must
-// override both (movement_config.hpp documents the pairing).
-static_assert(true, "player_half_height parity checked at runtime (see controller constructor)");
+// og-mover-overhaul review C7: the no-op static_assert(false-true) parity
+// notice was removed — the real guarantee is MovementConfig::player_half_height
+// staying equal to MoveServiceConfig::half_height, both defaulted to 10.
+
+// Grip-grace window (climb-and-zoom-fix): how long the climb holds through a
 
 // Grip-grace window (climb-and-zoom-fix): how long the climb holds through a
 // momentary grip-probe miss before releasing. The sphere probe flickers on
@@ -251,9 +252,13 @@ void StartJump(PlayerState& state, const MovementConfig& config, const Vec3& mov
     state.velocity.y = config.jump_speed;
     state.hold_jump_speed = config.jump_speed;
     state.hold_jump_time_remaining = config.jump_hold_time;
+
     state.coyote_time_remaining = 0.0f;
     state.auto_jump = false;
     state.grounded = false;
+    // OG CancelGroundSnap parity (Player.cs:742): a takeoff must never be
+    // eaten by the 5-unit ground snap on the next ticks.
+    state.contact.ground_snap_cooldown_remaining = config.ground_snap_cooldown;
     if (state.platform_carry.time_remaining > 0.0f) {
         state.velocity.x += state.platform_carry.stored_velocity.x;
         state.velocity.y += state.platform_carry.stored_velocity.y;
@@ -276,6 +281,7 @@ void StartDashJump(PlayerState& state, const MovementConfig& config, const Vec3&
     state.coyote_time_remaining = 0.0f;
     state.auto_jump = false;
     state.air_dash_available = true;
+    state.contact.ground_snap_cooldown_remaining = config.ground_snap_cooldown;  // OG CancelGroundSnap
 
     // Dash-jump momentum conservation: preserve dash horizontal velocity
     state.velocity.x = context.dash_momentum.x;
@@ -294,7 +300,6 @@ void ApplyJumpAndGravity(
     const PlayerInput& input,
     const Vec3& move_input,
     const MovementConfig& config,
-    const MovementProfile& profile,
     float delta_seconds
 ) {
     const bool can_jump = state.grounded || state.coyote_time_remaining > 0.0f;
@@ -353,21 +358,13 @@ void PlayerController::Step(
         return;
     }
 
-    if (room != nullptr) {
-        // Full OG pipeline (Inc 2): timers/input -> state (velocity edits) ->
-        // MovePhase (SweepMove + LateContact). The scene calls the three
-        // phases independently; this convenience keeps old host tests working
-        // when a room is supplied.
-        StepContext context = TimerInputPhase(state, input, camera_forward, delta_seconds);
-        StatePhase(state, input, context, delta_seconds, room);
-        MovePhase(state, delta_seconds, room);
-    } else {
-        // Caller supplied no room (controller-only fixtures): old behavior —
-        // no sweep, just state edits + contact snapshot.
-        StepContext context = TimerInputPhase(state, input, camera_forward, delta_seconds);
-        StatePhase(state, input, context, delta_seconds, nullptr);
-        LateContactPhase(state, delta_seconds, nullptr);
-    }
+    // Full OG pipeline (Inc 2): timers/input -> state (velocity edits) ->
+    // MovePhase (SweepMove + LateContact). MovePhase(nullptr) already routes
+    // to the contact-snapshot-only path, so the room-less fixture case and
+    // the full pipeline share one body (review C7: no dual branch).
+    StepContext context = TimerInputPhase(state, input, camera_forward, delta_seconds);
+    StatePhase(state, input, context, delta_seconds, room);
+    MovePhase(state, delta_seconds, room);
 }
 
 PlayerController::StepContext PlayerController::TimerInputPhase(
@@ -392,7 +389,7 @@ PlayerController::StepContext PlayerController::TimerInputPhase(
     }
 
     if (state.grounded) {
-        state.coyote_time_remaining = profile_.coyote_time;
+        state.coyote_time_remaining = config_.coyote_time;
         state.contact.coyote_height = state.position.y;  // Record Y for coyote-jump snap
         context.dash_momentum = {};
         if (state.dash_reset_cooldown_remaining <= 0.0f) {
@@ -533,6 +530,9 @@ void PlayerController::StatePhase(
                 state.velocity.z = -hop_dir.z * config_.climb_hop_forward_speed;
                 state.no_move_time_remaining = config_.climb_hop_no_move_time;
                 state.climb.cooldown_remaining = config_.climb_cooldown;
+                // OG CancelGroundSnap parity (Player.cs:1473 climb exit): the
+                // mantle hop must not be snap-pulled back to the wall/floor.
+                state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
                 context.mantle_triggered = true;
                 return;
             }
@@ -590,27 +590,36 @@ void PlayerController::StatePhase(
             state.movement_state = PlayerMovementState::Normal;
             const Vec3 jump_dir = NormalizeXZ(climb_normal,
                 Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
+            // Neutral wall jump splits vertical/horizontal (demake-tuned
+            // neutral pair 105/40, formerly MovementProfile; directional uses
+            // the OG pair 90/83.2). Config single source (S4).
             const bool neutral = !has_move_input;
             const float horizontal = neutral
-                ? profile_.neutral_wall_jump_horizontal_speed
-                : profile_.wall_jump_horizontal_speed;
+                ? config_.neutral_wall_jump_horizontal_speed
+                : config_.wall_jump_speed_x;
+            const float vertical = neutral
+                ? config_.neutral_wall_jump_vertical_speed
+                : config_.wall_jump_speed_y;
             state.velocity.x = jump_dir.x * horizontal;
-            state.velocity.y = neutral
-                ? profile_.neutral_wall_jump_vertical_speed
-                : profile_.wall_jump_vertical_speed;
+            state.velocity.y = vertical;
             state.velocity.z = jump_dir.z * horizontal;
             state.target_facing = jump_dir;
             state.last_facing = jump_dir;
             state.locomotion_state = LocomotionState::Jump;
             state.hold_jump_speed = config_.jump_speed;
             state.hold_jump_time_remaining = config_.jump_hold_time;
+            // OG CancelGroundSnap parity (launch site, Player.cs:758).
+            state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
             // No climb cooldown (OG parity): the facing-away gate blocks
             // instant re-grab after the launch.
             return;
         }
 
-        // Dash off the wall (parity with OG dash-out of Climb).
-        if (input.dash_pressed &&
+        // Dash off the wall (parity with OG dash-out of Climb). Buffer-aware
+        // like the Normal path (S1/C6): the buffered press opens the dash and
+        // the press edge is consumed on acceptance.
+        const bool climb_dash_want = input.dash_pressed || state.dash_buffer_remaining > 0.0f;
+        if (climb_dash_want &&
             state.air_dash_available &&
             state.dash_cooldown_remaining <= 0.0f) {
             if (has_move_input) {
@@ -623,11 +632,13 @@ void PlayerController::StatePhase(
             state.locomotion_state = LocomotionState::Dash;
             state.air_dash_available = false;
             state.auto_jump = false;
-            state.dash_hitstop_remaining = profile_.dash_hitstop_time;
-            state.dash_active_remaining = profile_.dash_active_time;
-            state.dash_time_remaining = profile_.dash_hitstop_time + profile_.dash_active_time;
+            state.dash_hitstop_remaining = config_.dash_hitstop_time;
+            state.dash_active_remaining = config_.dash_active_time;
+            state.dash_time_remaining = config_.dash_hitstop_time + config_.dash_active_time;
             state.dash_reset_cooldown_remaining = config_.dash_reset_cooldown;
-            state.no_dash_jump_remaining = 0.10f;
+            state.no_dash_jump_remaining = config_.no_dash_jump_time;
+            state.dash_buffer_remaining = 0.0f;  // buffer consumed
+            input.ConsumeDashPress();
             context.dash_momentum = {};
             state.velocity = {};
             return;
@@ -783,9 +794,9 @@ void PlayerController::StatePhase(
             ? ((context.move_input.x * tangent.x) + (context.move_input.z * tangent.z))
             : 0.0f;
 
-        state.velocity.x = tangent.x * lateral * profile_.climb_speed;
-        state.velocity.z = tangent.z * lateral * profile_.climb_speed;
-        state.velocity.y = input.move.y * profile_.climb_speed;
+        state.velocity.x = tangent.x * lateral * config_.climb_speed;
+        state.velocity.z = tangent.z * lateral * config_.climb_speed;
+        state.velocity.y = input.move.y * config_.climb_speed;
         // Cancel downward climb while grounded (OG: move.Z < 0 on ground).
         if (state.grounded && state.velocity.y < 0.0f) {
             state.velocity.y = 0.0f;
@@ -935,6 +946,9 @@ void PlayerController::StatePhase(
             state.velocity.z = jump_dir.z * config_.wall_jump_speed_x;
             state.hold_jump_speed = config_.jump_speed;
             state.hold_jump_time_remaining = config_.jump_hold_time;
+            // OG CancelGroundSnap parity (Player.cs:915 WallJumpCheck): the
+            // wall-jump launch must not be snap-pulled back to the floor.
+            state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
         }
     }
 
@@ -955,12 +969,15 @@ void PlayerController::StatePhase(
         state.locomotion_state = LocomotionState::Dash;
         state.air_dash_available = false;
         state.auto_jump = false;
-        state.dash_hitstop_remaining = profile_.dash_hitstop_time;
-        state.dash_active_remaining = profile_.dash_active_time;
-        state.dash_time_remaining = profile_.dash_hitstop_time + profile_.dash_active_time;
+        state.dash_hitstop_remaining = config_.dash_hitstop_time;
+        state.dash_active_remaining = config_.dash_active_time;
+        state.dash_time_remaining = config_.dash_hitstop_time + config_.dash_active_time;
         state.dash_reset_cooldown_remaining = config_.dash_reset_cooldown;
-        state.no_dash_jump_remaining = 0.10f;
+        state.no_dash_jump_remaining = config_.no_dash_jump_time;
         state.dash_buffer_remaining = 0.0f;  // buffer consumed
+        // OG CancelGroundSnap parity (Player.cs:939 TryDash): a grounded dash
+        // cancels the snap so the launch cannot be pulled back down.
+        state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
         context.dash_momentum = {};
         state.velocity = {};
         input.ConsumeDashPress();
@@ -983,9 +1000,9 @@ void PlayerController::StatePhase(
                 state.target_facing = RotateTowardXZ(
                     dash_dir, move_input, config_.dash_rotate_speed * delta_seconds);
             }
-            state.velocity.x = state.target_facing.x * profile_.dash_speed;
+            state.velocity.x = state.target_facing.x * config_.dash_speed;
             state.velocity.y = 0.0f;
-            state.velocity.z = state.target_facing.z * profile_.dash_speed;
+            state.velocity.z = state.target_facing.z * config_.dash_speed;
             // Store dash momentum for conservation into jump
             context.dash_momentum.x = state.velocity.x;
             context.dash_momentum.z = state.velocity.z;
@@ -1017,7 +1034,7 @@ void PlayerController::StatePhase(
             // Base max speed, then apply slope modulation when grounded on a
             // non-flat normal (OG Player.cs:1017-1029): slopeDot grows with the
             // angle + along-slope input direction, scaling max UP or DOWN.
-            float max_speed = profile_.run_max_speed;
+            float max_speed = config_.run_speed;
             if (state.grounded && (state.contact.ground_normal.y < 0.999f)) {
                 const float slope_dot_c =
                     1.0f - Clamp(state.contact.ground_normal.y, 0.0f, 1.0f);
@@ -1036,7 +1053,7 @@ void PlayerController::StatePhase(
 
             if (state.grounded) {
                 // OG: rotation-based turning when above rotate threshold.
-                if (move_active && speed_xz > profile_.rotate_threshold) {
+                if (move_active && speed_xz > config_.rotate_threshold) {
                     // Skid trigger (og-mover-overhaul Inc 4, OG Player.cs:1072-1078):
                     // when moving fast AND the camera-relative input opposes the
                     // velocity direction past SkidDotThreshold, enter Skidding.
@@ -1044,15 +1061,14 @@ void PlayerController::StatePhase(
                     const float turn_dot = DotXZ(vel_norm, move_input);
                     if (turn_dot <= config_.skid_dot_threshold) {
                         state.movement_state = PlayerMovementState::Skidding;
-                        state.skidding = true;
                         state.no_skid_jump_remaining = config_.no_skid_jump_time;
                         state.target_facing = move_input;
                         state.facing = move_input;
                         state.locomotion_state = LocomotionState::Idle;
                         return;
                     }
-                    state.target_facing = RotateTowardXZ(state.target_facing, move_input, profile_.rotate_speed * delta_seconds);
-                    const float accel = profile_.ground_acceleration;
+                    state.target_facing = RotateTowardXZ(state.target_facing, move_input, config_.rotate_speed * delta_seconds);
+                    const float accel = config_.acceleration;
                     const Vec3 rotated_target = {
                         state.target_facing.x * desired_speed,
                         state.velocity.y,
@@ -1061,8 +1077,8 @@ void PlayerController::StatePhase(
                     state.velocity = ApproachXZ(state.velocity, rotated_target, accel * delta_seconds);
                 } else {
                     const float accel = move_active
-                        ? profile_.ground_acceleration
-                        : profile_.ground_deceleration;
+                        ? config_.acceleration
+                        : config_.friction;
                     state.velocity = ApproachXZ(state.velocity, target_velocity, accel * delta_seconds);
                 }
                 state.locomotion_state = move_active || speed_xz > kEpsilon
@@ -1083,16 +1099,16 @@ void PlayerController::StatePhase(
                     accel_mult = config_.air_accel_mult_min + (config_.air_accel_mult_max - config_.air_accel_mult_min) * (1.0f + input_dot);
                 }
                 float accel;
-                if (speed_xz > profile_.run_max_speed) {
+                if (speed_xz > config_.run_speed) {
                     // Above max: past_max_decel (slower acceleration to preserve momentum)
-                    accel = profile_.past_max_decel * accel_mult;
+                    accel = config_.past_max_deceleration * accel_mult;
                 } else {
-                    accel = profile_.air_acceleration * accel_mult;
+                    accel = config_.acceleration * accel_mult;
                 }
                 if (move_active) {
                     // OG: rotation-based turning in air too
-                    if (speed_xz > profile_.rotate_threshold) {
-                        state.target_facing = RotateTowardXZ(state.target_facing, move_input, profile_.rotate_speed * delta_seconds);
+                    if (speed_xz > config_.rotate_threshold) {
+                        state.target_facing = RotateTowardXZ(state.target_facing, move_input, config_.rotate_speed * delta_seconds);
                         const Vec3 rotated_target = {
                             state.target_facing.x * desired_speed,
                             state.velocity.y,
@@ -1107,7 +1123,7 @@ void PlayerController::StatePhase(
                 state.locomotion_state = state.velocity.y > 0.0f ? LocomotionState::Jump : LocomotionState::Fall;
             }
 
-            ApplyJumpAndGravity(state, input, move_input, config_, profile_, delta_seconds);
+            ApplyJumpAndGravity(state, input, move_input, config_, delta_seconds);
         }
 
         // Skidding state (og-mover-overhaul Inc 4, OG StSkiddingUpdate
@@ -1122,12 +1138,13 @@ void PlayerController::StatePhase(
             const float input_to_facing = has_move_input ? DotXZ(move_input, state.target_facing) : 0.0f;
             if (mag2 < 0.2f * 0.2f || (has_move_input && input_to_facing < 0.7f) || !state.grounded) {
                 state.movement_state = PlayerMovementState::Normal;
-                state.skidding = false;
             } else {
                 // skid-jump
                 if (state.no_skid_jump_remaining <= 0.0f && input.ConsumeJumpPress()) {
                     state.movement_state = PlayerMovementState::Normal;
-                    state.skidding = false;
+                    // OG CancelGroundSnap parity: the skid-jump launch must not
+                    // be snap-pulled back to the floor.
+                    state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
                     state.velocity.x = move_input.x * config_.skid_jump_xy_speed;
                     state.velocity.z = move_input.z * config_.skid_jump_xy_speed;
                     state.velocity.y = config_.skid_jump_speed;
@@ -1140,15 +1157,14 @@ void PlayerController::StatePhase(
                     const float accel = dot_matches ? config_.skidding_accel
                                                     : config_.skidding_start_accel;
                     const Vec3 target = {
-                        move_input.x * profile_.run_max_speed,
+                        move_input.x * config_.run_speed,
                         state.velocity.y,
-                        move_input.z * profile_.run_max_speed,
+                        move_input.z * config_.run_speed,
                     };
                     state.velocity = ApproachXZ(state.velocity, target, accel * delta_seconds);
                     // reached EndSkidSpeed while aligned → exit to Normal
                     if (dot_matches && LengthXZ({state.velocity.x, 0.0f, state.velocity.z}) >= config_.end_skid_speed) {
                         state.movement_state = PlayerMovementState::Normal;
-                        state.skidding = false;
                     }
                 }
             }
@@ -1197,7 +1213,7 @@ void PlayerController::MovePhase(
     // Coyote refresh + dash refill when grounded (OG: tCoyote reset, dash
     // refill on ground within reset window).
     if (state.grounded) {
-        state.coyote_time_remaining = profile_.coyote_time;
+        state.coyote_time_remaining = config_.coyote_time;
         state.contact.coyote_height = state.position.y;
         if (state.dash_reset_cooldown_remaining <= 0.0f) {
             state.air_dash_available = true;

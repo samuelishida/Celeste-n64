@@ -29,22 +29,11 @@ int main() {
         assert(SrcToPort(zero).z == 0.0f);
     }
 
-    // --- MotorInput default construction ---
-    {
-        MotorInput input;
-        assert(input.requested_velocity.x == 0.0f);
-        assert(input.wants_ground_snap == true);
-        assert(input.wants_coyote_refresh == true);
-        assert(input.wants_dash_refill == true);
-    }
-
-    // --- MotorResult default construction ---
+    // --- MotorResult default construction (collapsed adapter, review C7) ---
     {
         MotorResult result;
         assert(result.grounded == false);
-        assert(result.landed_this_frame == false);
-        assert(result.ground_face_id == -1);
-        assert(result.wall_face_id == -1);
+        assert(result.death == false);
         assert(result.ground_normal.y == 1.0f);
     }
 

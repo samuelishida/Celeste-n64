@@ -22,6 +22,9 @@ struct MovementConfig {
     float dash_duration = 0.20f;
     float dash_reset_cooldown = 0.20f;
     float dash_cooldown = 0.10f;
+    // Dash hitstop + steering window (were only in the deleted profile).
+    float dash_hitstop_time = 0.02f;
+    float dash_active_time = 0.20f;
     float dash_jump_speed = 40.0f;
     float dash_jump_hold_speed = 20.0f;
     float dash_jump_hold_time = 0.30f;
@@ -30,6 +33,11 @@ struct MovementConfig {
 
     float wall_jump_speed_x = 83.2f;    // WallJumpXYSpeed = MaxSpeed * 1.3
     float wall_jump_speed_y = 90.0f;    // same as JumpSpeed
+    // Demake-only neutral split (documented deviation): with no stick input,
+    // a climb wall jump launches steeper (was MovementProfile fields — kept
+    // as the demake's tuned values, single-sourced in config now).
+    float neutral_wall_jump_horizontal_speed = 40.0f;
+    float neutral_wall_jump_vertical_speed = 105.0f;
     float climb_speed = 40.0f;
     float climb_hop_up_speed = 80.0f;
     float climb_hop_forward_speed = 40.0f;
@@ -76,34 +84,16 @@ struct MovementConfig {
     float rotate_speed = 9.424778f;           // Tau * 1.5
     float rotate_speed_above_max = 3.769911f; // Tau * 0.6
     float ledge_sweep_dist = 4.0f;            // OG ledge-avoid d = 4
+    // OG tGroundSnapCooldown (Player.cs:713) — armed by CancelGroundSnap
+    // parity at every takeoff site (jump/walljump/dash/climb). The mover's
+    // GroundSnap gates on the same value it arms (MoveServiceConfig keeps a
+    // mirrored default for standalone fixtures).
+    float ground_snap_cooldown = 0.10f;
+    float no_dash_jump_time = 0.10f;          // was inline literal 0.10f x2
 };
 
-struct MovementProfile {
-    float run_max_speed = 64.0f;
-    float ground_acceleration = 500.0f;
-    float ground_deceleration = 800.0f;
-    float air_acceleration = 500.0f;
-    float air_turn_acceleration = 500.0f;
-    float past_max_decel = 60.0f;
-    float rotate_threshold = 12.8f;
-    float rotate_speed = 9.424778f;  // Tau * 1.5
-    float rotate_speed_above_max = 3.769911f;  // Tau * 0.6
-    float dash_rotate_speed = 1.884956f;     // Tau * 0.3
-    float coyote_time = 0.12f;
-    float jump_buffer_time = 0.08f;
-
-    float dash_speed = 140.0f;
-    float dash_hitstop_time = 0.02f;
-    float dash_active_time = 0.2f;
-    float dash_cooldown = 0.10f;
-    float dash_long_jump_speed = 100.0f;
-
-    float wall_jump_horizontal_speed = 83.2f;
-    float wall_jump_vertical_speed = 90.0f;
-    float neutral_wall_jump_horizontal_speed = 40.0f;
-    float neutral_wall_jump_vertical_speed = 105.0f;
-
-    float climb_speed = 40.0f;
-};
+// MovementProfile DELETED (review S4/C1): it was a second, partially-divergent
+// copy of the same numbers (its jump_buffer_time = 0.08 disagreed with the
+// live config 0.10). All feel constants now live in MovementConfig alone.
 
 }  // namespace madeline_cube

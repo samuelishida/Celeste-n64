@@ -14,7 +14,6 @@ using namespace madeline_cube;
 
 int main() {
     MovementConfig config;
-    MovementProfile profile;
     PlayerController controller(config);
     RespawnSystem respawn(config);
     const Vec3 camera_forward = {0.0f, 0.0f, 1.0f};
@@ -51,7 +50,7 @@ int main() {
     {
         PlayerState player;
         player.grounded = false;
-        player.coyote_time_remaining = profile.coyote_time;
+        player.coyote_time_remaining = config.coyote_time;
         player.velocity.y = -1.0f;
 
         PlayerInput jump_input;

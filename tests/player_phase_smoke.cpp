@@ -19,7 +19,7 @@ int main() {
         assert(player.contact.ground_snap_cooldown_remaining == 0.0f);
         assert(player.platform_carry.time_remaining == 0.0f);
         assert(player.climb.wall_surface_id == -1);
-        assert(player.dash_count == 1);
+        // dash_count removed (review C2): dead bookkeeping after motor deletion.
     }
 
     // Timer/input captures pre-state velocity and only updates timers/input facts.

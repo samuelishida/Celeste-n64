@@ -42,13 +42,26 @@ bool RespawnSystem::Step(
         return false;
     }
     ResetState(player, checkpoint);
-    // Resolve the grounded contact via the same single mover as gameplay
-    // (OG ground snap): if a floor is within 5 units below the spawn, ground
-    // the player on it.
+    // Resolve the grounded contact via the same single mover as gameplay.
+    // ResetState clears was_grounded, and GroundSnap requires it — so the
+    // snap call is only useful when the respawn path WANTS a snap; the real
+    // contact authority is the GroundCheck below (review S3: dead-call note).
     player.contact.was_grounded = false;
     mover.GroundSnap(player, room, 1.0f / 60.0f);
-    player.grounded = mover.GroundCheck(player, room, nullptr, nullptr);
+    Vec3 respawn_normal{};
+    player.grounded = mover.GroundCheck(player, room, nullptr, &respawn_normal);
     player.contact.was_grounded = player.grounded;
+    if (player.grounded) {
+        // S6: carry the actual floor normal (was {0,1,0} until first tick).
+        player.contact.ground_normal = respawn_normal;
+    }
+    // Review S3: clear the timers the old ResetState never touched — a death
+    // within the coyote window otherwise leaves a stale coyote_height that a
+    // post-respawn jump would snap to.
+    player.coyote_time_remaining = 0.0f;
+    player.no_move_time_remaining = 0.0f;
+    player.dash_buffer_remaining = 0.0f;
+    player.contact.ground_snap_cooldown_remaining = 0.0f;
     return true;
 }
 

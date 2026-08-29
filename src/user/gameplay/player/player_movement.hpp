@@ -25,7 +25,6 @@ struct MoveServiceConfig {
     float ground_ray_len = 5.01f;         // OG GroundCheck ray length
     float ceiling_probe_up = 1.0f;        // OG CeilingCheck origin up from feet
     float ceiling_height = 12.0f;         // OG CeilingCheck Height
-    float climb_wall_radius = 3.0f;       // climb popout radius (= WallPushoutDist)
     float ground_snap_distance = 5.0f;    // OG ground snap ray length (was demake 50)
     float ground_snap_cooldown = 0.10f;   // OG tGroundSnapCooldown (Player.cs:713)
     float half_height = 10.0f;            // demake body half-height
@@ -64,6 +63,12 @@ public:
     // ground_snap_cooldown_remaining <= 0; snaps position down to the hit.
     // Reuses ContactState::ground_snap_cooldown_remaining (no new field, M4).
     void GroundSnap(PlayerState& state, const Room& room, float dt) const;
+
+    // OG CancelGroundSnap (Player.cs:722-723): arms the snap cooldown so the
+    // next GroundSnap cannot pull a takeoff back to the floor. Every launch
+    // site (jump, wall jump, dash, skid-jump, climb mantle) calls this —
+    // parity with OG's eight CancelGroundSnap sites.
+    void CancelGroundSnap(PlayerState& state) const;
 
     const MoveServiceConfig& Config() const { return config_; }
 

@@ -15,11 +15,13 @@ int main() {
     static_assert(static_cast<int>(LocomotionState::Climb) == 4);
     static_assert(static_cast<int>(LocomotionState::Fall) == 5);
 
-    MovementProfile profile;
-    assert(profile.coyote_time == 0.12f);
-    assert(profile.jump_buffer_time == 0.08f);
-    assert(profile.dash_hitstop_time == 0.02f);
-    assert(profile.dash_active_time >= 0.18f && profile.dash_active_time <= 0.22f);
+    // MovementProfile deleted (review S4/C1): feel constants live in
+    // MovementConfig alone — pin the OG values on the one source of truth.
+    MovementConfig config;
+    assert(config.coyote_time == 0.12f);
+    assert(config.jump_buffer_time == 0.10f);   // OG device buffer (was 0.08)
+    assert(config.dash_hitstop_time == 0.02f);
+    assert(config.dash_active_time >= 0.18f && config.dash_active_time <= 0.22f);
 
     // dash_momentum is an inter-phase communication field on StepContext,
     // not on PlayerState. Verify it defaults to zero.
@@ -32,8 +34,7 @@ int main() {
     PlayerState player;
     assert(player.locomotion_state == LocomotionState::Idle);
 
-    CameraBasis camera;
-    assert(camera.forward_xz.z == 1.0f);
-    assert(camera.right_xz.x == 1.0f);
+    // CameraBasis removed (review C7): zero prod consumers after the motor
+    // deletion; the camera reads the room scene-side.
     return 0;
 }

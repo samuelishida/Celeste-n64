@@ -65,8 +65,16 @@ public:
 
 private:
     MovementConfig config_;
-    MovementProfile profile_;
+    // MovementProfile member DELETED (review S4/C1): one config struct owns
+    // every feel constant now. The single mover lives here so scene/respawn
+    // and tests can share the SAME instance (S1).
     MoveService mover_;
+
+public:
+    // Shared-mover access (review S1): the ONE mover instance. The scene and
+    // RespawnSystem pass this to spawn/respawn contact resolution instead of
+    // constructing a second, implicitly-matching MoveService.
+    const MoveService& Mover() const { return mover_; }
 };
 
 }  // namespace madeline_cube

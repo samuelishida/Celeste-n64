@@ -142,3 +142,17 @@ Remoções:
 Sem clipping por construção: toda tick termina num estado "popped-out"
 (`SweepMove` + `Popout(false)` final), de modo que a posição fica fora de toda
 face de parede.
+
+### Revisão pós-implementação (2026-08-29)
+Correções aplicadas na revisão do PR:
+- **Cancel ground snap (OG Player.cs:722)**: todo local de decolagem (pulo,
+  walljump direcional + neutral, dash, skid-jump, mantle) arma
+  `ground_snap_cooldown = 0.10` — antes o setter faltava e o snap de 5 u
+  comia o início de cada pulo.
+- **Faces MAT_DEATH voltaram a matar**: `MoveService::Popout` sinaliza
+  `PlayerState::death_contact` em qualquer face reparada com material de
+  morte; a cena combinou com o kill plane (`motor_result.death`).
+- `MovementProfile` deletado — uma única `MovementConfig` (o `jump_buffer_time`
+  0.08 fantasma foi embora junto).
+- Um único `MoveService` em produção: `PlayerController::Mover()` é a instância
+  compartilhada por spawn, respawn e ticks.

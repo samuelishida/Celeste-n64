@@ -32,6 +32,25 @@ bool IsOneWay(const Room& room, int face_id) {
     return (room.coll_mesh->triangles[face_id].material & physics::MAT_ONEWAY) != 0;
 }
 
+// True if the face is a death surface (spikes, lava). Only CollMesh faces
+// carry death material; dynamic colliders never kill.
+bool IsDeathFace(const Room& room, int face_id) {
+    if (face_id < 0) return false;
+    if (!room.coll_mesh) return false;
+    if (face_id >= static_cast<int>(room.coll_mesh->header->triangle_count)) return false;
+    return (room.coll_mesh->triangles[face_id].material & physics::MAT_DEATH) != 0;
+}
+
+// Surface material flags carried on contact (S6): the old motor set on_ice /
+// on_oneway from the repaired face; the single mover owns that job now.
+void RecordSurfaceFlags(const Room& room, int face_id, PlayerState& state) {
+    state.on_ice = false;
+    state.on_oneway = IsOneWay(room, face_id);
+    if (face_id < 0 || !room.coll_mesh) return;
+    if (face_id >= static_cast<int>(room.coll_mesh->header->triangle_count)) return;
+    state.on_ice = (room.coll_mesh->triangles[face_id].material & physics::MAT_ICE) != 0;
+}
+
 }  // namespace
 
 MoveService::MoveService(MoveServiceConfig config) : config_(config) {}
@@ -82,16 +101,31 @@ bool MoveService::CeilingCheck(const PlayerState& state, const Room& room,
 }
 
 bool MoveService::Popout(PlayerState& state, const Room& room, bool resolve_impact) const {
+    // Death flag is per-contact: cleared here, set if ANY repaired contact face
+    // carries MAT_DEATH (the old motor's FaceIsDeath sites, now mover-owned).
+    state.death_contact = false;
     // ground test
     Vec3 pushout{};
     Vec3 normal{};
     Vec3 hit_point{};
+    int ground_face = -1;
+    int ceiling_face = -1;
     if (GroundCheck(state, room, &pushout, &normal)) {
         state.position.x += pushout.x;
         state.position.y += pushout.y;
         state.position.z += pushout.z;
         state.grounded = true;
         state.contact.ground_normal = normal;
+        // Surface flags + death material from the repaired floor face.
+        {
+            const Vec3 origin = SolidFeetPos(state);
+            const Vec3 ray_origin = {origin.x, origin.y + config_.ground_ray_up, origin.z};
+            const GroundHit face = QueryFloorSource(room, ray_origin, config_.ground_ray_len);
+            if (face.hit) {
+                RecordSurfaceFlags(room, face.face_id, state);
+                if (IsDeathFace(room, face.face_id)) state.death_contact = true;
+            }
+        }
         if (resolve_impact && state.velocity.y < 0.0f)
             state.velocity.y = 0.0f;  // OG velocity.Z = Max(velocity.Z, 0)
     }
@@ -128,6 +162,7 @@ bool MoveService::Popout(PlayerState& state, const Room& room, bool resolve_impa
         }
         state.wall_contact = true;
         state.wall_normal = wall->plane_normal;
+        if (IsDeathFace(room, wall->face_id)) state.death_contact = true;
         return true;
     }
 
@@ -177,12 +212,21 @@ void MoveService::GroundSnap(PlayerState& state, const Room& room, float dt) con
     const GroundHit hit = QueryFloorSource(room, origin, config_.ground_snap_distance);
     if (hit.hit && IsFloorNormalOG(hit.normal)) {
         state.position.y = hit.point.y + config_.half_height;
+        // Surface flags from the snapped face (S6).
+        RecordSurfaceFlags(room, hit.face_id, state);
         // Refresh grounded state via a GroundCheck so normal/coyote follow.
         Vec3 normal{};
         if (GroundCheck(state, room, nullptr, &normal)) {
             state.contact.ground_normal = normal;
         }
     }
+}
+
+void MoveService::CancelGroundSnap(PlayerState& state) const {
+    // OG Player.cs:722-723 — called at every takeoff site (Jump, WallJump,
+    // dash, climb) so the 5-unit snap never eats a launch. The single mover
+    // owns the same contract: state code cancels, the mover gates the snap.
+    state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
 }
 
 }  // namespace madeline_cube

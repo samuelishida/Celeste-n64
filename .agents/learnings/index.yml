@@ -16,3 +16,6 @@ climb-probe-shell-geometry-coupling:
 og-single-mover-port:
   file: og-single-mover-port.md
   description: When porting OG Celeste64 movement/collision or doing single-mover vs multi-path collision work — OG has ONE SweepTestMove+Popout per tick; the demake's four parallel repair paths caused persistent clip bugs. Port = relocate + gate-change, NOT re-port validated feel math. OG wall test is a SEPARATE if (not else after ground); Popout returns true only for wall pops; one-way pass-through means floor gate accepts at-or-above, ceiling gate rejects below; zero-amount SweepMove must still idle-popout; skid needs a real floor in host fixtures; feet-anchored conversion (center = hit + half_height).
+takeoff-needs-ground-snap-cancel:
+  file: ../common-mistakes/takeoff-needs-ground-snap-cancel.md
+  description: When porting a gated timer (cooldown gate) — grep BOTH the reader and the writer; a cooldown whose only writer is its own decay is a dead gate. OG CancelGroundSnap (Player.cs:722) has 8 setter sites; the demake ported the ground-snap gate but dropped every setter, so every jump was snap-pulled back to the floor. See .agents/common-mistakes/takeoff-needs-ground-snap-cancel.md.

@@ -139,7 +139,7 @@ run_cpp motor_wall_rest_smoke tests/motor_wall_rest_smoke.cpp \
 
 # og-mover-overhaul Inc 1: MoveService single-mover fixture suite
 # (anti-tunnel dash, step-down snap, slope ground, waist+head popout,
-#  wall-rest equilibrium). MoveService is dead code at this increment.
+#  wall-rest equilibrium). Inc 2 wired it into gameplay; Inc 3 relies on it.
 MOVE_LINK=(
     src/user/gameplay/player/player_movement.cpp
     src/user/gameplay/runtime/math.cpp
@@ -189,6 +189,21 @@ run_cpp climb_no_clip_smoke tests/climb_no_clip_smoke.cpp "${GAMEPLAY_LINK[@]}"
 
 # og-mover-overhaul Inc 4: Skidding state + dash steering + dash input buffer.
 run_cpp skid_smoke tests/skid_smoke.cpp "${GAMEPLAY_LINK[@]}"
+
+# review C5: previously unwired contracts + feel_spec tests — now in the
+# runner so their constants assertions are enforced on every suite run.
+run_cpp movement_contracts_test tests/movement_contracts_test.cpp \
+    src/user/gameplay/runtime/math.cpp
+run_cpp physics_contracts_test tests/physics_contracts_test.cpp \
+    src/user/gameplay/runtime/math.cpp
+run_cpp oneway_smoke tests/feel_spec/oneway_smoke.cpp \
+    src/user/gameplay/player/player_movement.cpp \
+    src/user/gameplay/runtime/math.cpp \
+    src/user/gameplay/world/world.cpp \
+    src/user/gameplay/physics/coll_mesh.cpp \
+    src/user/gameplay/physics/geom.cpp
+run_cpp ledge_smoke tests/feel_spec/ledge_smoke.cpp "${GAMEPLAY_LINK[@]}" \
+    src/user/gameplay/world/room_data.cpp
 
 # wall-climb-overhaul Inc 1: plane-based wall query returns stable face
 # normals (no seam diagonal) and rejects slopes (OG ClimbNormalCheck).

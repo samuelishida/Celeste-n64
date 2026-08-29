@@ -46,37 +46,16 @@ inline Vec2 PortToSrc(const Vec2& port) {
 }
 
 // ---------------------------------------------------------------------------
-// Motor contract
-//
-// State code requests motion; the motor alone writes resolved post-move
-// position/contact results.  These structs are the boundary.
+// Scene tick result (review C7: was the 13-field MotorResult; PlayerMotor is
+// deleted and only the fields below still have consumers). MotorInput and
+// CameraBasis had zero prod consumers and were removed with it.
 // ---------------------------------------------------------------------------
 
-struct MotorInput {
-    Vec3 requested_velocity;
-    bool wants_ground_snap = true;
-    bool wants_coyote_refresh = true;
-    bool wants_dash_refill = true;
-};
-
 struct MotorResult {
-    Vec3 position;
-    Vec3 velocity;
     bool grounded = false;
     bool wall_contact = false;
-    bool landed_this_frame = false;
     bool death = false;
-    bool on_ice = false;
-    bool on_oneway = false;
-    int ground_face_id = -1;
-    int wall_face_id = -1;
     Vec3 ground_normal = {0.0f, 1.0f, 0.0f};
-    Vec3 wall_normal = {0.0f, 0.0f, 0.0f};
-};
-
-struct CameraBasis {
-    Vec3 forward_xz = {0.0f, 0.0f, 1.0f};
-    Vec3 right_xz = {1.0f, 0.0f, 0.0f};
 };
 
 // ---------------------------------------------------------------------------

@@ -133,6 +133,31 @@ int main() {
         printf("dash-buffer: fired from buffered press\n");
     }
 
+    // ── 6: ground-snap cancel at takeoff (review F1 regression) ──
+    // Jumping from a floor inside the 5-unit snap reach must stay airborne:
+    // StartJump arms the snap cooldown, so GroundSnap must NOT pull the body
+    // back down on the following ticks.
+    {
+        PlayerState p;
+        p.grounded = true;
+        p.position = {0.0f, config.player_half_height, 0.0f};
+
+        PlayerInput in;
+        in.jump_pressed = true;
+        in.jump_held = true;
+        controller.Step(p, in, cam, kDt, &no_room);
+        assert(p.velocity.y > 0.0f);
+        assert(p.contact.ground_snap_cooldown_remaining > 0.0f);  // armed
+        // Rise for a few ticks; the snap must never fire while armed.
+        for (int i = 0; i < 5; ++i) {
+            in.jump_pressed = false;
+            controller.Step(p, in, cam, kDt, &no_room);
+            assert(p.position.y > 10.5f);  // well above the floor (feet > -1)
+        }
+        printf("snap-cancel: takeoff held above floor, cooldown=%.3f\n",
+               p.contact.ground_snap_cooldown_remaining);
+    }
+
     printf("skid_smoke PASS\n");
     return 0;
 }

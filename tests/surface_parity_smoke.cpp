@@ -98,9 +98,9 @@ int main() {
         p.contact.was_grounded = true;
         p.contact.ground_snap_cooldown_remaining = 0.0f;
         mover.GroundSnap(p, room, kDt);
-        // Snapped feet onto the lower floor (y=-10) -> center y=0.
+        // Snapped feet onto the lower floor (y=-10) -> center y=0 exactly.
         assert(ApproxEq(mover.GroundCheck(p, room, nullptr, nullptr), true));
-        assert(ApproxEq(p.position.y, 0.0f, 1.0f));
+        assert(p.position.y == 0.0f);  // exact snap (review C5: no loose eps)
     }
 
     // --- Ledge no-snap when previously airborne: stays (was_grounded false). ---
