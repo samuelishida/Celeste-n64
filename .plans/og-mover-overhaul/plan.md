@@ -335,7 +335,7 @@ tests only); tree compiles and old suite still green.
 - Done: suite green, `grep -rn MoveService src/` shows zero gameplay callers
   (integration is Inc 2).
 
-### Inc 2 — Controller inversion + motor deletion (M)
+### Inc 2 — Controller inversion + motor deletion (M) — [done]
 **Depends on:** 1
 **Unblocks:** 3, 4
 **Done criteria:** `PlayerController::Step` shape is OG's: TimerInput →
