@@ -1,128 +1,96 @@
-# Movement Spec
 
-This controller matches OG Celeste64 values (Y-up, same numeric values as OG — no rescaling). `+Y` is up; travel is on the XZ plane; all horizontal intent is projected through the active camera basis.
+# Celeste 64 — Spec de controles e física
 
-## Tuned profile (Y-up OG values)
+## 1. Escopo
 
-| Value | Current value | OG source |
-| --- | ---: | --- |
-| run max speed | `64.0` | MaxSpeed |
-| ground acceleration / deceleration | `500 / 800` | Acceleration / Friction |
-| past max deceleration | `60` | PastMaxDeccel |
-| air acceleration (base, scaled by mult) | `500` | Acceleration * AirMult |
-| air accel mult min/max | `0.5 / 1.0` | AirAccelMultMin/Max |
-| rotate threshold | `12.8` | RotateThreshold (MaxSpeed*0.2) |
-| rotate speed / above max | `9.42 / 3.77 rad/s` | RotateSpeed / AboveMax |
-| jump speed | `90.0` | JumpSpeed |
-| jump hold time | `0.10s` | JumpHoldTime |
-| jump XY boost | `10.0` | JumpXYBoost |
-| gravity | `600` | Gravity (single value, mult 0.5 near apex when jump held) |
-| half-gravity threshold | `100.0` | HalfGravThreshold |
-| max fall speed | `-120.0` | MaxFall |
-| coyote time | `0.12s` | CoyoteTime |
-| jump buffer | `0.08s` | JumpBufferTime |
-| dash speed | `140.0` | DashSpeed |
-| dash hitstop / active window | `0.02s / 0.20s` | HitStun / DashTime |
-| dash end speed mult | `0.75` | DashEndSpeedMult |
-| dash reset cooldown | `0.20s` | DashResetCooldown |
-| dash cooldown | `0.10s` | DashCooldown |
-| dash rotate speed | `1.88 rad/s` | DashRotateSpeed |
-| dash jump speed / hold / time | `40 / 20 / 0.3s` | DashJump* |
-| dash jump XY boost | `16.0` | DashJumpXYBoost |
-| dash air up component | `0.4` | Air dash Y (normalized) |
-| wall jump XY speed | `83.2` | WallJumpXYSpeed (MaxSpeed*1.3) |
-| wall jump Y speed | `90.0` | JumpSpeed |
-| climb speed | `40.0` | ClimbSpeed |
-| climb hop up / forward | `80 / 40` | ClimbHop* |
-| mantle input lockout / regrab cooldown | `0.25s / 0.30s` | ClimbHopNoMoveTime / tClimbCooldown |
+Especificação reversa de `Celeste64`, baseada no branch `main` do repositório oficial em 29/08/2026.
 
-## State model
+Foco:
 
-Physical locomotion uses `IDLE`, `RUN`, `JUMP`, `DASH`, `CLIMB`, and `FALL`.
+- controles padrão;
+- ciclo de atualização do jogador;
+- movimento terrestre e aéreo;
+- pulo, dash, skid, escalada, wall jump, feather e molas;
+- colisão, plataformas móveis, morte e respawn.
 
-- Grounded: rotation-based turning above `rotate_threshold` (12.8); simple Approach below. Friciton stops fast.
-- Air steering: curves velocity toward input direction. Past-max decel (60) when above max speed. Air mult scaled by input-velocity dot.
-- Jump: variable height via 0.1s hold at `jump_speed` (90). Half-gravity (0.5×) when button held and |vel| < 100. Early release = shorter jump.
-- Coyote: 0.12s grace after leaving edge. Snap Y to `coyote_height` on coyote jump.
-- Jump buffer: 0.08s pre-landing window triggers jump instantly.
-- Dash: aim through camera-relative input, 0.02s hitstop, 0.2s gravity-free travel at 140. Air dash adds 0.4 Y component. End: velocity *= 0.75 if airborne. Dash-jump: lower jump (40) with longer hold (0.3s at 20).
-- Camera: from-style orbit (right stick, 4 rad/s), 3-tier zoom (30-110 distance), exponential follow (0.01^dt), wall raycast, dynamic FOV (1.0-1.2x at high speed). **Zoom deviation:** the demake sweeps normalized distance at `1.8/s` (`CameraConfig::zoom_rate`) and settles detents at `1.0/s` (`zoom_snap_speed`), versus OG's `1.0/s` (`Player.cs:283`). Rationale: the N64 stick/C-button medium lacks a mouse wheel's fine control, so 1.8x/2x faster zoom/snap reads as responsive without skipping detents. **Position-follow gate:** `target_distance` alone is not enough — the camera-position follow (`camera_follow_decay=0.01`, ~7%/frame) would otherwise lag the actual zoom by ~2-3s. While the player is actively zooming the follow decay tightens to `0.0001` so the camera chases the zoomed-in spot immediately; when zoom stops it eases back on the normal decay. Orbit/follow/FOV rates otherwise stay OG-exact.
+Valores usam unidades internas do jogo. Todas as atualizações dependentes de tempo usam `Time.Delta`.
 
-## Climb model (OG Celeste64 parity)
+Fontes principais: [`Player.cs`](https://github.com/EXOK/Celeste64/blob/main/Source/Actors/Player.cs), [`ControlsConfig.cs`](https://github.com/EXOK/Celeste64/blob/main/Source/Data/ControlsConfig.cs), [`Controls.cs`](https://github.com/EXOK/Celeste64/blob/main/Source/Data/Controls.cs).
 
-Unlimited grip: there is **no stamina** in Celeste64 or in this demake. Climbing
-is limited only by holding the Climb button (Z/L/R), touching a wall, and
-facing it.
+## 2. Modelo mental
 
-- **All solid walls are climbable** — no material gate at runtime (the
-  `MAT_CLIMBABLE` collmesh bit remains reserved for future bake-side use).
-- Entry (OG `TryClimb` parity): Climb held + facing-dot ≥ 0.5 + stick neutral
-  OR pushing into the wall (dot ≤ -0.5). Her OWN waist query decides (no motor
-  flag); the entry probe uses the visibility radius (5.0 = motor tangent rest
-  distance) because at exact tangency her waist rests one unit beyond the r4
-  sustain reach, then re-anchors her to `wall.point + normal*3`. Airborne
-  rising (+4-unit snap-up variant) grabs a higher wall. Grounded entry allowed
-  (OG-faithful).
-- Grab zeroes all velocity and re-anchors the CENTER to
-  `wall.point + {0, half_height - waist_offset, 0} + normal*3` (waist lands at
-  the wall surface + 3 out); climbing is gravity-free kinematic movement on
-  the wall plane: raw stick Y = up/down at `climb_speed` (down canceled while
-  grounded); camera-relative horizontal intent projected onto the wall tangent.
-- Release: button released / waist-level grip probe lost / faced away. No
-  cooldown on release (only the mantle sets one) so hanging at a lip cannot
-  pump into fall/regrab cycles.
-- Climb walljump: SET velocity away from the wall normal — directed 83.2 XY /
-  90 Y; neutral 40 XY / 105 Y (repo-local neutral split, kept for feel).
-- Ledge-hop mantle: holding up while the lip probe (waist + 1, OG
-  `ClimbCheckAt(+1 UnitZ)`) MISSES → ballistic hop (-wall_normal × 40 forward,
-  80 up), 0.25 s move-input lockout, 0.3 s re-grab cooldown. The lip probe is
-  the SAME unified plane query as grip, geometry-bounded to the gripped wall
-  faces' vertex extents (a face ends at its triangles — the infinite-plane
-  projection alone would never report a miss at a wall top).
-- Corner system (OG `StClimbingUpdate` parity): inner-corner side ray,
-  slope-away snap ray, and outer-corner forward+side ray with a 0.2 s eased
-  position/facing lerp. All adopts re-anchor the center to the new wall and
-  reset grip identity + facing INTO the new wall.
-- Ground acceptance: raycast-path floors require `normal.y >= 0.35`; sphere
-  sweeps require `>= 0.70`, or `>= 0.35` plus a downward-raycast floor
-  confirmation (see wall-contact table below) — walls can never register as
-  ground, and mid-wall diagonal sweep hits are rejected.
+```mermaid
+flowchart TD
+    Input[Controls / VirtualStick / VirtualButton]
+    Camera[Câmera: direção relativa + zoom]
+    State[Player state machine]
+    Kinematics[Velocidade XY/Z]
+    Collision[Ground / ceiling / wall checks]
+    Sweep[SweepTestMove: passos de 2 unidades]
+    Platforms[Plataformas móveis]
+    Hazards[Death plane / spikes / DeathBlock]
+    World[World / actors / pickups]
 
-## Wall-contact model (OG plane-based parity, climb-parity-3)
+    Input --> Camera
+    Input --> State
+    Camera --> State
+    State --> Kinematics
+    Kinematics --> Sweep
+    Sweep --> Collision
+    Collision --> State
+    Platforms --> Sweep
+    Platforms --> Kinematics
+    Hazards --> State
+    World --> State
+```
 
-| Aspect | Value |
-|---|---|
-| Wall normal source | Face-plane normal from the owning triangle (`QueryWallsFacePlane`), oriented toward the query point; stable across seams/corners (no sphere-closest-point diagonal) |
-| Wall gate | `|plane_normal.y| < 0.35` (OG `ClimbNormalCheck`) — only near-vertical faces are walls; slopes are never grab surfaces |
-| Probe anchors | Waist = feet + 3 (`climb_waist_offset`), head = feet + 10; probe radius = `climb_check_dist` (4, OG `ClimbCheckDist`); pushout = 3 (OG `WallPushoutDist`) |
-| Grip identity | Persistent — climb re-acquires the stored `grip_face_id` (static-collmesh triangle) rather than the nearest-any-wall normal; updates only on a genuine wall change (corner traversal) |
-| Positional pushout | Full-3D (`plane_normal` × pushout), per-substep vertical cap ±6 units — yields free step-up over ankle/knee-high ledges |
-| Velocity removal | **Impact-only**: on contact-edge substeps or when motion drives >1 unit deeper into the wall, remove the into-normal component once against the true face plane. Resting contact never edits velocity — no continuous fall damping |
-| Wall-contact flag | **Physical-only** (body-center sphere). The motor's waist-flag OR (`RunWallFlagFromWaist`) is GONE — climb entry runs its own `TryClimb` waist query, so the flag no longer inflates phantom grabs |
-| Climb collision radius | `climb_collision_radius` (3.0 = OG `WallPushoutDist`) while Climbing — makes the entry anchor a zero-popout equilibrium; `radius` (5.0) otherwise (Normal-state convenience) |
-| Fall speed at walls | Preserved exactly (tangential), so brushing a seam no longer eats `vy`; slide is full fall speed (no separate slide state, OG-faithful) |
-| Floor sweep acceptance | Sphere-sweep floor requires `normal.y >= 0.70` outright, OR `>= 0.35` plus a downward-raycast floor confirmation at the sweep point. Raycast-path floor gate stays `0.35`. Kills mid-wall diagonal "grounded" hooks |
-| One-way / death | Handled at the face layer as before (pass-through from below, death material) |
+### Estados do jogador
 
-### Documented deviations from OG (deliberate, device-reviewable)
+Estados declarados em `Player`:
 
-1. **Entry facing gate** `|dot(normal, -facing)| >= 0.5` is KEPT. OG's
-   `ClimbCheckAt` has NO dot threshold — the prefer vector only RANKS
-   candidates (a lone wall behind her still returns a hit). The demake narrows
-   the grab set to target the phantom-latch complaint. To restore OG-authentic
-   side/behind grabs, delete the `facing_wall` conjunct in the entry block
-   (one line).
-2. **2-tick mantle confirm** is retained (OG hops instantly). The demake's
-   confirm rejects a single-frame lip-probe flicker; OG tolerates ~1 frame of
-   probe noise because it re-grabs via `TryClimb`. If device shows >50 ms
-   lip-lag, revisit with a capture rather than silently flipping.
+`Normal`, `Dashing`, `Skidding`, `Climbing`, `StrawbGet`, `FeatherStart`, `Feather`, `Respawn`, `Dead`, `StrawbReveal`, `Cutscene`, `Bubble`, `Cassette`.
 
-The seam-pump (43 `[climb] START`/tick) is fixed by the plane-based face normals
-+ persistent grip identity: seams no longer produce a diagonal normal that
-flips the release check or eats fall speed.
+Somente `Normal`, `Dashing`, `Skidding`, `Climbing`, `FeatherStart` e `Feather` têm comportamento de locomoção principal. Estados de interação/cutscene suspendem ou substituem a física normal.
 
-## Known non-goals
+## 3. Controles
 
-- No 8-way dash quantization while the demake remains analog-first.
-- No physical skid state; skid can return later as animation/VFX.
-- Controller-local hitstop (0.02s), not OG world-level freeze.
+### 3.1 Ações
+
+| Ação    | Teclado padrão                                                                | Mouse                                             | Controle                                         |
+| --------- | ------------------------------------------------------------------------------ | ------------------------------------------------- | ------------------------------------------------ |
+| Mover     | WASD quando mouse controla câmera; setas quando teclado controla câmera      | —                                                | Analógico esquerdo                              |
+| Câmera   | WASD quando teclado controla câmera                                           | Movimento do mouse quando mouse controla câmera  | Analógico direito                               |
+| Pular     | `C`, `Space`                                                               | —                                                | `South` ou `North`                           |
+| Dash      | `X`                                                                          | Botão esquerdo ou direito, no modo mouse-câmera | `West` ou `East`                             |
+| Escalar   | `Z`, `V`, `LeftShift`, `RightShift`, `LeftControl`, `RightControl` | —                                                | Ombro esquerdo/direito; gatilho esquerdo/direito |
+| Pausar    | `Enter`, `Escape`                                                          | —                                                | `Start`, `Guide`, `Back`                   |
+| Confirmar | `C`                                                                          | Esquerdo, no modo mouse-câmera                   | `South` no Xbox; `East` no Nintendo          |
+| Cancelar  | `X`                                                                          | Direito, no modo mouse-câmera                    | `East` no Xbox; `South` no Nintendo          |
+
+Bindings são configuráveis em `controls.json`. `Jump` e `Dash` têm buffer de pressão de `0.1 s` no dispositivo virtual; `Climb` usa estado contínuo (`Down`).
+
+### 3.2 Movimento relativo à câmera
+
+1. Se não há entrada, vetor de movimento é zero.
+2. `forward` vem de `(Camera.LookAt - Camera.Position).XY()`.
+3. `side` é `forward` rotacionado 90°.
+4. Entrada é invertida no eixo usado pelo jogo e normalizada.
+5. Resultado:
+
+```text
+relativeInput = forward * input.Y + side * input.X
+```
+
+Quando entrada aponta quase exatamente para frente (`dot >= 0.985`), direção é fixada em `Vec2.UnitY` para evitar ruído analógico.
+
+### 3.3 Câmera
+
+- Rotação horizontal: `4 rad/s` multiplicado por `Time.Delta`.
+- Zoom: eixo vertical altera distância em `1 unidade/s`.
+- Distância normalizada é limitada a `[0, 1]`.
+- Sem entrada, distância tende a múltiplos de `1/3`.
+- Câmera usa `InvertCamera` independente nos eixos X/Y.
+- Câmera fixa de fase substitui posição normal.
+- Raycast impede câmera de atravessar parede e teto.
+
+## 4. Ciclo de atualização
