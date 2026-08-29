@@ -459,7 +459,7 @@ criterion below is the closure check, not the discovery mechanism.
 - Done: grep `player_motor` returns only plan/docs; ELF builds; device capture
   shows normal boot + walk.
 
-### Inc 3 — Climb onto the mover + clip regressions (M)
+### Inc 3 — Climb onto the mover + clip regressions (M) — [done]
 **Depends on:** 2 (1 transitively)
 **Unblocks:** 4, 5
 **Done criteria:** climb entry/corner/mantle all request motion through

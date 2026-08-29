@@ -183,6 +183,10 @@ run_cpp wall_slide_seam_smoke tests/wall_slide_seam_smoke.cpp \
     src/user/gameplay/physics/coll_mesh.cpp \
     src/user/gameplay/physics/geom.cpp
 
+# og-mover-overhaul Inc 3: climb onto the single mover — corner adopt + fast
+# dash must never leave residual penetration or tunnel through the wall.
+run_cpp climb_no_clip_smoke tests/climb_no_clip_smoke.cpp "${GAMEPLAY_LINK[@]}"
+
 # wall-climb-overhaul Inc 1: plane-based wall query returns stable face
 # normals (no seam diagonal) and rejects slopes (OG ClimbNormalCheck).
 run_cpp wall_plane_query_smoke tests/wall_plane_query_smoke.cpp \
