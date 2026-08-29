@@ -49,6 +49,15 @@ Implemented:
   camera-position follow tightens (`0.0001` vs resting `0.01`) so the perceived
   zoom isn't gated by the ~7%/frame follow lag. Orbit/follow/FOV stay OG-exact
   otherwise.
+- **Single-mover overhaul** (`.plans/og-mover-overhaul/`): movement/collision now
+  run OG Celeste64's ONE `SweepTestMove` + `Popout` mover via `MoveService`
+  (`player_movement.{hpp,cpp}`), called once per tick from
+  `PlayerController::MovePhase`. The old `PlayerMotor` (four parallel repair
+  paths) is DELETED. Wall/floor clipping is closed by construction: every tick
+  ends in a "popped-out" state, so a position inside any wall face is
+  impossible. OG feel ported: Skidding state, dash rotate-steering, 0.10 s dash
+  input buffer, OG 0.10 s jump buffer, slope max-speed modulation, analog
+  magnitude map. Host fixtures + `[move]` device telemetry validate.
 
 Generated ROM:
 
@@ -145,7 +154,7 @@ The current code intentionally separates gameplay rules from the engine-facing R
 Gameplay layer in `src/user/gameplay/`:
 
 - `actor/` - Actor base, BobbingActor, SpringActor, RefillActor, StrawberryActor
-- `player/` - player_controller, player_motor, camera_controller, player_state, movement_config
+- `player/` - player_controller, player_movement (single mover; PlayerMotor deleted), player_state, movement_config, camera_controller
 - `world/` - world, room_data, collectible, respawn_system
 - `scene/` - scene, scene_manager, gameplay_scene
 - Root: math_types, physics_contracts, arena, save_system, placeholder_catalog, debug_hud, rom_telemetry

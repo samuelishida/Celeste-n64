@@ -94,3 +94,51 @@ Quando entrada aponta quase exatamente para frente (`dot >= 0.985`), direção �
 - Raycast impede câmera de atravessar parede e teto.
 
 ## 4. Ciclo de atualização
+
+## Demake implementation (og-mover-overhaul)
+
+O demake (N64, +Y up) implementa o mover único do OG com `MoveService`
+(`src/user/gameplay/player/player_movement.{hpp,cpp}`), chamado uma vez por tick
+pelo `PlayerController::MovePhase`. Substituiu o antigo `PlayerMotor`
+(desligado no Inc 2), que mantinha quatro caminhos de reparo paralelos — a causa
+da queda de clipping em paredes e pisos.
+
+Mapeamento mover (OG Z-up → demake +Y-up, âncora nos pés: `feet =
+center.y - player_half_height`):
+
+| OG (Player.cs)            | Demake                                                        |
+|---------------------------|---------------------------------------------------------------|
+| `SweepTestMove` (642-660) | `MoveService::SweepMove` — subpassos de 2 u + `Popout`         |
+| `Popout` (669-718)        | `MoveService::Popout` — ground → ceiling → wall (waist+head)   |
+| `GroundCheck` (2280-2295) | ray desce de `feet+5`, len `5.01`, gate `FloorNormalCheck`     |
+| `CeilingCheck` (2297-2308)| ray sobe de `feet+1`, altura `12`                              |
+| `SolidWallCheckNearest` (World.cs 556-571) | `QueryWallPushout` (waist `feet+3`, head `feet+10`, raio 3) |
+| ground snap (399-406)     | `GroundSnap` — ray desce `5`, gate cooldown `0.10` gated field  |
+
+Remoções:
+- snap de chão de 50 u (`PlayerMotorConfig::ground_snap_distance = 50`) → ray
+  de `5` do OG (gate no campo existente `ground_snap_cooldown_remaining`).
+- verificações de contato dentro dos subpassos → `Popout` dentro do `SweepMove`.
+- gates paralelos de piso por esfera → ray `GroundCheck` único com o
+  `FloorNormalCheck` do OG.
+
+### Ledger de desvios
+1. kill plane `-200` (mundo do demake) vs OG `-100` — diferença de mundo, não
+   de feel.
+2. hitstop do dash é local do controlador (OG congela o mundo).
+3. zoom da câmera `1.8/1.0` — desvio pré-existente documentado.
+4. gate de entrada de escalada por facing-dot `>= 0.5` — OG não tem dot-gate.
+5. confirmação de mantle em 2 ticks (OG instantânea).
+6. raio de colisão de escalada 3 com raio de visibilidade de entrada 5
+   (desvio documentado do climb-parity-3, mantido).
+7. distância de repouso em parede no estado Normal agora é 3 (OG WallPushoutDist)
+   — mudou do raio antigo de tangência 5 do motor (decisão og-mover-overhaul,
+   fixada no fixture (e) de move_service_smoke).
+8. ground snap: ray desce 5 com cooldown `0.10` — mecanismo do próprio OG
+   (listado por completude, não é desvio).
+9. clamps de velocidade de plataforma `Z [0,180]` / `XY 300` (OG
+   `AddPlatformVelocity`).
+
+Sem clipping por construção: toda tick termina num estado "popped-out"
+(`SweepMove` + `Popout(false)` final), de modo que a posição fica fora de toda
+face de parede.

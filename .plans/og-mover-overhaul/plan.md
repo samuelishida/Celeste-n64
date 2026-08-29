@@ -524,7 +524,7 @@ fixtures green; a fast exit-dash at a corner cannot pass through the wall
 - Done: fixtures + capture; grep shows no direct `position` writes outside
   `SweepMove`/ease in climb paths (allow-listed ease block only).
 
-### Inc 4 — OG feel: dash buffers/steering + Skid + ledge-avoid + slope/analog (M)
+### Inc 4 — OG feel: dash buffers/steering + Skid + ledge-avoid + slope/analog (M) — [done]
 **Depends on:** 2, 3 (serialized after 3 — both edit
 player_controller.cpp; ledge-avoid rays interact with climb entry probes)
 **Unblocks:** 5
