@@ -301,6 +301,29 @@ static int QueryWallsFacePlaneMesh(const Room& room, const physics::CollMesh& me
         const float pushout = radius - dist;
         if (pushout < 0.0f) continue;
 
+        // Geometry-bound the hit to the triangle's actual vertex extents. The
+        // plane query projects onto the face's INFINITE plane, so a probe
+        // beyond the wall's vertical top or an open vertical edge (a triangle
+        // BOUNDARY, not geometry) would otherwise still "hit" and phantom-
+        // grab → instant-release pump (climb-parity-3/inc5 device gate:
+        // START+release grip_lost every frame at pos=(5.0,50.3,35.4) where the
+        // nearest face ends above/beside the waist). OG's ClimbCheckAt misses
+        // against ACTUAL geometry — a face ends at its triangle vertices.
+        // Same bounding LedgeHopMiss applies (player_controller.cpp); keeping
+        // a small tangent skin so the pushout-tangent boundary still grabs.
+        {
+            Vec3 vmin = {std::min(a.x, std::min(b.x, c.x)),
+                         std::min(a.y, std::min(b.y, c.y)),
+                         std::min(a.z, std::min(b.z, c.z))};
+            Vec3 vmax = {std::max(a.x, std::max(b.x, c.x)),
+                         std::max(a.y, std::max(b.y, c.y)),
+                         std::max(a.z, std::max(b.z, c.z))};
+            constexpr float kSkin = 0.5f;
+            if (closest.x < vmin.x - kSkin || closest.x > vmax.x + kSkin) continue;
+            if (closest.y < vmin.y - kSkin || closest.y > vmax.y + kSkin) continue;
+            if (closest.z < vmin.z - kSkin || closest.z > vmax.z + kSkin) continue;
+        }
+
         if (diagnostics) ++diagnostics->wall_candidate_hits;
         OwnerInfo owner = ResolveOwner(mesh, room, fid);
         out_hits[count++] = WallHit{
