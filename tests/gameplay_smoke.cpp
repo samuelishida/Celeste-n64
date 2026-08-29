@@ -158,6 +158,28 @@ int main() {
         assert(player.velocity.y > 0.0f);
     }
 
+    // --- climb-parity-3 Inc 2: Normal-state directional walljump (S3) with
+    //     the room == nullptr shim: wall_contact=true + fresh waist-query
+    //     shim → SET-away velocity + facing flips away from the wall. ---
+    {
+        PlayerState player;
+        player.grounded = false;
+        player.wall_contact = true;
+        player.wall_normal = {1.0f, 0.0f, 0.0f};   // wall to the -x side
+        player.last_facing = {-1.0f, 0.0f, 0.0f};  // facing into the wall
+        player.velocity.y = -20.0f;                // falling
+
+        PlayerInput njump_input;
+        njump_input.jump_pressed = true;
+        njump_input.jump_held = true;
+        controller.Step(player, njump_input, camera_forward, 1.0f / 60.0f);
+        assert(player.movement_state == PlayerMovementState::Normal);
+        // SET (not add): falling -20 must not bias the launch.
+        assert(player.velocity.y == config.wall_jump_speed_y);
+        assert(player.velocity.x == config.wall_jump_speed_x);
+        assert(player.target_facing.x > 0.0f);     // now facing away
+    }
+
     // --- Climb wall identity: motor's nearest-wall normal flipping between
     //     adjacent faces near an edge/corner must NOT eject the climb. ---
     {

@@ -543,8 +543,14 @@ void PlayerController::StatePhase(
         return;
     }
 
-    // Climb entry — OG Celeste64: grab any solid wall (grounded or airborne).
-    // Input gate (Player.cs:848): stick neutral OR pushing into the wall.
+    // Climb entry — OG TryClimb parity (Player.cs:856-880 + SolidWallCheck):
+    // own waist-plane query (radius climb_check_dist, prefer -facing),
+    // neutral-or-into-wall input gate, ClimbNormalCheck gate (inside the
+    // query), plus the OG airborne rising +4-unit snap-up variant
+    // (Velocity.y > 0 && !grounded → probe waist + 4). The facing gate
+    // (wall_facing_dot >= 0.5) is a KEPT documented deviation (M2): OG ranks
+    // candidates by prefer only and never dot-gates; the narrower grab set
+    // targets the phantom-latch complaint (movement_spec.md, Inc 5).
     {
         Vec3 entry_normal = state.wall_normal;
         const bool entry_normal_valid = LengthXZ(entry_normal) > 0.1f;
@@ -557,63 +563,128 @@ void PlayerController::StatePhase(
         const bool into_wall_input = !context.has_move_input ||
                                      DotXZ(context.move_input, entry_normal) <= -0.5f;
 
+        // OG airborne snap-up: only grab a higher wall while RISING and
+        // airborne (Velocity.y > 0, Player.cs TryClimb +4 UnitZ variant).
+        const bool airborne_rising = !state.grounded && state.velocity.y > 0.0f;
+
+        bool grab = false;
+        WallHit entry_hit{};
         if (input.climb_held &&
             state.climb.cooldown_remaining <= 0.0f &&
-            state.wall_contact &&
-            entry_normal_valid &&
             facing_wall &&
             into_wall_input) {
-            // into-wall direction for the entry probe (used by the identity
-            // capture + anchor below).
-            const Vec3 into_wall_dir = {-state.last_facing.x, 0.0f, -state.last_facing.z};
+            if (room != nullptr) {
+                // OG path: her OWN waist query decides — no motor flag. The
+                // entry probe uses the visibility radius (wall_probe_radius,
+                // = motor tangent rest distance 5 > climb_check_dist 4): at
+                // exact tangency she rests with her waist one unit beyond
+                // probe-4 reach, yet OG still grabs there (Popout first pulls
+                // her in; dist == radius counts as touching). Entry then
+                // re-anchors to the OG TryClimb spot, after which the r4
+                // sustain probe governs. The +4 snap-up variant uses r4 (OG:
+                // ClimbCheckDist reach above the lip).
+                const Vec3 into_wall_dir = {-state.last_facing.x, 0.0f, -state.last_facing.z};
+                entry_hit = QueryClimbWall(*room, ClimbWaistPoint(state, config_),
+                                           config_.wall_probe_radius, into_wall_dir);
+                if (!entry_hit.hit && airborne_rising) {
+                    entry_hit = ClimbCheckAt(state, config_, room, 4.0f);
+                }
+                grab = entry_hit.hit;
+            } else {
+                // room == nullptr shim (controller-only fixtures): keep the
+                // flag-based entry so controller-only suites keep working.
+                grab = state.wall_contact;
+            }
+        }
+
+        if (grab) {
             state.movement_state = PlayerMovementState::Climbing;
             state.locomotion_state = LocomotionState::Climb;
-            state.climb.wall_normal = entry_normal;
-            // Capture the gripped face identity via the unified plane query
-            // (climb-parity-3 Inc 1: same query family as sustain) and
-            // REPOSITION to the OG TryClimb anchor: center = wall point +
-            // (half_height - waist_offset) up + pushout out along the normal.
-            // This is the coupled minimum that makes the tighter radius-4
-            // sustain probe geometrically valid: the motor's Normal-radius
-            // popout can rest her waist 5 units from the face (out of probe
-            // reach), so entry must re-anchor before the first sustain tick.
-            // (The full OG TryClimb + tunnel guard + airborne snap-up land in
-            // Inc 2; plan notes this pull-forward.)
-            bool anchored = false;
-            if (room != nullptr) {
-                const WallHit gripped = QueryClimbWall(
-                    *room, ClimbWaistPoint(state, config_),
-                    config_.wall_probe_radius, into_wall_dir);
-                if (gripped.hit) {
-                    state.climb.wall_normal = gripped.plane_normal;
-                    state.climb.grip_face_id = gripped.face_id;
+            if (room != nullptr && entry_hit.hit) {
+                state.climb.wall_normal = entry_hit.plane_normal;
+                state.climb.grip_face_id = entry_hit.face_id;
+                // OG TryClimb reposition, single-frame snap (climb radius 3.0
+                // makes this the zero-popout equilibrium): center = wall point
+                // + (half_height - waist_offset) up + pushout along the normal.
+                const Vec3 pre_snap = state.position;
+                state.position = {
+                    entry_hit.point.x + entry_hit.plane_normal.x * config_.climb_pushout_dist,
+                    entry_hit.point.y + (config_.player_half_height - config_.climb_waist_offset),
+                    entry_hit.point.z + entry_hit.plane_normal.z * config_.climb_pushout_dist,
+                };
+                // Tunnel guard (review pass 2 C2): if the snap left her with
+                // NO wall face at the climb radius, walk the snap back 50%...
+                WallHit sanity = QueryWallNearest(*room, state.position,
+                                                  config_.climb_pushout_dist);
+                if (!sanity.hit) {
                     state.position = {
-                        gripped.point.x + gripped.plane_normal.x * config_.climb_pushout_dist,
-                        gripped.point.y + (config_.player_half_height - config_.climb_waist_offset),
-                        gripped.point.z + gripped.plane_normal.z * config_.climb_pushout_dist,
+                        pre_snap.x + (state.position.x - pre_snap.x) * 0.5f,
+                        pre_snap.y + (state.position.y - pre_snap.y) * 0.5f,
+                        pre_snap.z + (state.position.z - pre_snap.z) * 0.5f,
                     };
-                    anchored = true;
                 }
+                // Cap the snap: never more than 3 units of net movement per
+                // axis (OG moves via SweepTestMove; single-snap same bound).
+                const float dx = state.position.x - pre_snap.x;
+                const float dy = state.position.y - pre_snap.y;
+                const float dz = state.position.z - pre_snap.z;
+                constexpr float kMaxSnapPerAxis = 3.0f;
+                if (std::fabs(dx) > kMaxSnapPerAxis || std::fabs(dy) > kMaxSnapPerAxis ||
+                    std::fabs(dz) > kMaxSnapPerAxis) {
+                    state.position = {
+                        pre_snap.x + Clamp(dx, -kMaxSnapPerAxis, kMaxSnapPerAxis),
+                        pre_snap.y + Clamp(dy, -kMaxSnapPerAxis, kMaxSnapPerAxis),
+                        pre_snap.z + Clamp(dz, -kMaxSnapPerAxis, kMaxSnapPerAxis),
+                    };
+                }
+                // OG sets facing INTO the wall on grab.
+                state.target_facing = NormalizeXZ(
+                    {-entry_hit.plane_normal.x, 0.0f, -entry_hit.plane_normal.z},
+                    state.target_facing);
+                state.last_facing = state.target_facing;
             }
-            (void)anchored;
             state.velocity = {};
             return;
         }
     }
 
     // Directional wall jump (without grab): SET velocity away from the wall.
+    // OG WallJumpCheck parity (Player.cs:900-910): a FRESH waist query decides
+    // — not the motor's stale flag. room==nullptr shim keeps controller-only
+    // fixtures on the flag path (same shim as climb entry).
     if (!state.grounded &&
         input.jump_pressed &&
-        state.wall_contact) {
-        const Vec3 jump_dir = NormalizeXZ(state.wall_normal,
-            Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
-        state.target_facing = jump_dir;
-        state.last_facing = jump_dir;
-        state.velocity.x = jump_dir.x * config_.wall_jump_speed_x;
-        state.velocity.y = config_.wall_jump_speed_y;
-        state.velocity.z = jump_dir.z * config_.wall_jump_speed_x;
-        state.hold_jump_speed = config_.jump_speed;
-        state.hold_jump_time_remaining = config_.jump_hold_time;
+        !input.jump_press_consumed) {
+        bool wall_jump = false;
+        Vec3 jump_dir{};
+        float pushout_scale = 0.0f;
+        if (room != nullptr) {
+            const WallHit hit = ClimbCheckAt(state, config_, room);
+            if (hit.hit) {
+                wall_jump = true;
+                jump_dir = NormalizeXZ(hit.plane_normal,
+                    Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
+                // OG WallJumpCheck pushes her out along the face proportionally:
+                // pushout * (WallPushoutDist / ClimbCheckDist).
+                pushout_scale = config_.climb_pushout_dist / config_.climb_check_dist;
+                const float away = hit.pushout * pushout_scale;
+                state.position.x += hit.plane_normal.x * away;
+                state.position.z += hit.plane_normal.z * away;
+            }
+        } else if (state.wall_contact) {
+            wall_jump = true;
+            jump_dir = NormalizeXZ(state.wall_normal,
+                Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
+        }
+        if (wall_jump) {
+            state.target_facing = jump_dir;
+            state.last_facing = jump_dir;
+            state.velocity.x = jump_dir.x * config_.wall_jump_speed_x;
+            state.velocity.y = config_.wall_jump_speed_y;
+            state.velocity.z = jump_dir.z * config_.wall_jump_speed_x;
+            state.hold_jump_speed = config_.jump_speed;
+            state.hold_jump_time_remaining = config_.jump_hold_time;
+        }
     }
 
     if (input.dash_pressed &&

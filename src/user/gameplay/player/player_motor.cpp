@@ -184,25 +184,11 @@ void RunWallContact(PlayerState& state, MotorResult& result, const Room& room,
     if (FaceIsDeath(room, wall.face_id)) result.death = true;
 }
 
-// Sources the wall_contact FLAG from the plane-based waist probe (the same
-// query the climb controller uses), OR'd with the body-center sweep so the
-// motor and controller agree on grip. This does NOT move the body — popout is
-// handled by RunWallContact at body-center. It is called once per tick (the
-// end-of-tick pass) so climb entry sees a stable flag even when the body-center
-// sphere would miss a face the waist is gripping.
-void RunWallFlagFromWaist(PlayerState& state, const Room& room, float radius,
-                          float waist_offset) {
-    if (!room.coll_mesh) return;
-    const Vec3 waist = {state.position.x,
-                        state.position.y + waist_offset,
-                        state.position.z};
-    const Vec3 into_wall = {-state.last_facing.x, 0.0f, -state.last_facing.z};
-    const WallHit gripped = QueryWallClosestToFace(room, waist, radius, into_wall);
-    if (gripped.hit && !FaceIsOneWay(room, gripped.face_id)) {
-        state.wall_contact = true;
-        state.wall_normal = gripped.plane_normal;
-    }
-}
+// RunWallFlagFromWaist DELETED (climb-parity-3 Inc 2, OG wall_contact de-OR):
+// the flag is body-sphere physical contact only now. Climb does its own waist
+// query (TryClimb parity); the OR inflated wall_contact whenever any
+// near-vertical face was within radius 5 in front of the body — the phantom
+// latch-report source (plan Context #1/#3).
 
 }  // namespace
 
@@ -322,11 +308,8 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
                        ? config_.climb_collision_radius
                        : config_.radius,
                    delta_seconds, wall_contact_this_tick);
-    // Waist plane-query flag source (OG parity): the motor and the climb
-    // controller must agree on wall contact. This ORs a stable face-plane grip
-    // at the waist so climb entry sees wall_contact even where the body-center
-    // sphere would miss; it does not move the body (popout already ran above).
-    RunWallFlagFromWaist(state, room, config_.radius, config_.wall_probe_center_offset);
+    // RunWallFlagFromWaist call DELETED (climb-parity-3 Inc 2): wall_contact
+    // is physical-only. Climb entry runs its own TryClimb waist query.
     result.wall_contact = state.wall_contact;
 
     state.grounded = false;

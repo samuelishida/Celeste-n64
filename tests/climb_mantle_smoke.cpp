@@ -8,6 +8,9 @@
 //   4. releasing exits cleanly with no residual XZ velocity,
 //   5. jump from climb SETS velocity away from the wall.
 // Inc 3 adds: 6. ledge-hop mantle onto the wall top.
+// climb-parity-3 Inc 2 adds: 12. OG TryClimb entry reposition (center at
+//    wall.point + {0, half_height - waist_offset, 0} + n*pushout), and
+//    13. 30-tick climb equilibrium (zero-popout, drift < 0.5).
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -621,6 +624,60 @@ int main() {
                entries, exits, st.position.y, st.climb.grip_face_id);
         if (entries != 1 || exits != 0) {
             printf("FAIL: corner climb pumped (%d entries, %d exits)\n", entries, exits);
+            return 1;
+        }
+    }
+
+    // --- 12 (climb-parity-3 Inc 2): OG TryClimb entry reposition. On grab,
+    // the CENTER must land at wall.point + {0, half_height - waist_offset, 0}
+    // + normal*pushout — here wall z=5, normal +z, wall point.y at the waist:
+    // center = (unchanged_x, wall_point.y + 7, 5 + 3 = 8).
+    {
+        Harness h;
+        h.Setup(30.0f);
+        if (!h.EnterClimb(MakeInput(true))) {
+            printf("FAIL: entry-repos test never entered Climbing\n");
+            return 1;
+        }
+        // Wall plane z=5, normal +z → anchored center z must be 8
+        // (wall.Point.z + pushout), hanging with waist at wall point height.
+        const float expected_center_z = 5.0f + 3.0f;
+        const float dz = std::fabs(h.state.position.z - expected_center_z);
+        printf("entry-repos: pos=(%.2f,%.2f,%.2f) expected z=%.2f\n",
+               h.state.position.x, h.state.position.y, h.state.position.z,
+               expected_center_z);
+        if (dz > 0.5f) {
+            printf("FAIL: entry did not re-anchor to wall.point + n*3 (dz=%.2f)\n", dz);
+            return 1;
+        }
+    }
+
+    // --- 13 (climb-parity-3 Inc 2): zero-popout equilibrium — after the
+    // grab, 30 neutral climb ticks must not drift the position (RunWallContact
+    // at climb radius 3.0 finds zero penetration at the anchor).
+    {
+        Harness h;
+        h.Setup(30.0f);
+        if (!h.EnterClimb(MakeInput(true))) {
+            printf("FAIL: equilibrium test never entered Climbing\n");
+            return 1;
+        }
+        const Vec3 anchor = h.state.position;
+        int stayed = 0;
+        for (int i = 0; i < 30; ++i) {
+            h.Tick(MakeInput(true));
+            if (h.state.movement_state == PlayerMovementState::Climbing) ++stayed;
+        }
+        const float drift = std::fabs(h.state.position.x - anchor.x) +
+                            std::fabs(h.state.position.y - anchor.y) +
+                            std::fabs(h.state.position.z - anchor.z);
+        printf("equilibrium: stayed=%d/30 drift=%.4f\n", stayed, drift);
+        if (stayed != 30) {
+            printf("FAIL: climb did not sustain the 30-tick equilibrium\n");
+            return 1;
+        }
+        if (drift > 0.5f) {
+            printf("FAIL: climb anchor drifted (popout oscillation, drift=%.3f)\n", drift);
             return 1;
         }
     }
