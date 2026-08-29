@@ -1,0 +1,342 @@
+Loaded madeline_cube_rom
+Vulkan Enabled: using paraLLEl-RDP
+dfs_init: OK
+test_marker: NOT FOUND
+[skybox] initialized
+[hud] rdpq_font_load rom:/fnt/Renogare.font64 OK
+[model] loaded: rom:/mdl/strawberry.t3dm
+[model] loaded: rom:/mdl/tape_1.t3dm
+[model] file not found: rom:/mdl/player.t3dm
+[init] FATAL: madeline model missing at rom:/mdl/player.t3dm
+[model] loaded: rom:/mdl/room_fixture.t3dm
+[init] ENTRY: mappack_path_pending_=rom:/lvl/forsyken-city/forsyken-city.mappack lvl_path_=rom:/lvl/1-1.lvl
+[init] Calling BootMapPack(rom:/lvl/forsyken-city/forsyken-city.mappack)
+[mappack] BootMapPack ENTRY: path=rom:/lvl/forsyken-city/forsyken-city.mappack
+[mappack] v2 loaded rom:/lvl/forsyken-city/forsyken-city.mappack: 45 rooms, start=cell_00_00, global=rom:/lvl/forsyken-city/forsyken-city.colmesh (10618 tris)
+[map_runtime] global collision loaded: 10618 tris, 20868 verts
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_00_00.lvl: colliders=0 faces=114 vertices=415 entities=1
+[lvlroom] loaded: 415 verts, 0 batches, 114 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_00_00 (origin 120.0,57.6,120.0)
+[matcat] material[0]=rock_1 OK
+[matcat] material[1]=snow_1 OK
+[matcat] material[2]=girder_wood OK
+[matcat] material[3]=rock_4 OK
+[matcat] material[4]=rock_5 OK
+[matcat] material[5]=girder OK
+[matcat] material[6]=wall_ruined_1 OK
+[matcat] material[7]=wall_ruined_5 OK
+[matcat] material[8]=wood_2 OK
+[matcat] material[9]=wood_4 OK
+[matcat] material[10]=wall_ruined_2 OK
+[matcat] material[11]=wall_ruined_3 OK
+[matcat] material[12]=girder_16 OK
+[matcat] material[13]=rock_2 OK
+[matcat] material[14]=girder_v OK
+[matcat] material[15]=wall_ruined_7 OK
+[matcat] material[16]=wood_1 OK
+[matcat] material[17]=wall_ruined_4 OK
+[matcat] material[18]=metal_floor_1 OK
+[matcat] material[19]=floor_dirty_concrete OK
+[matcat] material[20]=girder_v_16 OK
+[matcat] material[21]=big_decals_1 OK
+[matcat] material[22]=wood_3 OK
+[matcat] material[23]=__TB_empty MISSING (reserved)
+[matcat] material[24]=wall_ruined_6 OK
+[matcat] material[25]=rock_3 OK
+[matcat] material[26]=road1 OK
+[matcat] material[27]=invisible MISSING (reserved)
+[matcat] material[28]=glass_1 OK
+[matcat] material[29]=wood_fragile OK
+[matcat] material[30]=special_floor_1 OK
+[matcat] material[31]=TB_empty NULL
+[matcat] loaded 32 materials from rom:/lvl/forsyken-city/forsyken-city.manifest
+[spawn] authored=(0.00,25.60,89.60) grounded=(0.00,35.63,89.60) grounded=1
+[texroom] loaded: 415 verts, 114 batches, 114 faces, 0 discarded block=yes
+[mappack] booted rom:/lvl/forsyken-city/forsyken-city.mappack: 45 rooms, start=cell_00_00
+[init] BootMapPack SUCCEEDED — use_map_pack_ should be true
+[texroom] loaded: 541 verts, 149 batches, 149 faces, 0 discarded block=yes
+[texroom] loaded: 541 verts, 149 batches, 149 faces, 0 discarded block=yes
+[texroom] loaded: 582 verts, 157 batches, 157 faces, 0 discarded block=yes
+[texroom] loaded: 996 verts, 254 batches, 254 faces, 0 discarded block=yes
+[texroom] loaded: 328 verts, 81 batches, 81 faces, 0 discarded block=yes
+[texroom] loaded: 150 verts, 40 batches, 40 faces, 0 discarded block=yes
+[texroom] loaded: 2280 verts, 591 batches, 591 faces, 0 discarded block=yes
+[texroom] loaded: 3527 verts, 920 batches, 920 faces, 0 discarded block=yes
+[texroom] loaded: 1034 verts, 262 batches, 262 faces, 0 discarded block=yes
+[texroom] loaded: 72 verts, 18 batches, 18 faces, 0 discarded block=yes
+[texroom] loaded: 952 verts, 240 batches, 240 faces, 0 discarded block=yes
+[texroom] loaded: 66 verts, 17 batches, 17 faces, 0 discarded block=yes
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 35.554 ms (28.1 fps) update=0.248 (116.595 peak) ms
+[render-phases] high_priority=0.070 (4.751 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.887 peak) ms
+[render-phases] high_priority=0.072 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.874 peak) ms
+[render-phases] high_priority=0.073 (4.751 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.877 peak) ms
+[render-phases] high_priority=0.074 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.875 peak) ms
+[render-phases] high_priority=0.075 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.873 peak) ms
+[render-phases] high_priority=0.078 (4.755 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.869 peak) ms
+[render-phases] high_priority=0.079 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.879 peak) ms
+[render-phases] high_priority=0.079 (4.751 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.124 ms (30.2 fps) update=0.248 (14.882 peak) ms
+[render-phases] high_priority=0.070 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.874 peak) ms
+[render-phases] high_priority=0.072 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.416 ms (29.9 fps) update=0.248 (14.868 peak) ms
+[render-phases] high_priority=0.075 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.872 peak) ms
+[render-phases] high_priority=0.070 (4.754 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.887 peak) ms
+[render-phases] high_priority=0.072 (4.755 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.885 peak) ms
+[render-phases] high_priority=0.073 (4.755 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.876 peak) ms
+[render-phases] high_priority=0.074 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.862 peak) ms
+[render-phases] high_priority=0.075 (4.751 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.893 peak) ms
+[render-phases] high_priority=0.078 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.872 peak) ms
+[render-phases] high_priority=0.079 (4.755 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.873 peak) ms
+[render-phases] high_priority=0.079 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.124 ms (30.2 fps) update=0.248 (14.881 peak) ms
+[render-phases] high_priority=0.070 (4.756 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.870 peak) ms
+[render-phases] high_priority=0.072 (4.751 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.416 ms (29.9 fps) update=0.248 (14.870 peak) ms
+[render-phases] high_priority=0.075 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.136 ms (30.2 fps) update=0.248 (14.881 peak) ms
+[render-phases] high_priority=0.070 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.883 peak) ms
+[render-phases] high_priority=0.072 (4.751 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.874 peak) ms
+[render-phases] high_priority=0.073 (4.755 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.874 peak) ms
+[render-phases] high_priority=0.074 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.874 peak) ms
+[render-phases] high_priority=0.075 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.875 peak) ms
+[render-phases] high_priority=0.078 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.872 peak) ms
+[render-phases] high_priority=0.079 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.887 peak) ms
+[render-phases] high_priority=0.079 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.403 ms (29.9 fps) update=0.248 (14.877 peak) ms
+[render-phases] high_priority=0.070 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.136 ms (30.2 fps) update=0.248 (14.872 peak) ms
+[render-phases] high_priority=0.072 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.416 ms (29.9 fps) update=0.248 (14.871 peak) ms
+[render-phases] high_priority=0.075 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.877 peak) ms
+[render-phases] high_priority=0.070 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.890 peak) ms
+[render-phases] high_priority=0.072 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.883 peak) ms
+[render-phases] high_priority=0.073 (4.755 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.874 peak) ms
+[render-phases] high_priority=0.074 (4.756 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.866 peak) ms
+[render-phases] high_priority=0.075 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.882 peak) ms
+[render-phases] high_priority=0.078 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.213 ms (30.1 fps) update=0.248 (14.885 peak) ms
+[render-phases] high_priority=0.079 (4.754 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.335 ms (30.0 fps) update=0.248 (14.869 peak) ms
+[render-phases] high_priority=0.079 (4.756 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.403 ms (29.9 fps) update=0.248 (14.870 peak) ms
+[render-phases] high_priority=0.070 (4.755 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.136 ms (30.2 fps) update=0.248 (14.874 peak) ms
+[render-phases] high_priority=0.072 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.416 ms (29.9 fps) update=0.248 (14.871 peak) ms
+[render-phases] high_priority=0.075 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.870 peak) ms
+[render-phases] high_priority=0.070 (4.758 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.879 peak) ms
+[render-phases] high_priority=0.072 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.879 peak) ms
+[render-phases] high_priority=0.073 (4.755 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.875 peak) ms
+[render-phases] high_priority=0.074 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.874 peak) ms
+[render-phases] high_priority=0.075 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.871 peak) ms
+[render-phases] high_priority=0.078 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.872 peak) ms
+[render-phases] high_priority=0.079 (4.754 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.880 peak) ms
+[render-phases] high_priority=0.079 (4.751 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.403 ms (29.9 fps) update=0.248 (14.876 peak) ms
+[render-phases] high_priority=0.070 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.873 peak) ms
+[render-phases] high_priority=0.072 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.137 ms (30.2 fps) update=0.248 (14.867 peak) ms
+[render-phases] high_priority=0.075 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.875 peak) ms
+[render-phases] high_priority=0.070 (4.756 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.884 peak) ms
+[render-phases] high_priority=0.072 (4.754 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.135 ms (30.2 fps) update=0.248 (14.887 peak) ms
+[render-phases] high_priority=0.073 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.876 peak) ms
+[render-phases] high_priority=0.074 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[memory] total=2920472 used=2899256 free=21216
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.861 peak) ms
+[render-phases] high_priority=0.075 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.131 ms (30.2 fps) update=0.248 (14.888 peak) ms
+[render-phases] high_priority=0.078 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.872 peak) ms
+[render-phases] high_priority=0.079 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.213 ms (30.1 fps) update=0.248 (14.889 peak) ms
+[render-phases] high_priority=0.079 (4.752 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.325 ms (30.0 fps) update=0.248 (14.880 peak) ms
+[render-phases] high_priority=0.070 (4.756 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.869 peak) ms
+[render-phases] high_priority=0.072 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.137 ms (30.2 fps) update=0.248 (14.871 peak) ms
+[render-phases] high_priority=0.075 (4.757 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.414 ms (29.9 fps) update=0.248 (14.885 peak) ms
+[render-phases] high_priority=0.070 (4.753 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[profiler] avg frame time over 60 frames: 33.413 ms (29.9 fps) update=0.248 (14.886 peak) ms
+[render-phases] high_priority=0.072 (4.756 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13

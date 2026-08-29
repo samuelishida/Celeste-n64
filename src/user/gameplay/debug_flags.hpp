@@ -48,8 +48,10 @@ inline constexpr bool kEnableCellReveal = true;
 // RSP microcode performs the per-triangle winding test when T3D_FLAG_CULL_BACK
 // is set (rspq_triangle.inc FACE_CULLING), rejecting backfaces BEFORE the RDP
 // — a closed city mesh is ~50% backfaces, so this roughly halves RSP triangle
-// work + RDP fill. Safe because the bake asserts reversed_winding_faces=0;
-// default ON after the Inc-1 device orbit verified no inverted faces.
+// work + RDP fill. Default OFF: the og-baked Forsaken City map loses floor
+// textures with culling enabled (user-verified device fix, 2026-08-24
+// backcull baselines); only flip ON after every baked surface is proven
+// double-clean under winding tests.
 inline constexpr bool kEnableBackCull = false;
 
 // render-distance Inc 4/5: the whole-map horizon tier (DLOD) — merged into

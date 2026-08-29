@@ -73,6 +73,12 @@ struct WallHit {
     bool hit = false;
     Vec3 point;
     Vec3 normal;
+    // Owning triangle's geometric plane normal, oriented toward the query
+    // centre (OG SolidWallCheckClosestToNormal parity). Unlike `normal`
+    // (centre-relative, diagonal near seams/edges), this is the true face
+    // plane for face-region contacts. Zero-length when unavailable — callers
+    // must fall back to `normal`.
+    Vec3 plane_normal = {0.0f, 0.0f, 0.0f};
     float pushout = 0.0f;
     int face_id = -1;
     int owner_id = -1;
@@ -186,6 +192,15 @@ GroundHit RaycastRoomSource(const Room& room, const Vec3& origin, const Vec3& di
 GroundHit QueryFloorSource(const Room& room, const Vec3& origin, float max_distance);
 CeilingHit QueryCeilingSource(const Room& room, const Vec3& origin, float max_distance);
 
+// True if a downward raycast from `point` confirms a floor surface (normal.y
+// >= 0.35) within `probe_distance`. Used by the motor to gate sphere-sweep
+// floor acceptance: a sweep can register a wall-adjacent diagonal normal, and
+// the ray (immune to wall overlap) confirms whether a real floor is below.
+inline bool ConfirmFloorByRay(const Room& room, const Vec3& point, float probe_distance) {
+    const GroundHit hit = QueryFloorSource(room, point, probe_distance);
+    return hit.hit && hit.normal.y >= 0.35f;
+}
+
 // Diagnostic floor-support probe used by regression fixtures.
 GroundHit ProbeFloorDebug(const Room& room, const Vec3& position, float half_height,
                           float probe_distance, float radius,
@@ -200,8 +215,49 @@ int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_h
 // Nearest wall: the one with the largest pushout (most overlap).
 WallHit QueryWallNearest(const Room& room, const Vec3& point, float radius);
 
+// True if any solid wall overlaps the sphere (buffer-free wrapper).
+bool QueryWallPresent(const Room& room, const Vec3& point, float radius);
+
 // Wall whose normal is closest to the given direction.
 WallHit QueryWallClosestToNormal(const Room& room, const Vec3& point, float radius, const Vec3& normal);
+
+// OG SolidWallCheck parity: returns all wall hits by plane projection (not
+// sphere-closest-point). For each solid face, the face plane is intersected at
+// the query point's own level and the plane normal is used — stable across
+// seams/edges where a sphere closest-point normal would be diagonal and flip
+// frame-to-frame. Only near-vertical faces (|plane_normal.y| < 0.35, matching
+// OG ClimbNormalCheck) are walls. Returns up to max_hits.
+int QueryWallsFacePlane(const Room& room, const Vec3& point, float radius,
+                        WallHit* out_hits, int max_hits,
+                        CollisionQueryDiagnostics* diagnostics = nullptr);
+
+// OG SolidWallCheckClosestToNormal parity: the plane-projected wall whose
+// normal is closest to `normal` (used for climb entry/sustain grip identity).
+WallHit QueryWallClosestToFace(const Room& room, const Vec3& point, float radius, const Vec3& normal);
+
+// ── Unified climb wall queries (climb-parity-3 Inc 1) ───────────────
+//
+// ONE query family drives ALL climb decisions (grip, ledge, corners): the
+// plane-based QueryWallsFacePlaneMesh path with OG's ClimbNormalCheck gate
+// (|plane_normal.y| < 0.35). The sphere QueryWallPresent/QueryWallNearest
+// family is no longer used on climb paths.
+
+// OG ClimbCheckAt / SolidWallCheckClosestToNormal for climb: plane-based
+// waist query, prefer-ranking candidates by Dot(plane_normal, prefer_dir),
+// enforcing the OG ClimbNormalCheck gate on the returned face. `point` is
+// the waist probe center; `radius` should be climb_check_dist (4).
+WallHit QueryClimbWall(const Room& room, const Vec3& point, float radius, const Vec3& prefer_dir);
+
+// Bool variant (OG ClimbCheckAt's "is there a climbable wall" answer).
+bool QueryClimbWallPresent(const Room& room, const Vec3& point, float radius, const Vec3& prefer_dir);
+
+// Horizontal raycast for OG corner mechanics (inc 3): BackfaceCull::Ignore
+// (baked winding can be inverted) + only hits whose face normal passes the
+// OG ClimbNormalCheck gate. `origin` is typically the waist, `dir` the side/
+// into-wall ray. A ray hitting a slope (|n.y| >= 0.35) reports no hit (OG
+// semantics). Returns a WallHit with the face-plane normal + pushout.
+bool QueryWallRay(const Room& room, const Vec3& origin, const Vec3& direction,
+                  float max_distance, WallHit* out_hit);
 
 // ── WorldCollision (Inc 6) ─────────────────────────────────────────
 //

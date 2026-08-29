@@ -7,3 +7,6 @@ tile-streamer-compaction:
 n64-opt-device-verify-and-telemetry:
   file: n64-opt-device-verify-and-telemetry.md
   description: When verifying N64 ROM changes autonomously (no controller, user away) — kDebugAutoWalk + tools/capture_baseline.sh (rom, wall_seconds, label) is the walk mechanism; near_batches 56 stationary vs 94 walking is the fast signal ([memory] fires only every 3600 frames); elf size delta proves a debug flag is in/out of the build; docs drift from device telemetry — cite the latest capture, not the doc (real arena 2.16 MB stationary / 2.29 MB walking, not the stale 5.48 MB); measure before micro-optimizing (update was 0.194 ms = 0.6% of the RSP-bound frame, gate failed, opt skipped).
+stale-contract-vs-working-tree:
+  file: stale-contract-vs-working-tree.md
+  description: A pre-existing failing test may encode a STALE default, not a bug — before "restoring" a value to satisfy a contract, compare evidence (latest device capture > working tree > comments > test); backcull=false was the user's floor-texture fix and the true-defaulting contract was stale.

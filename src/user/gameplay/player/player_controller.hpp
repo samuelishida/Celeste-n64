@@ -13,6 +13,8 @@ public:
         Vec3 move_input;
         bool has_move_input = false;
         Vec3 dash_momentum = {};
+        // Set by StatePhase when a ledge-hop mantle fired this tick.
+        bool mantle_triggered = false;
     };
 
     explicit PlayerController(MovementConfig config = {});

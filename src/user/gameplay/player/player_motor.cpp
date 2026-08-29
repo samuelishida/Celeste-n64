@@ -12,9 +12,27 @@ namespace madeline_cube {
 namespace {
 
 constexpr float kGroundSkin = 0.01f;
+// OG Celeste64 floor/wall split (Player.cs ClimbNormalCheck): surfaces whose
+// normal is steeper than this are walls, not floors. Applied to raycast ground
+// acceptance so sphere sweeps cannot latch onto vertical faces.
+constexpr float kFloorNormalMinY = 0.35f;
+// Sphere-sweep floor acceptance gate (Inc 3 climb-and-zoom-fix): a sweep
+// sphere overlaps wall faces at t=0 with no distance traveled, so the returned
+// centre-relative normal can carry a spurious Y component on diagonal trim
+// geometry and falsely ground the player mid-wall. Sweeps require a much
+// steeper (≥0.70) normal to be trusted as floor on their own; a sweep with a
+// merely-steep (≥0.35) normal is accepted only if a downward raycast confirms
+// a real floor at the sweep point. The ray is immune to wall overlap, so it
+// disambiguates baked ramps (true faces, ray confirms) from mid-wall diagonal
+// hits (no floor below, ray misses → treated as wall).
+constexpr float kSweepFloorStrongMinY = 0.70f;
 
 float Length(const Vec3& v) {
     return std::sqrt((v.x * v.x) + (v.y * v.y) + (v.z * v.z));
+}
+
+bool IsFloorNormal(const Vec3& n) {
+    return n.y >= kFloorNormalMinY;
 }
 
 void Sanitize(Vec3& v) {
@@ -31,23 +49,33 @@ void RemoveIntoNormal(Vec3& vel, const Vec3& n) {
     vel.z -= n.z * dot;
 }
 
-void RecordWallContact(PlayerState& state, MotorResult& result, const WallHit& wall) {
+// Full-3D popout vertical cap: diagonal seam planes may carry a small legal Y
+// component (ramp walls), but a seam spike must never launch the player.
+constexpr float kMaxPopoutY = 6.0f;
+// OG Popout parity: velocity is modified only on IMPACT — the first wall
+// contact of a tick, or when motion drives more than this many world units
+// INTO the wall in one substep. Resting contact never edits velocity
+// (device-verified zero-net-force rest behavior).
+constexpr float kImpactDriveUnits = 1.0f;
+
+// OG Player.cs:709-712 — remove the full-3D into-plane velocity component
+// once, against the true face plane. Tangential speed (including fall speed
+// down a flat wall) is preserved exactly; only the into-wall part goes.
+void ApplyImpactRemoval(PlayerState& state, const Vec3& n) {
+    const float dot = (state.velocity.x * n.x) + (state.velocity.y * n.y) + (state.velocity.z * n.z);
+    if (dot >= 0.0f) return;
+    state.velocity.x -= n.x * dot;
+    state.velocity.y -= n.y * dot;
+    state.velocity.z -= n.z * dot;
+}
+
+void RecordWallContact(PlayerState& state, MotorResult& result, const WallHit& wall,
+                       const Vec3& recorded_normal) {
     result.wall_contact = true;
     result.wall_face_id = wall.face_id;
-    result.wall_normal = wall.normal;
-    state.wall_normal = wall.normal;
-    // Wall contact: detect walls facing any horizontal direction.
-    // Use wall_normal.x as primary, wall_normal.z as secondary.
-    // The controller uses wall_normal + wall_facing_dot for direction-specific logic,
-    // so wall_left/wall_right just gate "there is a wall" entry.
-    const float h = std::fabs(wall.normal.x) + std::fabs(wall.normal.z);
-    if (h > 0.5f && std::fabs(wall.normal.y) < 0.35f) {
-        // Wall is vertical enough (not floor/ceiling) and has horizontal normal component.
-        // Determine left/right relative to player facing direction.
-        // Cross product of facing with wall normal sign determines side.
-        if (wall.normal.x > 0.5f || wall.normal.z > 0.5f) state.wall_left = true;
-        if (wall.normal.x < -0.5f || wall.normal.z < -0.5f) state.wall_right = true;
-    }
+    result.wall_normal = recorded_normal;
+    state.wall_contact = true;
+    state.wall_normal = recorded_normal;
 }
 
 GroundHit SweepToGroundHit(const Room& room, const physics::SweepSphereHit& sweep, float max_dist) {
@@ -69,15 +97,6 @@ GroundHit SweepToGroundHit(const Room& room, const physics::SweepSphereHit& swee
         .owner_id = owner_id,
         .owner_velocity = owner_velocity,
     };
-}
-
-// Returns true if the face permits climbing.
-// CollMesh faces require MAT_CLIMBABLE; dynamic colliders are always climbable.
-bool FaceIsClimbable(const Room& room, int face_id) {
-    if (face_id < 0) return true;  // dynamic collider
-    if (!room.coll_mesh) return true;  // no mesh — assume climbable
-    if (face_id >= static_cast<int>(room.coll_mesh->header->triangle_count)) return true;  // crafted OOB — safe fallback
-    return (room.coll_mesh->triangles[face_id].material & physics::MAT_CLIMBABLE) != 0;
 }
 
 // Returns true if the face is a death surface (spikes, lava, etc.).
@@ -107,8 +126,9 @@ bool FaceIsIce(const Room& room, int face_id) {
 
 // One-way platforms act as floors only when landing from above. Reject a
 // one-way floor hit when the player's feet are below the platform surface
-// (approaching from below = pass-through).
+// (approaching from below = pass-through). Steep normals are never floor.
 bool AcceptFloorHit(const Room& room, const GroundHit& hit, const Vec3& feet_pos) {
+    if (!IsFloorNormal(hit.normal)) return false;
     if (!FaceIsOneWay(room, hit.face_id)) return true;
     // Landing from above: feet must be above the platform surface.
     return feet_pos.y > hit.point.y;
@@ -132,6 +152,58 @@ void ApplyGroundContact(PlayerState& state, MotorResult& result, const Room& roo
     state.on_oneway = result.on_oneway;
 }
 
+void RunWallContact(PlayerState& state, MotorResult& result, const Room& room,
+                    float radius, float delta_seconds, bool& contact_this_tick) {
+    const WallHit wall = QueryWallNearest(room, state.position, radius);
+    if (!wall.hit || FaceIsOneWay(room, wall.face_id)) return;
+    // Prefer the owning triangle's plane normal (true face plane); fall back
+    // to the centre-relative normal when the query could not supply one.
+    const Vec3 pn = Length(wall.plane_normal) > 0.1f ? wall.plane_normal : wall.normal;
+    if (wall.pushout > 0.0f) {
+        // Full-3D positional popout (OG Popout parity). With true face planes
+        // the Y term is ~0 on vertical walls; the cap only bounds diagonal
+        // seam/ramp planes.
+        float dy = pn.y * wall.pushout;
+        if (dy > kMaxPopoutY) dy = kMaxPopoutY;
+        if (dy < -kMaxPopoutY) dy = -kMaxPopoutY;
+        state.position.x += pn.x * wall.pushout;
+        state.position.y += dy;
+        state.position.z += pn.z * wall.pushout;
+        // Impact-only velocity removal: first contact of the tick, or motion
+        // driving meaningfully deeper into the wall this substep. Resting
+        // contact leaves velocity untouched (no continuous fall damping).
+        const bool edge = !contact_this_tick;
+        const float into_units =
+            ((state.velocity.x * pn.x) + (state.velocity.y * pn.y) + (state.velocity.z * pn.z)) *
+            delta_seconds;
+        if (edge || into_units < -kImpactDriveUnits) {
+            ApplyImpactRemoval(state, pn);
+        }
+    }
+    RecordWallContact(state, result, wall, pn);
+    if (FaceIsDeath(room, wall.face_id)) result.death = true;
+}
+
+// Sources the wall_contact FLAG from the plane-based waist probe (the same
+// query the climb controller uses), OR'd with the body-center sweep so the
+// motor and controller agree on grip. This does NOT move the body — popout is
+// handled by RunWallContact at body-center. It is called once per tick (the
+// end-of-tick pass) so climb entry sees a stable flag even when the body-center
+// sphere would miss a face the waist is gripping.
+void RunWallFlagFromWaist(PlayerState& state, const Room& room, float radius,
+                          float waist_offset) {
+    if (!room.coll_mesh) return;
+    const Vec3 waist = {state.position.x,
+                        state.position.y + waist_offset,
+                        state.position.z};
+    const Vec3 into_wall = {-state.last_facing.x, 0.0f, -state.last_facing.z};
+    const WallHit gripped = QueryWallClosestToFace(room, waist, radius, into_wall);
+    if (gripped.hit && !FaceIsOneWay(room, gripped.face_id)) {
+        state.wall_contact = true;
+        state.wall_normal = gripped.plane_normal;
+    }
+}
+
 }  // namespace
 
 PlayerMotor::PlayerMotor(PlayerMotorConfig config) : config_(config) {}
@@ -143,9 +215,7 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
 
     const bool was_grounded = state.grounded;
     state.contact.was_grounded = was_grounded;
-    state.wall_left = false;
-    state.wall_right = false;
-    state.wall_climbable = false;
+    state.wall_contact = false;
     state.wall_normal = {0.0f, 0.0f, 0.0f};
 
     MotorResult result;
@@ -170,6 +240,10 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
     // horizontal substeps after grounding still re-pin to the slope below
     // (slope-follow without slope-specific code in the substep loop).
     bool grounded_mid_sweep = false;
+    // Impact-gating latch: true once any substep of this tick has recorded a
+    // wall contact. Reset every tick so each tick's first contact counts as
+    // an impact (OG resolveImpact semantics).
+    bool wall_contact_this_tick = false;
     for (int i = 0; i < steps; ++i) {
         const float prev_feet_y = state.position.y - config_.half_height;
         const float prev_head_y = state.position.y + config_.half_height;
@@ -192,7 +266,17 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
                     ++room.query_counters->sphere_sweeps;
                     room.query_counters->bvh_nodes_touched += nodes;
                 }
-                if (sweep.hit) {
+                // The sweep sphere overlaps vertical wall faces at t=0 with no
+                // distance traveled; only accept strongly floor-like normals
+                // outright. A merely-steep normal (≥0.35) is trusted only if a
+                // downward raycast (immune to wall overlap) confirms a real
+                // floor at the sweep point; otherwise fall back to the
+                // (wall-immune) vertical raycast as the floor probe.
+                if (sweep.hit && sweep.normal.y >= kSweepFloorStrongMinY) {
+                    floor = SweepToGroundHit(room, sweep, probe);
+                } else if (sweep.hit &&
+                           IsFloorNormal(sweep.normal) &&
+                           ConfirmFloorByRay(room, sweep.point, probe)) {
                     floor = SweepToGroundHit(room, sweep, probe);
                 } else {
                     floor = QueryFloorSource(room, feet_origin, probe);
@@ -219,19 +303,31 @@ MotorResult PlayerMotor::Step(PlayerState& state, const Room& room, const MotorI
             }
         }
 
-        const WallHit wall = QueryWallNearest(room, state.position, config_.radius);
-        if (wall.hit && !FaceIsOneWay(room, wall.face_id)) {
-            if (wall.pushout > 0.0f) {
-                state.position.x += wall.normal.x * wall.pushout;
-                state.position.y += wall.normal.y * wall.pushout;
-                state.position.z += wall.normal.z * wall.pushout;
-                RemoveIntoNormal(state.velocity, wall.normal);
-            }
-            RecordWallContact(state, result, wall);
-            if (FaceIsClimbable(room, wall.face_id)) state.wall_climbable = true;
-            if (FaceIsDeath(room, wall.face_id)) result.death = true;
-        }
+        RunWallContact(state, result, room,
+                       state.movement_state == PlayerMovementState::Climbing
+                           ? config_.climb_collision_radius
+                           : config_.radius,
+                       delta_seconds, wall_contact_this_tick);
     }
+
+    // Unconditional end-of-tick wall pass: zero-delta ticks (idle/climb hang)
+    // skip the substep loop entirely, which used to leave wall flags cleared.
+    // Climb uses the climb_collision_radius (3 = OG WallPushoutDist): with the
+    // entry anchor placing the waist exactly at wall.Point + normal*3, this is
+    // a zero-popout equilibrium AND keeps the flag a true wall normal — must
+    // land WITH the unified radius-4 grip probe (Inc 1) or the tangent rest
+    // at Normal radius 5 leaves the waist outside probe reach (grab/exit pump).
+    RunWallContact(state, result, room,
+                   state.movement_state == PlayerMovementState::Climbing
+                       ? config_.climb_collision_radius
+                       : config_.radius,
+                   delta_seconds, wall_contact_this_tick);
+    // Waist plane-query flag source (OG parity): the motor and the climb
+    // controller must agree on wall contact. This ORs a stable face-plane grip
+    // at the waist so climb entry sees wall_contact even where the body-center
+    // sphere would miss; it does not move the body (popout already ran above).
+    RunWallFlagFromWaist(state, room, config_.radius, config_.wall_probe_center_offset);
+    result.wall_contact = state.wall_contact;
 
     state.grounded = false;
     result.ground_face_id = -1;

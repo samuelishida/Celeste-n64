@@ -38,6 +38,7 @@ struct RomTelemetry {
     uint32_t dash_end_events = 0;
     uint32_t wall_jump_events = 0;
     uint32_t climb_start_events = 0;
+    uint32_t climb_mantle_events = 0;
 
     // Surface / carry sample counters (Inc 7).  These are increment-scoped
     // probes -- the hardware budget check runs in Inc 9.
@@ -92,6 +93,7 @@ struct RomTelemetry {
     void RecordDashEnd() { ++dash_end_events; }
     void RecordWallJump() { ++wall_jump_events; }
     void RecordClimbStart() { ++climb_start_events; }
+    void RecordClimbMantle() { ++climb_mantle_events; }
     void RecordSpawn() { ++spawn_count; }
     void RecordRespawn() { ++respawn_count; }
 

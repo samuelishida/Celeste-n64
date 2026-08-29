@@ -45,14 +45,13 @@ int main() {
     {
         RomTelemetry t;
         PlayerState state;
-        state.wall_left = true;
+        state.wall_contact = true;
         t.RecordPlayerState(state);
         assert(t.wall_contact_frames == 1);
 
-        state.wall_left = false;
-        state.wall_right = true;
+        state.wall_contact = false;
         t.RecordPlayerState(state);
-        assert(t.wall_contact_frames == 2);
+        assert(t.wall_contact_frames == 1);
     }
 
     // --- RecordPlayerState: numeric validity ---
@@ -134,6 +133,8 @@ int main() {
         assert(t.wall_jump_events == 1);
         t.RecordClimbStart();
         assert(t.climb_start_events == 1);
+        t.RecordClimbMantle();
+        assert(t.climb_mantle_events == 1);
     }
 
     // --- Snapshot tracking ---

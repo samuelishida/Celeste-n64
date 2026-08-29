@@ -128,6 +128,35 @@ GAMEPLAY_LINK=(
 )
 run_cpp gameplay_smoke tests/gameplay_smoke.cpp "${GAMEPLAY_LINK[@]}"
 
+# climb-wall-physics Inc 1: wall-rest stability on synthetic collmesh
+# (floor + vertical wall). Same link set minus controller-only deps.
+run_cpp motor_wall_rest_smoke tests/motor_wall_rest_smoke.cpp \
+    src/user/gameplay/player/player_motor.cpp \
+    src/user/gameplay/runtime/math.cpp \
+    src/user/gameplay/world/world.cpp \
+    src/user/gameplay/physics/coll_mesh.cpp \
+    src/user/gameplay/physics/geom.cpp
+
+# climb-wall-physics Inc 2/3: motor-integrated climb + mantle behavior.
+run_cpp climb_mantle_smoke tests/climb_mantle_smoke.cpp "${GAMEPLAY_LINK[@]}"
+
+# climb-and-zoom-fix Inc 2: fall speed survives wall seams (face-plane
+# impact removal parity with OG Popout).
+run_cpp wall_slide_seam_smoke tests/wall_slide_seam_smoke.cpp \
+    src/user/gameplay/player/player_motor.cpp \
+    src/user/gameplay/runtime/math.cpp \
+    src/user/gameplay/world/world.cpp \
+    src/user/gameplay/physics/coll_mesh.cpp \
+    src/user/gameplay/physics/geom.cpp
+
+# wall-climb-overhaul Inc 1: plane-based wall query returns stable face
+# normals (no seam diagonal) and rejects slopes (OG ClimbNormalCheck).
+run_cpp wall_plane_query_smoke tests/wall_plane_query_smoke.cpp \
+    src/user/gameplay/runtime/math.cpp \
+    src/user/gameplay/world/world.cpp \
+    src/user/gameplay/physics/coll_mesh.cpp \
+    src/user/gameplay/physics/geom.cpp
+
 # ── Pattern C (links mappack_loader.cpp) ─────────────────────────────
 # These need a baked map-pack fixture. Use the repo's baked staging dir if
 # present; otherwise skip with a warning (they can be run after `make bake`).

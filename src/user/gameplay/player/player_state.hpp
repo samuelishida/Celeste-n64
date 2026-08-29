@@ -76,11 +76,23 @@ struct PlatformCarryState {
 struct ClimbState {
     Vec3 wall_normal;
     int16_t wall_surface_id = -1;
-    Vec3 corner_from;
-    Vec3 corner_to;
-    float corner_progress = 0.0f;
+    // Stable identity of the gripped static-collmesh triangle (array index),
+    // for persistent re-acquire. `wall_surface_id` is the moving-surface owner
+    // (=-1 for static), NOT a per-triangle identity, so grip persistence keys
+    // on this. -1 = no gripped face.
+    int32_t grip_face_id = -1;
     float cooldown_remaining = 0.0f;
-    float hop_no_move_remaining = 0.0f;
+    // Grip-grace timer: while climbing, a brief probe miss (geometry seams,
+    // corners, floating-point at the tangent boundary) must not drop the grab
+    // immediately. Counts down from kClimbGripGrace; the grab is released only
+    // if grip stays absent for the whole window. Reset to full on every tick
+    // where grip is present.
+    float grip_lost_timer = 0.0f;
+    // Consecutive ticks the ledge/mantle probe has reported no wall. The
+    // ledge probe uses the tight radius and can flicker at the tangency
+    // boundary mid-wall; the mantle must not fire on a single-frame flicker,
+    // only after the ledge is confirmed clear for several ticks (real lip).
+    int ledge_miss_ticks = 0;
 };
 
 struct PlayerState {
@@ -108,16 +120,6 @@ struct PlayerState {
     // Jump buffer: counts down after jump pressed in air.
     float jump_buffer_remaining = 0.0f;
 
-    // Wall grab state
-    bool wall_grabbing = false;
-    float wall_grab_time_remaining = 0.0f;
-    float wall_jump_cooldown_remaining = 0.0f;
-
-    // Stamina system (OG Celeste64-style)
-    float stamina = 110.0f;
-    float stamina_max = 110.0f;
-    bool climb_exhausted = false;
-
     // Celeste-like jump sustain.
     float hold_jump_time_remaining = 0.0f;
     float hold_jump_speed = 0.0f;
@@ -140,10 +142,7 @@ struct PlayerState {
     ClimbState climb;
 
     // Collision probes (set by caller before Step)
-    bool wall_left = false;
-    bool wall_right = false;
-    // True if the nearest wall face permits climbing (legacy: any wall; collmesh: MAT_CLIMBABLE).
-    bool wall_climbable = false;
+    bool wall_contact = false;
     // Wall normal from the most recent wall contact (set by motor or test fixture).
     Vec3 wall_normal = {0.0f, 0.0f, 0.0f};
 

@@ -1,0 +1,162 @@
+Loaded madeline_cube_rom
+Vulkan Enabled: using paraLLEl-RDP
+dfs_init: OK
+test_marker: NOT FOUND
+[skybox] initialized
+[hud] rdpq_font_load rom:/fnt/Renogare.font64 OK
+[model] loaded: rom:/mdl/strawberry.t3dm
+[model] loaded: rom:/mdl/tape_1.t3dm
+[model] file not found: rom:/mdl/player.t3dm
+[init] FATAL: madeline model missing at rom:/mdl/player.t3dm
+[model] loaded: rom:/mdl/room_fixture.t3dm
+[init] ENTRY: mappack_path_pending_=rom:/lvl/forsyken-city/forsyken-city.mappack lvl_path_=rom:/lvl/1-1.lvl
+[init] Calling BootMapPack(rom:/lvl/forsyken-city/forsyken-city.mappack)
+[mappack] BootMapPack ENTRY: path=rom:/lvl/forsyken-city/forsyken-city.mappack
+[mappack] v2 loaded rom:/lvl/forsyken-city/forsyken-city.mappack: 45 rooms, start=cell_00_00, global=rom:/lvl/forsyken-city/forsyken-city.colmesh (10618 tris)
+[map_runtime] global collision loaded: 10618 tris, 20868 verts
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_00_00.lvl: colliders=0 faces=114 vertices=415 entities=1
+[lvlroom] loaded: 415 verts, 0 batches, 114 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_00_00 (origin 120.0,57.6,120.0)
+[matcat] material[0]=rock_1 OK
+[matcat] material[1]=snow_1 OK
+[matcat] material[2]=girder_wood OK
+[matcat] material[3]=rock_4 OK
+[matcat] material[4]=rock_5 OK
+[matcat] material[5]=girder OK
+[matcat] material[6]=wall_ruined_1 OK
+[matcat] material[7]=wall_ruined_5 OK
+[matcat] material[8]=wood_2 OK
+[matcat] material[9]=wood_4 OK
+[matcat] material[10]=wall_ruined_2 OK
+[matcat] material[11]=wall_ruined_3 OK
+[matcat] material[12]=girder_16 OK
+[matcat] material[13]=rock_2 OK
+[matcat] material[14]=girder_v OK
+[matcat] material[15]=wall_ruined_7 OK
+[matcat] material[16]=wood_1 OK
+[matcat] material[17]=wall_ruined_4 OK
+[matcat] material[18]=metal_floor_1 OK
+[matcat] material[19]=floor_dirty_concrete OK
+[matcat] material[20]=girder_v_16 OK
+[matcat] material[21]=big_decals_1 OK
+[matcat] material[22]=wood_3 OK
+[matcat] material[23]=__TB_empty MISSING (reserved)
+[matcat] material[24]=wall_ruined_6 OK
+[matcat] material[25]=rock_3 OK
+[matcat] material[26]=road1 OK
+[matcat] material[27]=invisible MISSING (reserved)
+[matcat] material[28]=glass_1 OK
+[matcat] material[29]=wood_fragile OK
+[matcat] material[30]=special_floor_1 OK
+[matcat] material[31]=TB_empty NULL
+[matcat] loaded 32 materials from rom:/lvl/forsyken-city/forsyken-city.manifest
+[spawn] authored=(0.00,25.60,89.60) grounded=(0.00,35.63,89.60) grounded=1
+[texroom] loaded: 415 verts, 114 batches, 114 faces, 0 discarded block=yes
+[mappack] booted rom:/lvl/forsyken-city/forsyken-city.mappack: 45 rooms, start=cell_00_00
+[init] BootMapPack SUCCEEDED — use_map_pack_ should be true
+[texroom] loaded: 541 verts, 149 batches, 149 faces, 0 discarded block=yes
+[texroom] loaded: 541 verts, 149 batches, 149 faces, 0 discarded block=yes
+[texroom] loaded: 582 verts, 157 batches, 157 faces, 0 discarded block=yes
+[texroom] loaded: 996 verts, 254 batches, 254 faces, 0 discarded block=yes
+[texroom] loaded: 328 verts, 81 batches, 81 faces, 0 discarded block=yes
+[texroom] loaded: 150 verts, 40 batches, 40 faces, 0 discarded block=yes
+[texroom] loaded: 2280 verts, 591 batches, 591 faces, 0 discarded block=yes
+[texroom] loaded: 3527 verts, 920 batches, 920 faces, 0 discarded block=yes
+[texroom] loaded: 1034 verts, 262 batches, 262 faces, 0 discarded block=yes
+[texroom] loaded: 72 verts, 18 batches, 18 faces, 0 discarded block=yes
+[texroom] loaded: 952 verts, 240 batches, 240 faces, 0 discarded block=yes
+[texroom] loaded: 66 verts, 17 batches, 17 faces, 0 discarded block=yes
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_n01_00.lvl: colliders=0 faces=157 vertices=582 entities=0
+[lvlroom] loaded: 582 verts, 0 batches, 157 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_n01_00 (origin -120.0,52.1,120.0)
+[mappack] transitioned to cell_n01_00
+[climb] START z=1 l=0 r=0 al=0 ar=0 wn=(-0.00,1.00) pos=(-6.2,35.6,56.2)
+[input] z=1 l=0 r=0 al=0 ar=0 | j=0 d=0 c=1 p=0
+[profiler] avg frame time over 60 frames: 34.910 ms (28.6 fps) update=0.172 (114.688 peak) ms
+[render-phases] high_priority=0.121 (7.286 peak) streaming=0.000 (0.483 peak) ms
+[counters] near_batches=94 texture_uploads=14 vert_loads=94 syncs=94 pending=0 resident=11
+[climb] START z=1 l=0 r=0 al=0 ar=0 wn=(-0.00,1.00) pos=(0.4,55.9,11.4)
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_00_00.lvl: colliders=0 faces=114 vertices=415 entities=1
+[lvlroom] loaded: 415 verts, 0 batches, 114 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_00_00 (origin 120.0,57.6,120.0)
+[mappack] transitioned to cell_00_00
+[texroom] loaded: 328 verts, 81 batches, 81 faces, 0 discarded block=yes
+[texroom] loaded: 150 verts, 40 batches, 40 faces, 0 discarded block=yes
+[input] z=1 l=0 r=0 al=0 ar=0 | j=0 d=0 c=1 p=0
+[profiler] avg frame time over 60 frames: 33.373 ms (30.0 fps) update=0.325 (79.629 peak) ms
+[render-phases] high_priority=0.076 (7.469 peak) streaming=0.000 (0.298 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_n01_00.lvl: colliders=0 faces=157 vertices=582 entities=0
+[lvlroom] loaded: 582 verts, 0 batches, 157 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_n01_00 (origin -120.0,52.1,120.0)
+[mappack] transitioned to cell_n01_00
+[climb] START z=1 l=0 r=0 al=0 ar=0 wn=(-0.00,1.00) pos=(-0.6,48.4,11.4)
+[input] z=1 l=0 r=0 al=0 ar=0 | j=0 d=0 c=1 p=0
+[profiler] avg frame time over 60 frames: 33.714 ms (29.7 fps) update=0.260 (87.085 peak) ms
+[render-phases] high_priority=0.108 (7.297 peak) streaming=0.000 (0.482 peak) ms
+[counters] near_batches=94 texture_uploads=14 vert_loads=94 syncs=94 pending=0 resident=11
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_00_00.lvl: colliders=0 faces=114 vertices=415 entities=1
+[lvlroom] loaded: 415 verts, 0 batches, 114 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_00_00 (origin 120.0,57.6,120.0)
+[mappack] transitioned to cell_00_00
+[texroom] loaded: 328 verts, 81 batches, 81 faces, 0 discarded block=yes
+[texroom] loaded: 150 verts, 40 batches, 40 faces, 0 discarded block=yes
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_n01_00.lvl: colliders=0 faces=157 vertices=582 entities=0
+[lvlroom] loaded: 582 verts, 0 batches, 157 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_n01_00 (origin -120.0,52.1,120.0)
+[mappack] transitioned to cell_n01_00
+[input] z=1 l=0 r=0 al=0 ar=0 | j=1 d=0 c=1 p=0
+[profiler] avg frame time over 60 frames: 35.093 ms (28.5 fps) update=0.322 (91.324 peak) ms
+[render-phases] high_priority=0.119 (7.114 peak) streaming=0.000 (0.480 peak) ms
+[counters] near_batches=94 texture_uploads=14 vert_loads=94 syncs=94 pending=0 resident=11
+[climb] START z=1 l=0 r=0 al=0 ar=0 wn=(0.00,1.00) pos=(-5.4,48.4,11.4)
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_00_00.lvl: colliders=0 faces=114 vertices=415 entities=1
+[lvlroom] loaded: 415 verts, 0 batches, 114 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_00_00 (origin 120.0,57.6,120.0)
+[mappack] transitioned to cell_00_00
+[texroom] loaded: 328 verts, 81 batches, 81 faces, 0 discarded block=yes
+[texroom] loaded: 150 verts, 40 batches, 40 faces, 0 discarded block=yes
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_n01_00.lvl: colliders=0 faces=157 vertices=582 entities=0
+[lvlroom] loaded: 582 verts, 0 batches, 157 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_n01_00 (origin -120.0,52.1,120.0)
+[mappack] transitioned to cell_n01_00
+[input] z=1 l=0 r=0 al=0 ar=0 | j=0 d=1 c=1 p=0
+[profiler] avg frame time over 60 frames: 34.530 ms (29.0 fps) update=0.258 (86.809 peak) ms
+[render-phases] high_priority=0.122 (7.492 peak) streaming=0.000 (0.481 peak) ms
+[counters] near_batches=94 texture_uploads=14 vert_loads=94 syncs=94 pending=0 resident=11
+[climb] START z=1 l=0 r=0 al=0 ar=0 wn=(0.00,1.00) pos=(-4.5,66.5,11.4)
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_00_00.lvl: colliders=0 faces=114 vertices=415 entities=1
+[lvlroom] loaded: 415 verts, 0 batches, 114 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_00_00 (origin 120.0,57.6,120.0)
+[mappack] transitioned to cell_00_00
+[texroom] loaded: 328 verts, 81 batches, 81 faces, 0 discarded block=yes
+[texroom] loaded: 150 verts, 40 batches, 40 faces, 0 discarded block=yes
+[input] z=1 l=0 r=0 al=0 ar=0 | j=0 d=0 c=1 p=0
+[profiler] avg frame time over 60 frames: 33.094 ms (30.2 fps) update=0.324 (81.321 peak) ms
+[render-phases] high_priority=0.077 (7.394 peak) streaming=0.000 (0.298 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded rom:/lvl/forsyken-city/cell_00_n01.lvl: colliders=0 faces=149 vertices=541 entities=2
+[lvlroom] loaded: 541 verts, 0 batches, 149 faces, 0 discarded block=yes
+[map_runtime] active room -> cell_00_n01 (origin 120.0,49.3,-120.0)
+[dispatch] spawned classname_id=1 ph=2 at (0.00,128.00,-155.20)
+[mappack] transitioned to cell_00_n01
+[texroom] loaded: 1927 verts, 503 batches, 503 faces, 0 discarded block=yes
+[texroom] loaded: 462 verts, 117 batches, 117 faces, 0 discarded block=yes
+[texroom] loaded: 1823 verts, 471 batches, 471 faces, 0 discarded block=yes
+[texroom] loaded: 594 verts, 144 batches, 144 faces, 0 discarded block=yes
+[texroom] loaded: 510 verts, 125 batches, 125 faces, 0 discarded block=yes
+[input] z=1 l=0 r=0 al=0 ar=0 | j=0 d=0 c=1 p=0
+[profiler] avg frame time over 60 frames: 37.031 ms (27.0 fps) update=0.197 (83.239 peak) ms
+[render-phases] high_priority=0.324 (20.196 peak) streaming=0.000 (0.363 peak) ms
+[counters] near_batches=302 texture_uploads=28 vert_loads=302 syncs=302 pending=0 resident=18
+Unloaded madeline_cube_rom

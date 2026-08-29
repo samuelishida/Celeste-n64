@@ -95,43 +95,94 @@ int main() {
         assert(player.velocity.y < held_jump_velocity);
     }
 
-    // --- Wall grab ---
+    // --- Wall climb (unified OG-style grab; unlimited grip, no stamina) ---
     {
         PlayerState player;
         player.grounded = false;
         player.velocity.y = -1.0f;
-        player.wall_left = true;
-        player.wall_grab_time_remaining = config.wall_grab_time;
+        player.wall_contact = true;
+        player.wall_normal = {1.0f, 0.0f, 0.0f};    // wall to the -x side
+        // Face into the wall so the facing gate passes.
+        player.last_facing = {-1.0f, 0.0f, 0.0f};
+        player.target_facing = {-1.0f, 0.0f, 0.0f};
 
         PlayerInput grab_input;
         grab_input.climb_held = true;
         controller.Step(player, grab_input, camera_forward, 1.0f / 60.0f);
-        assert(player.wall_grabbing);
-        assert(player.velocity.y == -config.wall_slide_speed);
+        assert(player.movement_state == PlayerMovementState::Climbing);
+        assert(player.velocity.y == 0.0f);  // grab zeroes velocity
+
+        // Stick up climbs at climb_speed.
+        PlayerInput climb_up = grab_input;
+        climb_up.move = {0.0f, 1.0f};
+        controller.Step(player, climb_up, camera_forward, 1.0f / 60.0f);
+        assert(player.velocity.y == config.climb_speed);
     }
 
-    // --- Wall jump ---
+    // --- Climb release ---
     {
         PlayerState player;
         player.grounded = false;
-        player.velocity.y = -1.0f;
-        player.wall_left = true;
-        player.wall_grab_time_remaining = config.wall_grab_time;
+        player.movement_state = PlayerMovementState::Climbing;
+        player.locomotion_state = LocomotionState::Climb;
+        player.wall_contact = true;
+        player.wall_normal = {1.0f, 0.0f, 0.0f};
+        player.last_facing = {-1.0f, 0.0f, 0.0f};
+        player.target_facing = {-1.0f, 0.0f, 0.0f};
 
-        PlayerInput grab_input;
-        grab_input.climb_held = true;
-        controller.Step(player, grab_input, camera_forward, 1.0f / 60.0f);
-        assert(player.wall_grabbing);
+        PlayerInput release_input;
+        release_input.climb_held = false;
+        controller.Step(player, release_input, camera_forward, 1.0f / 60.0f);
+        assert(player.movement_state == PlayerMovementState::Normal);
+        assert(player.velocity.x == 0.0f && player.velocity.z == 0.0f);
+    }
 
-        // Hold climb to keep grabbing, press jump to wall-jump away.
+    // --- Wall jump from climb: SET velocity away from the wall normal ---
+    {
+        PlayerState player;
+        player.grounded = false;
+        player.movement_state = PlayerMovementState::Climbing;
+        player.locomotion_state = LocomotionState::Climb;
+        player.wall_contact = true;
+        player.wall_normal = {1.0f, 0.0f, 0.0f};
+        player.last_facing = {-1.0f, 0.0f, 0.0f};
+        player.target_facing = {-1.0f, 0.0f, 0.0f};
+
         PlayerInput wall_jump_input;
         wall_jump_input.climb_held = true;
         wall_jump_input.jump_pressed = true;
         wall_jump_input.jump_held = true;
         controller.Step(player, wall_jump_input, camera_forward, 1.0f / 60.0f);
-        assert(!player.wall_grabbing);
-        assert(player.velocity.x > 0.0f);
+        assert(player.movement_state == PlayerMovementState::Normal);
+        assert(player.velocity.x > 0.0f);   // away from the wall
         assert(player.velocity.y > 0.0f);
+    }
+
+    // --- Climb wall identity: motor's nearest-wall normal flipping between
+    //     adjacent faces near an edge/corner must NOT eject the climb. ---
+    {
+        PlayerState player;
+        player.grounded = false;
+        player.wall_contact = true;
+        player.wall_normal = {1.0f, 0.0f, 0.0f};
+        player.last_facing = {-1.0f, 0.0f, 0.0f};
+        player.target_facing = {-1.0f, 0.0f, 0.0f};
+
+        PlayerInput grab;
+        grab.climb_held = true;
+        controller.Step(player, grab, camera_forward, 1.0f / 60.0f);
+        assert(player.movement_state == PlayerMovementState::Climbing);
+
+        // Simulate the motor reporting a perpendicular face on later ticks
+        // (nearest-wall flip near a corner). Stored grip normal wins.
+        grab.move = {0.0f, 1.0f};
+        for (int i = 0; i < 5; ++i) {
+            player.wall_normal = (i % 2 == 0) ? Vec3{0.0f, 0.0f, -1.0f}
+                                              : Vec3{1.0f, 0.0f, 0.0f};
+            controller.Step(player, grab, camera_forward, 1.0f / 60.0f);
+            assert(player.movement_state == PlayerMovementState::Climbing);
+            assert(player.velocity.y == config.climb_speed);  // still going up
+        }
     }
 
     // --- Camera-relative movement ---

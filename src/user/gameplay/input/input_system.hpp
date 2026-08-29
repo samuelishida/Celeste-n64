@@ -52,7 +52,10 @@ inline Vec2 SampleStickAxis(int16_t stick_x, int16_t stick_y, float stick_max) {
 //   Camera -> C-Stick (analog) + C-Buttons   (digital orbit/zoom)
 //   Jump   -> A  (also Y on GameCube via joypad)
 //   Dash   -> B  (also X on GameCube via joypad)
-//   Climb  -> Z / L / R
+//   Climb  -> SHOULDERS ONLY: Z / L / R digital. The GCN analog trigger
+//             fields (joypad_inputs_t.analog_l/analog_r) are deliberately NOT
+//             read — spurious non-zero values there present as constant
+//             grabbing with no button held.
 //   Pause  -> Start
 //
 // The spec's Xbox/keyboard default bindings map onto the N64 controller as
@@ -88,10 +91,28 @@ public:
     // player controller already consumes.
     Vec2 MoveValue() const { return move.Value(); }
 
+    // Raw controller snapshot from the most recent Poll() — diagnostics only
+    // (telemetry prints it so a stuck button bit is visible in Ares captures).
+    struct RawSnapshot {
+        uint8_t z = 0;
+        uint8_t l = 0;
+        uint8_t r = 0;
+        int16_t analog_l = 0;
+        int16_t analog_r = 0;
+        bool jump_down = false;
+        bool dash_down = false;
+        bool climb_down = false;
+        bool pause_down = false;
+    };
+    const RawSnapshot& LastRaw() const { return last_raw_; }
+
     // Deadzone applied to the c-stick for camera input. Pre-overhaul had no
     // deadzone on camera (pure digital C-buttons). Kept at 0 to match.
     // The move axis ignores this (it passes 0.0f explicitly in SampleMoveAxis).
     float deadzone = 0.0f;
+
+private:
+    RawSnapshot last_raw_;
 };
 
 }  // namespace madeline_cube

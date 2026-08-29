@@ -71,17 +71,28 @@ void InputSystem::Poll() {
     // alias of the same action per spec §3).
     const bool jump_held = (held.a != 0) || (held.y != 0);
     const bool dash_held = (held.b != 0) || (held.x != 0);
+    // Climb is SHOULDERS ONLY (user-confirmed control spec): Z trigger + L/R
+    // shoulders. Never extend this set with face buttons OR the GCN analog
+    // trigger fields (analog_l/analog_r): those are GameCube-accessor-only in
+    // libdragon, and spurious non-zero reads there present as "Madeline grabs
+    // every wall without any button held".
     const bool climb_held = (held.z != 0) || (held.l != 0) || (held.r != 0);
     const bool pause_held = (held.start != 0);
 
-    // Analog L/R triggers also count as Climb (spec §3: LT/RT -> Climb).
-    const bool trigger_climb = (inputs.analog_l > 80) || (inputs.analog_r > 80);
-    const bool climb_total = climb_held || trigger_climb;
-
     jump.Update(jump_held);
     dash.Update(dash_held);
-    climb.Update(climb_total);
+    climb.Update(climb_held);
     pause.Update(pause_held);
+
+    last_raw_.z = held.z;
+    last_raw_.l = held.l;
+    last_raw_.r = held.r;
+    last_raw_.analog_l = inputs.analog_l;
+    last_raw_.analog_r = inputs.analog_r;
+    last_raw_.jump_down = jump_held;
+    last_raw_.dash_down = dash_held;
+    last_raw_.climb_down = climb_held;
+    last_raw_.pause_down = pause_held;
 }
 
 }  // namespace madeline_cube

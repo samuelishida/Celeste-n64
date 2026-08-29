@@ -71,7 +71,7 @@ int main() {
     }
 
     // --- Lateral collision into box wall: pushed out, X velocity zeroed,
-    //     wall_right flag set, ground retained on the floor plane. ---
+    //     wall_contact flag set, ground retained on the floor plane. ---
     {
         Room room = basic;
         PlayerState p;
@@ -79,7 +79,7 @@ int main() {
         p.grounded = true;
         MotorResult r = motor.Step(p, room, MovingInput({30.0f, 0.0f, 0.0f}), 0.1f);
         assert(r.wall_contact);
-        assert(p.wall_right);
+        assert(p.wall_contact);
         assert(p.position.x <= 1.5f + 0.0005f);
         assert(ApproxEq(p.velocity.x, 0.0f));
         assert(p.grounded);

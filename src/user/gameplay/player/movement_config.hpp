@@ -28,21 +28,33 @@ struct MovementConfig {
     float dash_jump_xy_boost = 16.0f;
     float respawn_fall_height = -200.0f;
 
-    float wall_grab_time = 1.5f;         // max seconds to hold a wall
-    float wall_slide_speed = 16.0f;      // downward speed while wall-sliding (OG gravity-based)
     float wall_jump_speed_x = 83.2f;    // WallJumpXYSpeed = MaxSpeed * 1.3
     float wall_jump_speed_y = 90.0f;    // same as JumpSpeed
-    float wall_jump_cooldown = 0.15f;    // seconds before another wall interaction
     float climb_speed = 40.0f;
     float climb_hop_up_speed = 80.0f;
     float climb_hop_forward_speed = 40.0f;
 
-    // Stamina drain rates (OG Celeste64 values)
-    float stamina_hold_drain = 10.0f;      // per second while holding wall (idle)
-    float stamina_up_drain = 20.0f;        // per second while climbing upward
-    float stamina_jump_cost = 25.0f;       // flat cost per climb jump
-    float climb_hop_no_move_time = 0.25f;  // no-move time after ledge hop
-    float climb_cooldown = 0.30f;          // cooldown after leaving climb before re-enter
+    // OG Celeste64 climb: unlimited grip — no stamina, no material gate.
+    float climb_hop_no_move_time = 0.25f;   // no-move time after ledge hop
+    float climb_cooldown = 0.30f;           // cooldown after leaving climb before re-enter
+
+    // ── OG climb probe anchors (climb-parity-3 Inc 1; OG Z-up → demake +Y-up).
+    // Feet-anchored: feet = center.y - player_half_height. OG
+    // SolidWaistTestPos = feet + 3, head = feet + 10 (Player.cs:843-851).
+    float player_half_height = 10.0f;       // == PlayerMotorConfig::half_height (parity-asserted in gameplay_scene.cpp)
+    float climb_waist_offset = 3.0f;        // grip probe height above feet (OG SolidWaistTestPos)
+    float climb_head_offset = 10.0f;        // OG head probe band top (feet + 10)
+    float climb_ledge_probe_extra = 1.0f;   // mantle probe = waist + 1 (OG ClimbCheckAt +1 UnitZ)
+    float climb_check_dist = 4.0f;          // grip/ledge/corner query radius (OG ClimbCheckDist)
+    float climb_pushout_dist = 3.0f;        // entry reposition target (OG WallPushoutDist)
+    float climb_corner_ease_time = 0.20f;   // corner position/facing ease (OG 0.2 s)
+
+    // DEPRECATED — removed in Inc 4: the ledge probe and the inner re-acquire
+    // fallback are the last consumers of the old shell (center-anchored bands,
+    // radius = wall_probe_radius). Grip/entry/corner probes now use
+    // climb_check_dist (4) at the climb_waist_offset anchor (feet + 3).
+    float climb_ledge_probe_center_offset = -2.5f;  // center-anchored lip band [feet+5, feet+10]
+    float wall_probe_radius = 5.0f;                 // == PlayerMotorConfig::radius (5.0)
 };
 
 struct MovementProfile {

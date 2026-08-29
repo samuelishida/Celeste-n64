@@ -15,13 +15,11 @@ void RespawnSystem::ResetState(PlayerState& player, const Vec3& checkpoint) cons
     player.dash_reset_cooldown_remaining = 0.0f;
     player.no_dash_jump_remaining = 0.0f;
     player.movement_state = PlayerMovementState::Normal;
-    player.wall_grabbing = false;
+    player.wall_contact = false;
     player.hold_jump_time_remaining = 0.0f;
     player.auto_jump = false;
     player.contact = {};
     player.platform_carry = {};
-    player.stamina = player.stamina_max;
-    player.climb_exhausted = false;
     player.climb = {};
 }
 

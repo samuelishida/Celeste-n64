@@ -204,6 +204,16 @@ static int QueryWallsMesh(const Room& room, const physics::CollMesh& mesh,
         const Vec3 normal = { dx/len, dy/len, dz/len };
         if (normal.y >= 0.85f || normal.y <= -0.85f) continue;
 
+        // Owning triangle's plane, oriented toward the query centre. For
+        // face-region contacts this is the true face normal; near seams/edges
+        // it stays a real adjacent-face plane instead of the diagonal
+        // centre-relative direction that made fall speed bleed away.
+        Vec3 pn = physics::Norm(physics::Cross(
+            physics::Sub(b, a), physics::Sub(c, a)));
+        if ((pn.x*dx + pn.y*dy + pn.z*dz) < 0.0f) {
+            pn.x = -pn.x; pn.y = -pn.y; pn.z = -pn.z;
+        }
+
         const float pushout = radius - sh.dist;
         if (pushout < 0.0f) continue;
 
@@ -212,6 +222,92 @@ static int QueryWallsMesh(const Room& room, const physics::CollMesh& mesh,
             .hit = true,
             .point = sh.closest,
             .normal = normal,
+            .plane_normal = pn,
+            .pushout = pushout,
+            .face_id = fid,
+            .owner_id = owner.id,
+            .owner_velocity = owner.velocity,
+        };
+    }
+    return count;
+}
+
+// Distance from `p` to the infinite plane through (a,b,c), signed against the
+// triangle's geometric normal oriented toward `p` (the sign is resolved by the
+// caller picking the face orientation toward the query point, matching the
+// existing `QueryWallsMesh` sign-flip). Returns an unsigned distance.
+static Vec3 PlaneProject(
+    const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& p)
+{
+    using namespace physics;
+    const Vec3 n = physics::Norm(physics::Cross(physics::Sub(b, a), physics::Sub(c, a)));
+    // Signed distance from p to the plane.
+    const float d = physics::Dot(n, physics::Sub(p, a));
+    // Closest point on the plane to p.
+    return { p.x - n.x * d, p.y - n.y * d, p.z - n.z * d };
+}
+
+// OG SolidWallCheck parity (plane-based). For each candidate triangle that is a
+// near-vertical face (|plane_normal.y| < 0.35), compute the face plane, project
+// the query point onto it at the query's own level, and record the face-plane
+// normal as the stable contact normal. Unlike the sphere query, this does NOT
+// return a centre-relative diagonal normal at seams/edges.
+static int QueryWallsFacePlaneMesh(const Room& room, const physics::CollMesh& mesh,
+                                    const Vec3& point, float radius,
+                                    WallHit* out_hits, int max_hits,
+                                    CollisionQueryDiagnostics* diagnostics) {
+    using namespace physics;
+    physics::AABB q = {
+        { point.x - radius, point.y - radius, point.z - radius },
+        { point.x + radius, point.y + radius, point.z + radius },
+    };
+    int candidates[256];
+    uint32_t nodes = 0;
+    uint32_t* nodes_ptr = room.query_counters ? &nodes : nullptr;
+    int n = OverlapAabbMesh(mesh, q, candidates, 256, nodes_ptr);
+    if (room.query_counters) {
+        ++room.query_counters->overlap_queries;
+        room.query_counters->bvh_nodes_touched += nodes;
+    }
+
+    int count = 0;
+    for (int i = 0; i < n && count < max_hits; ++i) {
+        int fid = candidates[i];
+        const CollTriangle& ct = mesh.triangles[fid];
+        if (!(ct.material & MAT_SOLID)) continue;
+
+        const Vec3& a = mesh.world_verts[ct.i0];
+        const Vec3& b = mesh.world_verts[ct.i1];
+        const Vec3& c = mesh.world_verts[ct.i2];
+
+        // Face plane normal, oriented toward the query point (baked winding can
+        // be reversed — see .agents/common-mistakes/og-map-polygon-winding.md).
+        Vec3 pn = physics::Norm(physics::Cross(physics::Sub(b, a), physics::Sub(c, a)));
+        const Vec3 to_p = physics::Sub(point, a);
+        if (physics::Dot(pn, to_p) < 0.0f) {
+            pn = {-pn.x, -pn.y, -pn.z};
+        }
+
+        // OG ClimbNormalCheck: only near-vertical faces are walls. |Y| < 0.35.
+        if (std::fabs(pn.y) >= 0.35f) continue;
+
+        // Closest point on the face plane to the query point, at the query's own
+        // level. pushout = radius - plane distance. Accept pushout >= 0 (the
+        // tangent boundary still counts as touching, matching OG which accepts
+        // dist < radius and anchors the player into the wall).
+        const Vec3 closest = PlaneProject(a, b, c, point);
+        const Vec3 delta = physics::Sub(point, closest);
+        const float dist = std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+        const float pushout = radius - dist;
+        if (pushout < 0.0f) continue;
+
+        if (diagnostics) ++diagnostics->wall_candidate_hits;
+        OwnerInfo owner = ResolveOwner(mesh, room, fid);
+        out_hits[count++] = WallHit{
+            .hit = true,
+            .point = closest,
+            .normal = pn,
+            .plane_normal = pn,
             .pushout = pushout,
             .face_id = fid,
             .owner_id = owner.id,
@@ -436,6 +532,7 @@ int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_h
                 hit.hit = true;
                 hit.point = point;
                 hit.normal = face_normals[best_axis];
+                hit.plane_normal = face_normals[best_axis];  // box faces are planes
                 hit.pushout = face_depths[best_axis] + radius;
                 hit.face_id = c.face_id >= 0 ? c.face_id : i;
                 hit.owner_id = c.owner_id;
@@ -468,6 +565,15 @@ int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_h
             hit.hit = true;
             hit.point = {closest_x, closest_y, closest_z};
             hit.normal = normal;
+            {   // Exterior box contact: the contact plane is the dominant
+                // horizontal axis face (y-dominant cases are rejected above).
+                Vec3 pn = {0.0f, 0.0f, 0.0f};
+                const float ax = std::fabs(dx), ay = std::fabs(dy), az = std::fabs(dz);
+                if (ax >= ay && ax >= az)      pn = {dx > 0.0f ? 1.0f : -1.0f, 0.0f, 0.0f};
+                else if (az >= ay)             pn = {0.0f, 0.0f, dz > 0.0f ? 1.0f : -1.0f};
+                else                           pn = {0.0f, dy > 0.0f ? 1.0f : -1.0f, 0.0f};
+                hit.plane_normal = pn;
+            }
             hit.pushout = pushout;
             hit.face_id = c.face_id >= 0 ? c.face_id : i;
             hit.owner_id = c.owner_id;
@@ -494,6 +600,11 @@ WallHit QueryWallNearest(const Room& room, const Vec3& point, float radius) {
     return best;
 }
 
+bool QueryWallPresent(const Room& room, const Vec3& point, float radius) {
+    WallHit hits[kMaxWallHits];
+    return QueryWalls(room, point, radius, hits, kMaxWallHits) > 0;
+}
+
 WallHit QueryWallClosestToNormal(const Room& room, const Vec3& point, float radius, const Vec3& normal) {
     WallHit hits[kMaxWallHits];
     const int count = QueryWalls(room, point, radius, hits, kMaxWallHits);
@@ -509,6 +620,153 @@ WallHit QueryWallClosestToNormal(const Room& room, const Vec3& point, float radi
         }
     }
     return best;
+}
+
+int QueryWallsFacePlane(const Room& room, const Vec3& point, float radius,
+                        WallHit* out_hits, int max_hits,
+                        CollisionQueryDiagnostics* diagnostics) {
+    int count = 0;
+    // Static world geometry: plane-projected wall query (OG parity). This is
+    // the source of truth for climb grip identity and wall contact.
+    if (room.coll_mesh) {
+        count = QueryWallsFacePlaneMesh(room, *room.coll_mesh, point, radius,
+                                        out_hits, max_hits, diagnostics);
+        if (count >= max_hits) return count;
+    }
+
+    // Dynamic colliders (moving platforms): fall back to the sphere path so
+    // riders on moving boxes still resolve wall contact.
+    if (room.collider_count > 0) {
+        WallHit sphere_hits[kMaxWallHits];
+        const int sphere_count = QueryWalls(room, point, radius, sphere_hits, kMaxWallHits);
+        for (int i = 0; i < sphere_count && count < max_hits; ++i) {
+            bool duplicate = false;
+            for (int j = 0; j < count; ++j) {
+                if (out_hits[j].face_id == sphere_hits[i].face_id) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            out_hits[count++] = sphere_hits[i];
+            if (diagnostics) ++diagnostics->wall_candidate_hits;
+        }
+    }
+    return count;
+}
+
+WallHit QueryWallClosestToFace(const Room& room, const Vec3& point, float radius, const Vec3& normal) {
+    WallHit hits[kMaxWallHits];
+    const int count = QueryWallsFacePlane(room, point, radius, hits, kMaxWallHits);
+    if (count == 0) return WallHit{};
+
+    WallHit best = hits[0];
+    float best_dot = (best.plane_normal.x * normal.x) + (best.plane_normal.y * normal.y) + (best.plane_normal.z * normal.z);
+    for (int i = 1; i < count; ++i) {
+        const float dot = (hits[i].plane_normal.x * normal.x) + (hits[i].plane_normal.y * normal.y) + (hits[i].plane_normal.z * normal.z);
+        if (dot > best_dot) {
+            best = hits[i];
+            best_dot = dot;
+        }
+    }
+    return best;
+}
+
+// ── Unified climb wall queries (climb-parity-3 Inc 1) ───────────────
+
+// OG ClimbNormalCheck (Player.cs ClimbCheckAt gate): a face is climbable when
+// its normal is near-vertical, |n.y| < 0.35.
+static bool ClimbNormalCheck(const Vec3& n) {
+    return std::fabs(n.y) < 0.35f;
+}
+
+WallHit QueryClimbWall(const Room& room, const Vec3& point, float radius, const Vec3& prefer_dir) {
+    WallHit hits[kMaxWallHits];
+    const int count = QueryWallsFacePlane(room, point, radius, hits, kMaxWallHits);
+    if (count == 0) return WallHit{};
+
+    // Prefer-rank like OG SolidWallCheckClosestToNormal (World.cs:577-594):
+    // the prefer direction only RANKS candidates, it does NOT gate them.
+    WallHit best = hits[0];
+    float best_dot = (best.plane_normal.x * prefer_dir.x) +
+                     (best.plane_normal.y * prefer_dir.y) +
+                     (best.plane_normal.z * prefer_dir.z);
+    for (int i = 1; i < count; ++i) {
+        const float dot = (hits[i].plane_normal.x * prefer_dir.x) +
+                          (hits[i].plane_normal.y * prefer_dir.y) +
+                          (hits[i].plane_normal.z * prefer_dir.z);
+        if (dot > best_dot) {
+            best = hits[i];
+            best_dot = dot;
+        }
+    }
+    // QueryWallsFacePlaneMesh already gates |pn.y| < 0.35 for every returned
+    // hit; re-check so the wrapper's contract holds even if the inner query
+    // ever loosens (OG ClimbNormalCheck parity on the returned NORMAL).
+    if (!ClimbNormalCheck(best.plane_normal)) return WallHit{};
+    return best;
+}
+
+bool QueryClimbWallPresent(const Room& room, const Vec3& point, float radius, const Vec3& prefer_dir) {
+    return QueryClimbWall(room, point, radius, prefer_dir).hit;
+}
+
+bool QueryWallRay(const Room& room, const Vec3& origin, const Vec3& direction,
+                  float max_distance, WallHit* out_hit) {
+    if (!room.coll_mesh) {
+        // Dynamic-collider rooms (no static mesh) are not supported for climb
+        // corner rays — OG corners run on static Solids/meshes.
+        return false;
+    }
+    using namespace physics;
+    // BackfaceCull::Ignore: inverted-winding baked faces must be found
+    // (see .agents/common-mistakes/og-map-polygon-winding.md); the orientation
+    // check below supplies the cull discrimination instead.
+    uint32_t nodes = 0;
+    const RayHit h = RaycastMesh(*room.coll_mesh, origin, direction, max_distance,
+                                 BackfaceCull::Ignore, room.query_counters ? &nodes : nullptr);
+    if (room.query_counters) {
+        ++room.query_counters->raycasts;
+        room.query_counters->bvh_nodes_touched += nodes;
+    }
+    if (!h.hit) return false;
+
+    // Face-plane normal oriented toward the ray origin (baked winding can be
+    // reversed — same fix as QueryWallsMesh/QueryWallsFacePlaneMesh).
+    Vec3 pn;
+    {
+        const CollTriangle& ct = room.coll_mesh->triangles[h.face_id];
+        const Vec3& a = room.coll_mesh->world_verts[ct.i0];
+        Vec3 vn = Norm(Cross(Sub(room.coll_mesh->world_verts[ct.i1], a),
+                             Sub(room.coll_mesh->world_verts[ct.i2], a)));
+        const Vec3 to_origin = Sub(origin, a);
+        if (Dot(vn, to_origin) < 0.0f) {
+            vn = {-vn.x, -vn.y, -vn.z};
+        }
+        pn = vn;
+    }
+
+    // OG ClimbNormalCheck on the ray hit: slopes are not walls.
+    if (!ClimbNormalCheck(pn)) return false;
+
+    // Orientation: the hit must face the ray origin side (skip backfaces the
+    // Ignore policy let through, i.e. leave outward geometry).
+    if ((pn.x * direction.x) + (pn.y * direction.y) + (pn.z * direction.z) >= 0.0f) return false;
+
+    if (out_hit) {
+        const OwnerInfo owner = ResolveOwner(*room.coll_mesh, room, h.face_id);
+        *out_hit = WallHit{
+            .hit = true,
+            .point = h.point,
+            .normal = pn,
+            .plane_normal = pn,
+            .pushout = 0.0f,  // rays do not carry penetration depth
+            .face_id = h.face_id,
+            .owner_id = owner.id,
+            .owner_velocity = owner.velocity,
+        };
+    }
+    return true;
 }
 
 const MovingSurface* FindMovingSurface(const Room& room, int owner_id) {

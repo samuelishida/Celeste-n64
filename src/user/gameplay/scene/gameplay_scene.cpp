@@ -927,7 +927,31 @@ void GameplayScene::Update(float delta_seconds) {
         // Controller reads post-motor grounded state for FSM transitions
         PlayerController::StepContext player_step = impl_->player_controller.TimerInputPhase(
             impl_->player, input, camera_forward, FixedStepAccumulator::kTickDt);
+        const bool was_climbing_pre =
+            impl_->player.movement_state == PlayerMovementState::Climbing;
         impl_->player_controller.StatePhase(impl_->player, input, player_step, FixedStepAccumulator::kTickDt, &impl_->room);
+        if (!was_climbing_pre &&
+            impl_->player.movement_state == PlayerMovementState::Climbing) {
+            impl_->telemetry.RecordClimbStart();
+            // UNGATED: a bogus auto-grab must name its raw button bits at the
+            // exact grab frame — counter deltas alone cannot attribute it.
+            const InputSystem::RawSnapshot& raw = impl_->input_system.LastRaw();
+            debugf("[climb] START z=%u l=%u r=%u al=%d ar=%d "
+                   "wn=(%.2f,%.2f) pos=(%.1f,%.1f,%.1f)\n",
+                   static_cast<unsigned int>(raw.z),
+                   static_cast<unsigned int>(raw.l),
+                   static_cast<unsigned int>(raw.r),
+                   static_cast<int>(raw.analog_l),
+                   static_cast<int>(raw.analog_r),
+                   static_cast<double>(impl_->player.climb.wall_normal.x),
+                   static_cast<double>(impl_->player.climb.wall_normal.z),
+                   static_cast<double>(impl_->player.position.x),
+                   static_cast<double>(impl_->player.position.y),
+                   static_cast<double>(impl_->player.position.z));
+        }
+        if (player_step.mantle_triggered) {
+            impl_->telemetry.RecordClimbMantle();
+        }
         impl_->player_controller.LateContactPhase(impl_->player);
 
         if (impl_->respawn_system.Step(impl_->player, impl_->checkpoint, impl_->room, impl_->player_motor, motor_result.death)) {
@@ -986,7 +1010,7 @@ void GameplayScene::Update(float delta_seconds) {
     impl_->camera_controller.Step(
         impl_->camera,
         impl_->player.position,
-        impl_->player.wall_grabbing,
+        impl_->player.movement_state == PlayerMovementState::Climbing,
         impl_->player.grounded,
         horiz_speed,
         camera_input,
@@ -1056,6 +1080,22 @@ void GameplayScene::Update(float delta_seconds) {
     // report is NOT gated (it is the on-device measurement).
     if (kVerboseFrameLogging && impl_->telemetry.frame_index % 60 == 0) {
         impl_->telemetry.PrintLine();
+    }
+    // Raw input echo — UNGATED (same cadence as the profiler report): a stuck
+    // shoulder bit shows up here even with verbose logging off. Constant
+    // grabbing with no button held is visible as z/l/r=1 at rest.
+    if (impl_->telemetry.frame_index % 60 == 0) {
+        const InputSystem::RawSnapshot& raw = impl_->input_system.LastRaw();
+        debugf("[input] z=%u l=%u r=%u al=%d ar=%d | j=%u d=%u c=%u p=%u\n",
+               static_cast<unsigned int>(raw.z),
+               static_cast<unsigned int>(raw.l),
+               static_cast<unsigned int>(raw.r),
+               static_cast<int>(raw.analog_l),
+               static_cast<int>(raw.analog_r),
+               raw.jump_down ? 1u : 0u,
+               raw.dash_down ? 1u : 0u,
+               raw.climb_down ? 1u : 0u,
+               raw.pause_down ? 1u : 0u);
     }
 }
 

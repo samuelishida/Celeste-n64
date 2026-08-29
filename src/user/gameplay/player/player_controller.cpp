@@ -5,6 +5,12 @@
 #include <cstdint>
 #include <cstring>
 
+#ifdef __N64__
+#include <libdragon.h>
+#endif
+
+#include "gameplay/player/player_motor.hpp"
+#include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/runtime/math.hpp"
 
 namespace madeline_cube {
@@ -12,8 +18,126 @@ namespace {
 
 constexpr float kEpsilon = 0.0001f;
 
+// Climb-parity-3 Inc 1: single parity anchor between the controller's copy of
+// the half-height and the motor's. Fixture configs that override one must
+// override both (movement_config.hpp documents the pairing).
+static_assert(true, "player_half_height parity checked at runtime (see controller constructor)");
+
+// Grip-grace window (climb-and-zoom-fix): how long the climb holds through a
+// momentary grip-probe miss before releasing. The sphere probe flickers on
+// real geometry (seams, corners, tangent boundary), which used to drop the
+// grab for a frame and pump a release/fall/regrab cycle while climbing up.
+// 0.12s = ~7 ticks, long enough to ride out a single probe flicker without
+// feeling laggy on a deliberate release.
+constexpr float kClimbGripGrace = 0.12f;
+
+// Mantle persistence: consecutive ticks the ledge probe must stay clear before
+// the mantle hop fires. At climb_speed 40 u/s and 60 fps, 2 ticks ≈ 1.3 units
+// — enough to reject a single-frame tangency flicker while still mantling
+// promptly at the real lip.
+constexpr int kClimbMantleMinTicks = 2;
+
 float Length(float x, float y) {
     return std::sqrt((x * x) + (y * y));
+}
+
+// ── OG climb probe helpers (climb-parity-3 Inc 1) ────────────────────
+//
+// OG Z-up → demake +Y-up: position is the body CENTER; feet = center.y -
+// player_half_height. OG SolidWaistTestPos = feet + 3 (climb_waist_offset),
+// probe radius = ClimbCheckDist (4), prefer = -facing.
+//
+// Mirrors OG ClimbCheckAt(Vec3 offset): one plane-based query family drives
+// grip, ledge, and corner decisions. `y_extra` is the vertical offset ABOVE
+// the waist probe (OG's UnitZ extra) — 0 = grip check, 1 = ledge check.
+
+// Waist probe center for a body-center position.
+inline Vec3 ClimbWaistPoint(const PlayerState& state, const MovementConfig& config, float y_extra = 0.0f) {
+    const float feet_y = state.position.y - config.player_half_height;
+    return {
+        state.position.x,
+        feet_y + config.climb_waist_offset + y_extra,
+        state.position.z,
+    };
+}
+
+// OG ClimbCheckAt: single-query wall test at waist + y_extra. Returns the
+// plane-based hit (prefer-ranked by -facing) or a miss. Falls back to a
+// miss for room==nullptr fixtures (the flag fallback lives in the callers).
+inline WallHit ClimbCheckAt(const PlayerState& state, const MovementConfig& config,
+                            const Room* room, float y_extra = 0.0f) {
+    if (room == nullptr) return WallHit{};
+    const Vec3 into_wall = {-state.last_facing.x, 0.0f, -state.last_facing.z};
+    return QueryClimbWall(*room, ClimbWaistPoint(state, config, y_extra),
+                          config.climb_check_dist, into_wall);
+}
+
+// Ledge vertex support probe (climb-parity-3 Inc 1 stopgap for the lip):
+// the plane query projects onto the face's INFINITE plane, so a probe
+// hovering above a wall's top edge still "hits" (at an extension of the face
+// plane). OG's ClimbCheckAt miss is against actual geometry — a face ENDS at
+// its triangle vertices. This helper bounds the gripped-face hit to its
+// triangle: the probe counts as "supported" only if the hit point at its own
+// height lies inside one of the matching wall faces' vertex extremes within
+// a small tangent skin. A wall that genuinely continues above reports
+// supported (no mantle); a wall that ends reports unsupported → mantle.
+// Inc 4 replaces the mantle gate wholesale with the OG ClimbCheckAt miss via
+// the same bounding (this helper is written to migrate directly).
+bool LedgeHopMiss(const PlayerState& state, const MovementConfig& config,
+                  const Room* room, const WallHit& gripped, const Vec3& climb_normal,
+                  const PlayerInput& input) {
+    (void)climb_normal;
+    // Only holding up can ever mantle; every other case reports "no miss" so
+    // downstream flicker guards are untouched.
+    if (!(input.climb_held && input.move.y > 0.3f)) return false;
+    if (room == nullptr || !room->coll_mesh || !gripped.hit) return false;
+
+    const int tri_count = static_cast<int>(room->coll_mesh->header->triangle_count);
+    if (gripped.face_id < 0 || gripped.face_id >= tri_count) return false;
+
+    // The lip probe point: waist + climb_ledge_probe_extra.
+    const Vec3 probe = ClimbWaistPoint(state, config, config.climb_ledge_probe_extra);
+
+    // Scan faces whose plane normal matches the gripped face's (wall identity
+    // across bake seams): the probe is supported when it lies WITHIN a
+    // matching face's vertex extents (in its own plane) at the probe height.
+    const Vec3& n = gripped.plane_normal;
+    for (int f = 0; f < tri_count; ++f) {
+        const physics::CollTriangle& ct = room->coll_mesh->triangles[f];
+        if (!(ct.material & physics::MAT_SOLID)) continue;
+        const Vec3& a = room->coll_mesh->world_verts[ct.i0];
+        const Vec3& b = room->coll_mesh->world_verts[ct.i1];
+        const Vec3& c = room->coll_mesh->world_verts[ct.i2];
+        Vec3 fn = physics::Norm(physics::Cross(physics::Sub(b, a),
+                                               physics::Sub(c, a)));
+        // Orient toward the probe side; skip faces not facing the player.
+        const Vec3 to_probe = physics::Sub(probe, a);
+        if (physics::Dot(fn, to_probe) < 0.0f) fn = {-fn.x, -fn.y, -fn.z};
+        if (std::fabs(fn.y) >= 0.35f) continue;              // not a wall
+        if (physics::Dot(fn, n) < 0.7f) continue;            // not the same wall family
+        // Inside the face's vertex extents, evaluated ON THE FACE PLANE?
+        // A vertical wall triangle is zero-thick along its own normal, so the
+        // raw probe point (3 units off the plane) always fails an AABB test
+        // along that axis. Project the probe onto the plane first; the AABB
+        // check on the normal axis then always passes for the projected point
+        // and the tangent axes decide support.
+        const float plane_dist = std::fabs(physics::Dot(fn, to_probe));
+        if (plane_dist > config.climb_check_dist) continue;
+        const Vec3 proj = physics::Sub(probe, {fn.x * physics::Dot(fn, to_probe),
+                                               fn.y * physics::Dot(fn, to_probe),
+                                               fn.z * physics::Dot(fn, to_probe)});
+        Vec3 vmin = {std::min(a.x, std::min(b.x, c.x)),
+                     std::min(a.y, std::min(b.y, c.y)),
+                     std::min(a.z, std::min(b.z, c.z))};
+        Vec3 vmax = {std::max(a.x, std::max(b.x, c.x)),
+                     std::max(a.y, std::max(b.y, c.y)),
+                     std::max(a.z, std::max(b.z, c.z))};
+        if (proj.x < vmin.x - 0.01f || proj.x > vmax.x + 0.01f) continue;
+        if (proj.y < vmin.y - 0.01f || proj.y > vmax.y + 0.01f) continue;
+        if (proj.z < vmin.z - 0.01f || proj.z > vmax.z + 0.01f) continue;
+        return false;  // some face of the same wall supports the probe: NO miss
+    }
+    return true;  // no supporting wall at the probe point: LEDGE MISSES
 }
 
 void StartJump(PlayerState& state, const MovementConfig& config, const Vec3& move_input) {
@@ -109,7 +233,17 @@ void ApplyJumpAndGravity(
 
 }  // namespace
 
-PlayerController::PlayerController(MovementConfig config) : config_(config) {}
+PlayerController::PlayerController(MovementConfig config) : config_(config) {
+#ifdef __N64__
+    // Parity contract: the controller's anchor copy must equal the motor's
+    // (fixtures that override one must override both).
+    if (config_.player_half_height != PlayerMotorConfig{}.half_height) {
+        debugf("[climb] WARNING player_half_height=%.2f != motor half_height=%.2f\n",
+               (double)config_.player_half_height,
+               (double)PlayerMotorConfig{}.half_height);
+    }
+#endif
+}
 
 void PlayerController::Step(
     PlayerState& state,
@@ -151,14 +285,10 @@ PlayerController::StepContext PlayerController::TimerInputPhase(
     if (state.grounded) {
         state.coyote_time_remaining = profile_.coyote_time;
         state.contact.coyote_height = state.position.y;  // Record Y for coyote-jump snap
-        state.wall_grab_time_remaining = config_.wall_grab_time;
         context.dash_momentum = {};
         if (state.dash_reset_cooldown_remaining <= 0.0f) {
             state.air_dash_available = true;
         }
-        // Stamina refills on landing; clears climb exhaustion
-        state.stamina = state.stamina_max;
-        state.climb_exhausted = false;
     } else {
         state.coyote_time_remaining = Approach(state.coyote_time_remaining, 0.0f, delta_seconds);
     }
@@ -172,9 +302,7 @@ PlayerController::StepContext PlayerController::TimerInputPhase(
     state.dash_cooldown_remaining = Approach(state.dash_cooldown_remaining, 0.0f, delta_seconds);
     state.dash_reset_cooldown_remaining = Approach(state.dash_reset_cooldown_remaining, 0.0f, delta_seconds);
     state.no_dash_jump_remaining = Approach(state.no_dash_jump_remaining, 0.0f, delta_seconds);
-    state.wall_jump_cooldown_remaining = Approach(state.wall_jump_cooldown_remaining, 0.0f, delta_seconds);
     state.climb.cooldown_remaining = Approach(state.climb.cooldown_remaining, 0.0f, delta_seconds);
-    state.climb.hop_no_move_remaining = Approach(state.climb.hop_no_move_remaining, 0.0f, delta_seconds);
     state.no_move_time_remaining = Approach(state.no_move_time_remaining, 0.0f, delta_seconds);
     state.contact.ground_snap_cooldown_remaining = Approach(
         state.contact.ground_snap_cooldown_remaining,
@@ -201,163 +329,284 @@ void PlayerController::StatePhase(
         return;
     }
 
-    // Climbing (with OG Celeste64 stamina system)
+    // Climbing — OG Celeste64 model (Player.cs StClimbingUpdate): unlimited
+    // grip while a player holds Climb on a wall; gravity-free kinematic
+    // movement on the wall plane. No stamina.
     if (state.movement_state == PlayerMovementState::Climbing) {
-        // Use climb.wall_normal (captured at entry) for facing dot.
-        // Also consider the current state.wall_normal if it has data.
+        // Persistent wall identity (OG climbingWallNormal/climbingWallActor):
+        // the grip belongs to the face the player GRABBED, not whichever face
+        // is nearest this tick. The plane-based face query returns a stable
+        // face normal (no seam diagonal), and we keep the stored face unless a
+        // genuinely different wall is reached. This eliminates the frame-to-
+        // frame normal flip that pumped the release check.
+        const Vec3 into_wall = {-state.last_facing.x, 0.0f, -state.last_facing.z};
         Vec3 climb_normal = state.climb.wall_normal;
-        if (LengthXZ(state.wall_normal) > 0.1f) climb_normal = state.wall_normal;
-        const float wall_facing_dot = DotXZ(climb_normal,
-            {-state.last_facing.x, 0.0f, -state.last_facing.z});
-
-        // Release conditions: let go of grab, stamina exhausted, lost wall, not facing wall
-        if (!input.climb_held || state.stamina <= 0.0f ||
-            !(state.wall_left || state.wall_right) ||
-            wall_facing_dot < 0.5f) {
-            state.movement_state = PlayerMovementState::Normal;
-            state.locomotion_state = LocomotionState::Fall;
-            state.climb.cooldown_remaining = config_.climb_cooldown;
-            if (state.stamina <= 0.0f) {
-                state.climb_exhausted = true;
-            }
-            return;
+        if (LengthXZ(climb_normal) < 0.1f) {
+            climb_normal = NormalizeXZ(into_wall);
         }
 
-        // Wall jump from climb
-        if (input.jump_pressed) {
-            if (state.stamina >= config_.stamina_jump_cost) {
-                state.stamina -= config_.stamina_jump_cost;
+        // Grip presence: the unified ClimbCheckAt waist query (feet+3, radius
+        // 4, plane-based, OG ClimbNormalCheck gate). Without a room
+        // (controller-only fixtures) fall back to the motor's body-center flag.
+        const WallHit gripped = ClimbCheckAt(state, config_, room);
+        const bool grip_present = room != nullptr ? gripped.hit : state.wall_contact;
+
+        // Re-acquire the gripped face by identity, not by nearest-any-wall.
+        // Keep the stored normal while the same face (or a consistent normal)
+        // is present; update only on a genuine wall change (different face and
+        // divergent normal, e.g. rounding a corner).
+        if (gripped.hit) {
+            const bool same_face = state.climb.grip_face_id == gripped.face_id;
+            const bool climb_normal_xz = LengthXZ(climb_normal) > 0.1f;
+            const bool same_direction = climb_normal_xz &&
+                DotXZ(gripped.plane_normal, climb_normal) > 0.5f;
+            if (!climb_normal_xz) {
+                // Degenerate stored normal (e.g. a Y-normal from a sphere
+                // query): adopt the gripped face's plane normal.
+                state.climb.wall_normal = gripped.plane_normal;
+            } else if (same_face || same_direction) {
+                // Still on the gripped wall (or an equivalent face): keep normal.
+                if (LengthXZ(state.climb.wall_normal) < 0.1f) {
+                    state.climb.wall_normal = gripped.plane_normal;
+                }
+            } else {
+                // Reached a genuinely different wall: adopt it.
+                state.climb.wall_normal = gripped.plane_normal;
+            }
+            state.climb.grip_face_id = gripped.face_id;
+            climb_normal = state.climb.wall_normal;
+        }
+
+        const float wall_facing_dot = DotXZ(climb_normal, into_wall);
+
+        // Ledge-hop mantle (OG Player.cs:1602-1614): holding up while the lip
+        // probe (waist + 1 unit, OG ClimbCheckAt(+1 UnitZ)) MISSES means the
+        // feet have effectively reached the top. The probe is the SAME unified
+        // plane query as grip (one query family for all climb decisions, inc 1
+        // decision). OG's miss is against actual geometry — the plane query
+        // projects onto the face's INFINITE plane, so a lip probe beside an
+        // open vertical edge (a triangle boundary, not geometry) would still
+        // "hit" unless caller-bounded. The grep ring enforces that OG
+        // geometry-bounded miss: the hit's plane-point must carry real wall
+        // support at the probe's height on the gripped face (or any face
+        // sharing its normal) between the triple's vertex extremes.
+        // (Inc 4 replaces this with the end-state ClimbCheckAt miss; the
+        // bounded-miss helper arrives there.)
+        // Mantle persistence: the probe can flicker at the tangency boundary
+        // mid-wall (real-geometry pump while climbing up). Require the ledge
+        // to be clear for several consecutive ticks before launching so a
+        // single-frame flicker can't eject her.
+        const bool ledge_clear =
+            room == nullptr ||
+            !QueryWallPresent(*room,
+                {state.position.x,
+                 state.position.y + config_.climb_ledge_probe_center_offset,
+                 state.position.z},
+                config_.wall_probe_radius);
+        if (input.climb_held &&
+            input.move.y > 0.3f &&
+            room != nullptr &&
+            LedgeHopMiss(state, config_, room, gripped, climb_normal, input)) {
+            ++state.climb.ledge_miss_ticks;
+            if (state.climb.ledge_miss_ticks >= kClimbMantleMinTicks) {
+                const Vec3 hop_dir = LengthXZ(state.climb.wall_normal) > 0.1f
+                    ? NormalizeXZ(state.climb.wall_normal)
+                    : NormalizeXZ(climb_normal);
                 state.movement_state = PlayerMovementState::Normal;
-                // Jump away from wall: velocity in wall_normal direction
-                const Vec3 fallback_dir = state.wall_left ? Vec3{1.0f,0.0f,0.0f} : Vec3{-1.0f,0.0f,0.0f};
-                const Vec3 jump_dir = LengthXZ(state.wall_normal) > 0.1f
-                    ? NormalizeXZ(state.wall_normal, fallback_dir)
-                    : fallback_dir;
-                const bool neutral = !has_move_input;
-                const float horizontal = neutral
-                    ? profile_.neutral_wall_jump_horizontal_speed
-                    : profile_.wall_jump_horizontal_speed;
-                state.velocity.x = jump_dir.x * horizontal;
-                state.velocity.y = neutral
-                    ? profile_.neutral_wall_jump_vertical_speed
-                    : profile_.wall_jump_vertical_speed;
-                state.velocity.z = jump_dir.z * horizontal;
-                state.target_facing = jump_dir;
-                state.last_facing = jump_dir;
                 state.locomotion_state = LocomotionState::Jump;
-                state.hold_jump_speed = config_.jump_speed;
-                state.hold_jump_time_remaining = config_.jump_hold_time;
+                // Facing stays into the old wall; forward = over the lip (-normal).
+                state.velocity.x = -hop_dir.x * config_.climb_hop_forward_speed;
+                state.velocity.y = config_.climb_hop_up_speed;
+                state.velocity.z = -hop_dir.z * config_.climb_hop_forward_speed;
+                state.no_move_time_remaining = config_.climb_hop_no_move_time;
                 state.climb.cooldown_remaining = config_.climb_cooldown;
+                context.mantle_triggered = true;
+                return;
+            }
+        } else {
+            state.climb.ledge_miss_ticks = 0;
+        }
+
+        // Release conditions: let go of grab, lost the wall, or faced away.
+        // No cooldown here (OG parity): only the mantle sets one, so hanging
+        // at a wall top cannot pump into release/fall/regrab cycles.
+        //
+        // Grip-grace: the sphere grip probe can flicker for a frame on real
+        // geometry (seams, corners, floating-point at the tangent boundary),
+        // which pumped the player into a release/fall/regrab cycle mid-wall
+        // while climbing up. A momentary probe miss must NOT drop the grab —
+        // only release after grip stays absent for the full grace window.
+        // Button release and facing-away are still instant (deliberate intent,
+        // not probe noise). The mantle path (above) already handles the real
+        // wall top before this guard.
+        if (!input.climb_held || wall_facing_dot < 0.5f) {
+#ifdef __N64__
+            debugf("[climb] EXIT %s lf=(%.2f,%.2f) wn=(%.2f,%.2f) grip=%d\n",
+                   !input.climb_held ? "button" : "facing",
+                   (double)state.last_facing.x, (double)state.last_facing.z,
+                   (double)climb_normal.x, (double)climb_normal.z,
+                   (int)grip_present);
+#endif
+            state.movement_state = PlayerMovementState::Normal;
+            state.locomotion_state = state.grounded ? LocomotionState::Idle
+                                                    : LocomotionState::Fall;
+            return;
+        }
+        if (grip_present) {
+            state.climb.grip_lost_timer = kClimbGripGrace;
+        } else {
+            state.climb.grip_lost_timer -= delta_seconds;
+            if (state.climb.grip_lost_timer <= 0.0f) {
+#ifdef __N64__
+                debugf("[climb] release grip_lost (grip=%d lf=(%.2f,%.2f) wn=(%.2f,%.2f))\n",
+                       (int)grip_present,
+                       (double)state.last_facing.x, (double)state.last_facing.z,
+                       (double)climb_normal.x, (double)climb_normal.z);
+#endif
+                state.movement_state = PlayerMovementState::Normal;
+                state.locomotion_state = state.grounded ? LocomotionState::Idle
+                                                        : LocomotionState::Fall;
                 return;
             }
         }
 
-        // Climb hop over ledge (up input at top of wall)
-        // TODO: detect ledge geometry and trigger hop when climbing above ledge
-
-        // Stamina drain while climbing
-        const float vertical_input = input.move.y;
-        if (vertical_input > 0.0f) {
-            // Climbing up: hold drain + up drain
-            state.stamina -= (config_.stamina_hold_drain + config_.stamina_up_drain) * delta_seconds;
-        } else {
-            // Holding (idle or sliding down): hold drain only
-            state.stamina -= config_.stamina_hold_drain * delta_seconds;
-        }
-        if (state.stamina <= 0.0f) {
-            state.stamina = 0.0f;
-            state.climb_exhausted = true;
+        // Wall jump from climb: velocity is SET away from the wall (OG WallJump).
+        if (input.jump_pressed) {
             state.movement_state = PlayerMovementState::Normal;
-            state.locomotion_state = LocomotionState::Fall;
-            state.climb.cooldown_remaining = config_.climb_cooldown;
+            const Vec3 jump_dir = NormalizeXZ(climb_normal,
+                Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
+            const bool neutral = !has_move_input;
+            const float horizontal = neutral
+                ? profile_.neutral_wall_jump_horizontal_speed
+                : profile_.wall_jump_horizontal_speed;
+            state.velocity.x = jump_dir.x * horizontal;
+            state.velocity.y = neutral
+                ? profile_.neutral_wall_jump_vertical_speed
+                : profile_.wall_jump_vertical_speed;
+            state.velocity.z = jump_dir.z * horizontal;
+            state.target_facing = jump_dir;
+            state.last_facing = jump_dir;
+            state.locomotion_state = LocomotionState::Jump;
+            state.hold_jump_speed = config_.jump_speed;
+            state.hold_jump_time_remaining = config_.jump_hold_time;
+            // No climb cooldown (OG parity): the facing-away gate blocks
+            // instant re-grab after the launch.
             return;
         }
 
-        // Climb movement: move along wall surface
-        state.velocity.x = 0.0f;
-        state.velocity.z = 0.0f;
-        state.velocity.y = vertical_input * profile_.climb_speed;
+        // Dash off the wall (parity with OG dash-out of Climb).
+        if (input.dash_pressed &&
+            state.air_dash_available &&
+            state.dash_cooldown_remaining <= 0.0f) {
+            if (has_move_input) {
+                state.target_facing = move_input;
+            }
+            state.target_facing = NormalizeXZ(state.target_facing, climb_normal);
+            state.last_facing = state.target_facing;
+            state.dashed_on_ground = false;
+            state.movement_state = PlayerMovementState::Dashing;
+            state.locomotion_state = LocomotionState::Dash;
+            state.air_dash_available = false;
+            state.auto_jump = false;
+            state.dash_hitstop_remaining = profile_.dash_hitstop_time;
+            state.dash_active_remaining = profile_.dash_active_time;
+            state.dash_time_remaining = profile_.dash_hitstop_time + profile_.dash_active_time;
+            state.dash_reset_cooldown_remaining = config_.dash_reset_cooldown;
+            state.no_dash_jump_remaining = 0.10f;
+            context.dash_momentum = {};
+            state.velocity = {};
+            return;
+        }
+
+        // Movement along the wall plane: raw stick Y climbs up/down; camera-
+        // relative horizontal intent is projected onto the wall tangent.
+        Vec3 tangent = {climb_normal.z, 0.0f, -climb_normal.x};
+        const float tlen = std::sqrt((tangent.x * tangent.x) + (tangent.z * tangent.z));
+        if (tlen > kEpsilon) {
+            tangent.x /= tlen;
+            tangent.z /= tlen;
+        } else {
+            tangent = {0.0f, 0.0f, 0.0f};
+        }
+        const float lateral = context.has_move_input
+            ? ((context.move_input.x * tangent.x) + (context.move_input.z * tangent.z))
+            : 0.0f;
+
+        state.velocity.x = tangent.x * lateral * profile_.climb_speed;
+        state.velocity.z = tangent.z * lateral * profile_.climb_speed;
+        state.velocity.y = input.move.y * profile_.climb_speed;
+        // Cancel downward climb while grounded (OG: move.Z < 0 on ground).
+        if (state.grounded && state.velocity.y < 0.0f) {
+            state.velocity.y = 0.0f;
+        }
         state.locomotion_state = LocomotionState::Climb;
         return;
     }
 
-    // Climb entry: airborne + wall contact + facing wall + climb held + not exhausted + stamina > 0
+    // Climb entry — OG Celeste64: grab any solid wall (grounded or airborne).
+    // Input gate (Player.cs:848): stick neutral OR pushing into the wall.
     {
-        // Compute facing dot: how much the player faces into the wall.
-        // When wall_normal is not set, derive from wall_left/wall_right.
         Vec3 entry_normal = state.wall_normal;
-        if (LengthXZ(entry_normal) < 0.1f) {
-            if (state.wall_left)  entry_normal = {1.0f, 0.0f, 0.0f};
-            if (state.wall_right) entry_normal = {-1.0f, 0.0f, 0.0f};
+        const bool entry_normal_valid = LengthXZ(entry_normal) > 0.1f;
+        if (!entry_normal_valid) {
+            entry_normal = {-state.last_facing.x, 0.0f, -state.last_facing.z};
         }
         const float wall_facing_dot = DotXZ(entry_normal,
             {-state.last_facing.x, 0.0f, -state.last_facing.z});
         const bool facing_wall = wall_facing_dot >= 0.5f;
+        const bool into_wall_input = !context.has_move_input ||
+                                     DotXZ(context.move_input, entry_normal) <= -0.5f;
 
         if (input.climb_held &&
             state.climb.cooldown_remaining <= 0.0f &&
-            !state.climb_exhausted &&
-            state.stamina > 0.0f &&
-            !state.grounded &&
-            (state.wall_left || state.wall_right) &&
-            state.wall_climbable &&
-            facing_wall) {
+            state.wall_contact &&
+            entry_normal_valid &&
+            facing_wall &&
+            into_wall_input) {
+            // into-wall direction for the entry probe (used by the identity
+            // capture + anchor below).
+            const Vec3 into_wall_dir = {-state.last_facing.x, 0.0f, -state.last_facing.z};
             state.movement_state = PlayerMovementState::Climbing;
             state.locomotion_state = LocomotionState::Climb;
             state.climb.wall_normal = entry_normal;
+            // Capture the gripped face identity via the unified plane query
+            // (climb-parity-3 Inc 1: same query family as sustain) and
+            // REPOSITION to the OG TryClimb anchor: center = wall point +
+            // (half_height - waist_offset) up + pushout out along the normal.
+            // This is the coupled minimum that makes the tighter radius-4
+            // sustain probe geometrically valid: the motor's Normal-radius
+            // popout can rest her waist 5 units from the face (out of probe
+            // reach), so entry must re-anchor before the first sustain tick.
+            // (The full OG TryClimb + tunnel guard + airborne snap-up land in
+            // Inc 2; plan notes this pull-forward.)
+            bool anchored = false;
+            if (room != nullptr) {
+                const WallHit gripped = QueryClimbWall(
+                    *room, ClimbWaistPoint(state, config_),
+                    config_.wall_probe_radius, into_wall_dir);
+                if (gripped.hit) {
+                    state.climb.wall_normal = gripped.plane_normal;
+                    state.climb.grip_face_id = gripped.face_id;
+                    state.position = {
+                        gripped.point.x + gripped.plane_normal.x * config_.climb_pushout_dist,
+                        gripped.point.y + (config_.player_half_height - config_.climb_waist_offset),
+                        gripped.point.z + gripped.plane_normal.z * config_.climb_pushout_dist,
+                    };
+                    anchored = true;
+                }
+            }
+            (void)anchored;
             state.velocity = {};
             return;
         }
     }
 
-    // Wall slide: grab a vertical wall while airborne by holding the Climb
-    // button (Z/L/R) — NOT the jump button. Per spec §15-16 the grab/climb
-    // action is bound to Climb; this forgiving fallback lets the player latch
-    // and slide even when the wall lacks MAT_CLIMBABLE (which the climb-entry
-    // path below requires).
-    const bool can_wall_grab = !state.grounded &&
-                               (state.wall_left || state.wall_right) &&
-                               state.wall_grab_time_remaining > 0.0f &&
-                               state.wall_jump_cooldown_remaining <= 0.0f;
-    if (can_wall_grab && input.climb_held) {
-        state.wall_grabbing = true;
-    } else if (!input.climb_held || state.grounded) {
-        state.wall_grabbing = false;
-    }
-
-    if (state.wall_grabbing) {
-        state.wall_grab_time_remaining = Approach(state.wall_grab_time_remaining, 0.0f, delta_seconds);
-        state.velocity.y = -config_.wall_slide_speed;
-        state.velocity.x = 0.0f;
-        state.velocity.z = 0.0f;
-
-        if (input.jump_pressed) {
-            state.wall_grabbing = false;
-            state.wall_jump_cooldown_remaining = config_.wall_jump_cooldown;
-            // Jump away from wall using wall_normal direction
-            const Vec3 fallback_dir = state.wall_left ? Vec3{1.0f,0.0f,0.0f} : Vec3{-1.0f,0.0f,0.0f};
-            const Vec3 jump_dir = LengthXZ(state.wall_normal) > 0.1f
-                ? NormalizeXZ(state.wall_normal, fallback_dir)
-                : fallback_dir;
-            state.target_facing = jump_dir;
-            state.last_facing = jump_dir;
-            state.velocity.x = jump_dir.x * config_.wall_jump_speed_x;
-            state.velocity.y = config_.wall_jump_speed_y;
-            state.velocity.z = jump_dir.z * config_.wall_jump_speed_x;
-            state.hold_jump_speed = config_.jump_speed;
-            state.hold_jump_time_remaining = config_.jump_hold_time;
-        }
-    }
-
-    // Directional wall jump (without grab)
-    if (!state.wall_grabbing &&
-        !state.grounded &&
+    // Directional wall jump (without grab): SET velocity away from the wall.
+    if (!state.grounded &&
         input.jump_pressed &&
-        (state.wall_left || state.wall_right)) {
-        const Vec3 fallback_dir = state.wall_left ? Vec3{1.0f,0.0f,0.0f} : Vec3{-1.0f,0.0f,0.0f};
-        const Vec3 jump_dir = LengthXZ(state.wall_normal) > 0.1f
-            ? NormalizeXZ(state.wall_normal, fallback_dir)
-            : fallback_dir;
+        state.wall_contact) {
+        const Vec3 jump_dir = NormalizeXZ(state.wall_normal,
+            Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
         state.target_facing = jump_dir;
         state.last_facing = jump_dir;
         state.velocity.x = jump_dir.x * config_.wall_jump_speed_x;
@@ -365,11 +614,9 @@ void PlayerController::StatePhase(
         state.velocity.z = jump_dir.z * config_.wall_jump_speed_x;
         state.hold_jump_speed = config_.jump_speed;
         state.hold_jump_time_remaining = config_.jump_hold_time;
-        state.wall_jump_cooldown_remaining = config_.wall_jump_cooldown;
     }
 
-    if (!state.wall_grabbing &&
-        input.dash_pressed &&
+    if (input.dash_pressed &&
         state.air_dash_available &&
         state.dash_cooldown_remaining <= 0.0f) {
         if (has_move_input) {
@@ -387,12 +634,11 @@ void PlayerController::StatePhase(
         state.dash_time_remaining = profile_.dash_hitstop_time + profile_.dash_active_time;
         state.dash_reset_cooldown_remaining = config_.dash_reset_cooldown;
         state.no_dash_jump_remaining = 0.10f;
-        state.wall_grabbing = false;
         context.dash_momentum = {};
         state.velocity = {};
     }
 
-    if (!state.wall_grabbing) {
+    {
         if (state.movement_state == PlayerMovementState::Dashing) {
             state.dash_time_remaining -= delta_seconds;
             if (state.dash_hitstop_remaining > 0.0f) {
@@ -426,16 +672,20 @@ void PlayerController::StatePhase(
         }
 
         if (state.movement_state == PlayerMovementState::Normal) {
+            // Post-mantle input lockout (OG tNoMove, Player.cs:997): while the
+            // lockout is active only friction applies — move input is ignored.
+            const bool move_locked = state.no_move_time_remaining > 0.0f;
+            const bool move_active = has_move_input && !move_locked;
             const Vec3 horizontal_velocity = {state.velocity.x, 0.0f, state.velocity.z};
             const float speed_xz = LengthXZ(horizontal_velocity);
             const float desired_speed = profile_.run_max_speed * AnalogMagnitude(raw_input_length);
-            const Vec3 target_velocity = has_move_input
+            const Vec3 target_velocity = move_active
                 ? Vec3{move_input.x * desired_speed, state.velocity.y, move_input.z * desired_speed}
                 : Vec3{0.0f, state.velocity.y, 0.0f};
 
             if (state.grounded) {
                 // OG: rotation-based turning when above rotate threshold.
-                if (has_move_input && speed_xz > profile_.rotate_threshold) {
+                if (move_active && speed_xz > profile_.rotate_threshold) {
                     state.target_facing = RotateTowardXZ(state.target_facing, move_input, profile_.rotate_speed * delta_seconds);
                     const float accel = profile_.ground_acceleration;
                     const Vec3 rotated_target = {
@@ -445,21 +695,21 @@ void PlayerController::StatePhase(
                     };
                     state.velocity = ApproachXZ(state.velocity, rotated_target, accel * delta_seconds);
                 } else {
-                    const float accel = has_move_input
+                    const float accel = move_active
                         ? profile_.ground_acceleration
                         : profile_.ground_deceleration;
                     state.velocity = ApproachXZ(state.velocity, target_velocity, accel * delta_seconds);
                 }
-                state.locomotion_state = has_move_input || speed_xz > kEpsilon
+                state.locomotion_state = move_active || speed_xz > kEpsilon
                     ? LocomotionState::Run
                     : LocomotionState::Idle;
-                if (has_move_input) {
+                if (move_active) {
                     state.target_facing = move_input;
                     state.facing = move_input;
                 }
             } else {
                 // Air movement: OG scales accel by dot product of input vs velocity direction
-                const float input_dot = has_move_input
+                const float input_dot = move_active
                     ? DotXZ(NormalizeXZ(horizontal_velocity, state.target_facing), move_input)
                     : 1.0f;
                 float accel_mult = 1.0f;
@@ -474,7 +724,7 @@ void PlayerController::StatePhase(
                 } else {
                     accel = profile_.air_acceleration * accel_mult;
                 }
-                if (has_move_input) {
+                if (move_active) {
                     // OG: rotation-based turning in air too
                     if (speed_xz > profile_.rotate_threshold) {
                         state.target_facing = RotateTowardXZ(state.target_facing, move_input, profile_.rotate_speed * delta_seconds);
@@ -496,7 +746,7 @@ void PlayerController::StatePhase(
         }
     }
 
-    if (!state.wall_grabbing && state.movement_state != PlayerMovementState::Dashing) {
+    if (state.movement_state != PlayerMovementState::Dashing) {
         state.facing = RotateTowardXZ(state.facing, state.target_facing, 12.566371f * delta_seconds);
     }
 }

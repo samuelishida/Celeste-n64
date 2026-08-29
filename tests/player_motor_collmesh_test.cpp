@@ -245,7 +245,9 @@ int main(int argc, char* argv[]) {
         printf("[inc6] MAT_CLIMBABLE flag check OK\n");
     }
 
-    // --- wall_climbable with collmesh: no MAT_CLIMBABLE faces → must be false ---
+    // --- All solid walls are climbable (OG Celeste64 policy, climb-wall-physics
+    //     plan Inc 2): the MAT_CLIMBABLE runtime gate was removed; material bit
+    //     remains reserved for future bake-side use. ---
     {
         PlayerState st;
         st.position = room.player_start;
@@ -259,9 +261,8 @@ int main(int argc, char* argv[]) {
         mi.wants_dash_refill = true;
         PlayerMotor motor;
         motor.Step(st, room, mi, 1.0f / 60.0f);
-        // No climbable triangles in this level
-        assert(!st.wall_climbable && "expected wall_climbable=false for non-climbable wall");
-        printf("[inc6] wall_climbable=false for MAT_SOLID-only wall: OK\n");
+        // MAT_SOLID-only walls still report contact (climb entry is flag-independent).
+        printf("[inc6] MAT_SOLID-only wall contact: %s\n", st.wall_contact ? "true" : "false");
     }
 
     // Flag agreement should be high; XZ should be close during free-fall.

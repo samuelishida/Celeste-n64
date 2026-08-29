@@ -80,7 +80,7 @@ PlayerState RunScenePlayerTick(
     }
 
     // 6. camera reads post-motor player state
-    camera_ctrl.Step(camera, p.position, p.wall_grabbing, p.grounded, 0.0f, {}, delta_seconds, &room);
+    camera_ctrl.Step(camera, p.position, p.movement_state == PlayerMovementState::Climbing, p.grounded, 0.0f, {}, delta_seconds, &room);
 
     return p;
 }

@@ -160,14 +160,16 @@ void CameraController::Step(
 
     // --- Zoom ---
     if (input.zoom != 0.0f) {
-        camera.target_distance = Clamp(camera.target_distance + (input.zoom * delta_seconds), 0.0f, 1.0f);
+        camera.target_distance = Clamp(
+            camera.target_distance + (input.zoom * config_.zoom_rate * delta_seconds),
+            0.0f, 1.0f);
     } else {
         const float interval = config_.zoom_snap_interval;
         const float remainder = std::fmod(camera.target_distance, interval);
         if (remainder < config_.zoom_snap_threshold ||
             remainder > interval - config_.zoom_snap_threshold) {
             const float snapped = Clamp(Snap(camera.target_distance, interval), 0.0f, 1.0f);
-            const float max_delta = delta_seconds * 0.5f;
+            const float max_delta = delta_seconds * config_.zoom_snap_speed;
             if (camera.target_distance < snapped) {
                 camera.target_distance = camera.target_distance + max_delta > snapped
                     ? snapped
@@ -278,7 +280,16 @@ void CameraController::Step(
     }
 
     // --- Smooth position follow (OG: 1 - pow(0.01, dt)) ---
-    const float alpha = FollowAlpha(config_.camera_follow_decay, delta_seconds);
+    // The follow decay is shared with orbit/movement and is intentionally
+    // slow (0.01 -> ~7%/frame). But that same lag ALSO gates perceived zoom:
+    // even with `target_distance` swept at `zoom_rate`, camera.position only
+    // creeps ~7% toward the new desired spot per frame, so a full zoom still
+    // takes ~2-3s. While the player is actively zooming we tighten the follow
+    // so the camera chases the zoomed-in spot responsively, then let the
+    // normal decay ease it on the way back when zoom stops.
+    const float follow_decay =
+        input.zoom != 0.0f ? 0.0001f : config_.camera_follow_decay;
+    const float alpha = FollowAlpha(follow_decay, delta_seconds);
 
     camera.position.x += (desired_position.x - camera.position.x) * alpha;
     camera.position.y += (desired_position.y - camera.position.y) * alpha;

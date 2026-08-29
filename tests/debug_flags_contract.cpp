@@ -17,11 +17,12 @@ int main() {
         std::fprintf(stderr, "FAIL: kVerboseFrameLogging must default to false\n");
         return 1;
     }
-    // render-distance Inc 1: backface culling must be ON by default (the near
-    // pass culls backfaces on the RSP). If a device regression forces it OFF,
-    // this contract is the first place to revert.
-    if (!kEnableBackCull) {
-        std::fprintf(stderr, "FAIL: kEnableBackCull must default to true\n");
+    // Backface culling must stay OFF by default: the og-baked Forsaken City
+    // map loses floor textures with culling enabled (device-verified fix,
+    // 2026-08-24 backcull baselines). Flip this contract + the flag together
+    // only after every baked surface renders correctly under culling.
+    if (kEnableBackCull) {
+        std::fprintf(stderr, "FAIL: kEnableBackCull must default to false\n");
         return 1;
     }
     std::printf("debug_flags_contract: all checks passed\n");
