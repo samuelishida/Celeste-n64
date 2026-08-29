@@ -56,38 +56,66 @@ facing it.
 
 - **All solid walls are climbable** — no material gate at runtime (the
   `MAT_CLIMBABLE` collmesh bit remains reserved for future bake-side use).
-- Entry: Climb held + wall contact + facing-dot ≥ 0.5 + stick neutral OR pushing
-  into the wall (dot ≤ -0.5). Grounded entry allowed (OG-faithful).
-- Grab zeroes all velocity; climbing is gravity-free kinematic movement on the
-  wall plane: raw stick Y = up/down at `climb_speed` (down canceled while
+- Entry (OG `TryClimb` parity): Climb held + facing-dot ≥ 0.5 + stick neutral
+  OR pushing into the wall (dot ≤ -0.5). Her OWN waist query decides (no motor
+  flag); the entry probe uses the visibility radius (5.0 = motor tangent rest
+  distance) because at exact tangency her waist rests one unit beyond the r4
+  sustain reach, then re-anchors her to `wall.point + normal*3`. Airborne
+  rising (+4-unit snap-up variant) grabs a higher wall. Grounded entry allowed
+  (OG-faithful).
+- Grab zeroes all velocity and re-anchors the CENTER to
+  `wall.point + {0, half_height - waist_offset, 0} + normal*3` (waist lands at
+  the wall surface + 3 out); climbing is gravity-free kinematic movement on
+  the wall plane: raw stick Y = up/down at `climb_speed` (down canceled while
   grounded); camera-relative horizontal intent projected onto the wall tangent.
 - Release: button released / waist-level grip probe lost / faced away. No
   cooldown on release (only the mantle sets one) so hanging at a lip cannot
   pump into fall/regrab cycles.
 - Climb walljump: SET velocity away from the wall normal — directed 83.2 XY /
   90 Y; neutral 40 XY / 105 Y (repo-local neutral split, kept for feel).
-- Ledge-hop mantle: holding up while the lip probe misses → ballistic hop
-  (-wall_normal × 40 forward, 80 up), 0.25 s move-input lockout, 0.3 s re-grab
-  cooldown. Probe bands key off the feet (`climb_grip_probe_center_offset`,
-  `climb_ledge_probe_center_offset`) exactly like OG's waist-relative checks.
+- Ledge-hop mantle: holding up while the lip probe (waist + 1, OG
+  `ClimbCheckAt(+1 UnitZ)`) MISSES → ballistic hop (-wall_normal × 40 forward,
+  80 up), 0.25 s move-input lockout, 0.3 s re-grab cooldown. The lip probe is
+  the SAME unified plane query as grip, geometry-bounded to the gripped wall
+  faces' vertex extents (a face ends at its triangles — the infinite-plane
+  projection alone would never report a miss at a wall top).
+- Corner system (OG `StClimbingUpdate` parity): inner-corner side ray,
+  slope-away snap ray, and outer-corner forward+side ray with a 0.2 s eased
+  position/facing lerp. All adopts re-anchor the center to the new wall and
+  reset grip identity + facing INTO the new wall.
 - Ground acceptance: raycast-path floors require `normal.y >= 0.35`; sphere
   sweeps require `>= 0.70`, or `>= 0.35` plus a downward-raycast floor
   confirmation (see wall-contact table below) — walls can never register as
   ground, and mid-wall diagonal sweep hits are rejected.
 
-## Wall-contact model (OG plane-based parity, wall-climb-overhaul)
+## Wall-contact model (OG plane-based parity, climb-parity-3)
 
 | Aspect | Value |
 |---|---|
 | Wall normal source | Face-plane normal from the owning triangle (`QueryWallsFacePlane`), oriented toward the query point; stable across seams/corners (no sphere-closest-point diagonal) |
 | Wall gate | `|plane_normal.y| < 0.35` (OG `ClimbNormalCheck`) — only near-vertical faces are walls; slopes are never grab surfaces |
+| Probe anchors | Waist = feet + 3 (`climb_waist_offset`), head = feet + 10; probe radius = `climb_check_dist` (4, OG `ClimbCheckDist`); pushout = 3 (OG `WallPushoutDist`) |
 | Grip identity | Persistent — climb re-acquires the stored `grip_face_id` (static-collmesh triangle) rather than the nearest-any-wall normal; updates only on a genuine wall change (corner traversal) |
 | Positional pushout | Full-3D (`plane_normal` × pushout), per-substep vertical cap ±6 units — yields free step-up over ankle/knee-high ledges |
 | Velocity removal | **Impact-only**: on contact-edge substeps or when motion drives >1 unit deeper into the wall, remove the into-normal component once against the true face plane. Resting contact never edits velocity — no continuous fall damping |
-| Wall-contact flag | Sourced from the motor body-center sweep **OR** the waist plane-probe (`PlayerMotorConfig::wall_probe_center_offset`), so motor and climb controller agree on grip |
+| Wall-contact flag | **Physical-only** (body-center sphere). The motor's waist-flag OR (`RunWallFlagFromWaist`) is GONE — climb entry runs its own `TryClimb` waist query, so the flag no longer inflates phantom grabs |
+| Climb collision radius | `climb_collision_radius` (3.0 = OG `WallPushoutDist`) while Climbing — makes the entry anchor a zero-popout equilibrium; `radius` (5.0) otherwise (Normal-state convenience) |
 | Fall speed at walls | Preserved exactly (tangential), so brushing a seam no longer eats `vy`; slide is full fall speed (no separate slide state, OG-faithful) |
 | Floor sweep acceptance | Sphere-sweep floor requires `normal.y >= 0.70` outright, OR `>= 0.35` plus a downward-raycast floor confirmation at the sweep point. Raycast-path floor gate stays `0.35`. Kills mid-wall diagonal "grounded" hooks |
 | One-way / death | Handled at the face layer as before (pass-through from below, death material) |
+
+### Documented deviations from OG (deliberate, device-reviewable)
+
+1. **Entry facing gate** `|dot(normal, -facing)| >= 0.5` is KEPT. OG's
+   `ClimbCheckAt` has NO dot threshold — the prefer vector only RANKS
+   candidates (a lone wall behind her still returns a hit). The demake narrows
+   the grab set to target the phantom-latch complaint. To restore OG-authentic
+   side/behind grabs, delete the `facing_wall` conjunct in the entry block
+   (one line).
+2. **2-tick mantle confirm** is retained (OG hops instantly). The demake's
+   confirm rejects a single-frame lip-probe flicker; OG tolerates ~1 frame of
+   probe noise because it re-grabs via `TryClimb`. If device shows >50 ms
+   lip-lag, revisit with a capture rather than silently flipping.
 
 The seam-pump (43 `[climb] START`/tick) is fixed by the plane-based face normals
 + persistent grip identity: seams no longer produce a diagonal normal that

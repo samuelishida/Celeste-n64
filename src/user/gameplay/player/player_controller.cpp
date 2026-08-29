@@ -697,6 +697,7 @@ void PlayerController::StatePhase(
                 state.climb.corner_ease = config_.climb_corner_ease_time;
                 state.climb.corner_travel_origin = state.position;
                 state.locomotion_state = LocomotionState::Climb;
+                context.corner_triggered = true;
                 return;
             }
         }
@@ -749,6 +750,7 @@ void PlayerController::StatePhase(
             state.climb.corner_ease = config_.climb_corner_ease_time;
             state.climb.corner_travel_origin = state.position;
             state.locomotion_state = LocomotionState::Climb;
+            context.corner_triggered = true;
             return;
         }
 

@@ -951,6 +951,24 @@ void GameplayScene::Update(float delta_seconds) {
         }
         if (player_step.mantle_triggered) {
             impl_->telemetry.RecordClimbMantle();
+            // UNGATED (Inc 5): a mantle hop must be attributable on device —
+            // the counter hook alone cannot time it. Fires once per hop.
+            debugf("[climb] MANTLE hop=%.1f pos=(%.1f,%.1f,%.1f)\n",
+                   static_cast<double>(impl_->player.velocity.y),
+                   static_cast<double>(impl_->player.position.x),
+                   static_cast<double>(impl_->player.position.y),
+                   static_cast<double>(impl_->player.position.z));
+        }
+        if (player_step.corner_triggered) {
+            // UNGATED (Inc 5): fires once per corner adopt — validates the
+            // Inc 3 corner system on device (≥1 CORNER line per intentional
+            // corner traversal, no START-spam at a single position).
+            debugf("[climb] CORNER wn=(%.2f,%.2f) pos=(%.1f,%.1f,%.1f)\n",
+                   static_cast<double>(impl_->player.climb.wall_normal.x),
+                   static_cast<double>(impl_->player.climb.wall_normal.z),
+                   static_cast<double>(impl_->player.position.x),
+                   static_cast<double>(impl_->player.position.y),
+                   static_cast<double>(impl_->player.position.z));
         }
         impl_->player_controller.LateContactPhase(impl_->player);
 

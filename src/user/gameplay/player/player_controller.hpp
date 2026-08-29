@@ -15,6 +15,9 @@ public:
         Vec3 dash_momentum = {};
         // Set by StatePhase when a ledge-hop mantle fired this tick.
         bool mantle_triggered = false;
+        // Set by StatePhase when a corner ease started this tick (Inc 5
+        // telemetry: fires once per corner adopt, validates Inc 3 on device).
+        bool corner_triggered = false;
     };
 
     explicit PlayerController(MovementConfig config = {});

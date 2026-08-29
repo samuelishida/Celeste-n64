@@ -29,20 +29,22 @@ Implemented:
 - third-person follow camera
 - fall respawn
 - simple pickup detection
-- OG Celeste64 wall climb (`.plans/climb-wall-physics/` + `.plans/climb-and-zoom-fix/` + `.plans/wall-climb-overhaul/`):
+- OG Celeste64 wall climb (`.plans/climb-wall-physics/` + `.plans/climb-and-zoom-fix/` + `.plans/wall-climb-overhaul/` + `.plans/climb-parity-3/`):
   unlimited grip on any solid wall (stamina removed — OG has none), gravity-free
   kinematic wall movement, ballistic ledge-hop mantle, SET-style climb walljump.
-  Wall contact is **plane-based and persistent** (OG `SolidWallCheck` parity):
-  `QueryWallsFacePlane`/`QueryWallClosestToFace` return the owning face-plane
-  normal (stable across seams/corners — no sphere-closest-point diagonal), and
-  the climb re-acquires the stored `grip_face_id` rather than the nearest-any-wall
-  normal. Wall gate is `|normal.y| < 0.35` (OG `ClimbNormalCheck`), so slopes are
-  never grab surfaces. The motor's `wall_contact` flag is sourced from the same
-  waist plane-query (OR'd with the body-center popout) so motor and controller
-  agree on grip. `Popout` keeps **impact-only** full-3D velocity removal and
-  full-3D positional popout (Y capped ±6). This removes the grab→release→fall→
-  regrab pump on the baked map. Camera zoom deviates from OG deliberately:
-  `zoom_rate` 1.8/s + `zoom_snap_speed` 1.0/s (was implicit 1.0/s and 0.5)
+  Climb now runs OG's SINGLE wall-check family (plane-based, waist-anchored
+  radius 4, `ClimbNormalCheck` gate) for grip, ledge, and corners — the old
+  sphere/plane two-query split and the motor's waist-flag OR are gone. Entry is
+  OG `TryClimb` parity (own waist query, re-anchors to `wall.point + normal*3`,
+  airborne +4 snap-up). The full OG corner system is ported: inner-corner side
+  ray, slope-away snap ray, outer-corner forward+side ray with a 0.2 s eased
+  position/facing lerp. `wall_contact` is physical-only (body-center sphere);
+  climb-state collision radius is 3.0 (= OG `WallPushoutDist`) so the entry
+  anchor is a zero-popout equilibrium. `Popout` keeps **impact-only** full-3D
+  velocity removal and full-3D positional popout (Y capped ±6). This removes the
+  grab→release→fall→regrab pump on the baked map. Camera zoom deviates from OG
+  deliberately: `zoom_rate` 1.8/s + `zoom_snap_speed` 1.0/s (was implicit 1.0/s
+  and 0.5)
   because the N64 stick medium lacks a mouse wheel; while zoom is active the
   camera-position follow tightens (`0.0001` vs resting `0.01`) so the perceived
   zoom isn't gated by the ~7%/frame follow lag. Orbit/follow/FOV stay OG-exact
