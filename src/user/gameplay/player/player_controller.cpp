@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
-#ifdef __N64__
+#ifdef N64
 #include <libdragon.h>
 #endif
 
@@ -338,7 +338,7 @@ void ApplyJumpAndGravity(
 }  // namespace
 
 PlayerController::PlayerController(MovementConfig config) : config_(config) {
-#ifdef __N64__
+#ifdef N64
     // Parity contract: the controller's anchor copy must equal the motor's
     // (fixtures that override one must override both).
     if (config_.player_half_height != PlayerMotorConfig{}.half_height) {
@@ -540,13 +540,14 @@ void PlayerController::StatePhase(
         // not probe noise). The mantle path (above) already handles the real
         // wall top before this guard.
         if (!input.climb_held || wall_facing_dot < 0.5f) {
-#ifdef __N64__
+#ifdef N64
             debugf("[climb] EXIT %s lf=(%.2f,%.2f) wn=(%.2f,%.2f) grip=%d\n",
                    !input.climb_held ? "button" : "facing",
                    (double)state.last_facing.x, (double)state.last_facing.z,
                    (double)climb_normal.x, (double)climb_normal.z,
                    (int)grip_present);
 #endif
+            (void)climb_normal; (void)grip_present;  // referenced by the log above on N64
             state.movement_state = PlayerMovementState::Normal;
             state.locomotion_state = state.grounded ? LocomotionState::Idle
                                                     : LocomotionState::Fall;
@@ -557,12 +558,13 @@ void PlayerController::StatePhase(
         } else {
             state.climb.grip_lost_timer -= delta_seconds;
             if (state.climb.grip_lost_timer <= 0.0f) {
-#ifdef __N64__
+#ifdef N64
                 debugf("[climb] release grip_lost (grip=%d lf=(%.2f,%.2f) wn=(%.2f,%.2f))\n",
                        (int)grip_present,
                        (double)state.last_facing.x, (double)state.last_facing.z,
                        (double)climb_normal.x, (double)climb_normal.z);
 #endif
+                (void)climb_normal;  // referenced by the log above on N64
                 state.movement_state = PlayerMovementState::Normal;
                 state.locomotion_state = state.grounded ? LocomotionState::Idle
                                                         : LocomotionState::Fall;

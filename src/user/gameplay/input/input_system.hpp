@@ -5,7 +5,7 @@
 // libdragon joypad types are only needed for the joypad polling implementation
 // (input_system.cpp), not for the pure logic classes. Guard the include so the
 // header can be compiled on the host (smoke tests) without the N64 toolchain.
-#ifdef __N64__
+#ifdef N64
 #include <libdragon.h>
 #endif
 
