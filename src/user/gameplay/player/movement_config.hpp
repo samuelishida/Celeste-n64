@@ -41,7 +41,7 @@ struct MovementConfig {
     // ── OG climb probe anchors (climb-parity-3 Inc 1; OG Z-up → demake +Y-up).
     // Feet-anchored: feet = center.y - player_half_height. OG
     // SolidWaistTestPos = feet + 3, head = feet + 10 (Player.cs:843-851).
-    float player_half_height = 10.0f;       // == PlayerMotorConfig::half_height (parity-asserted in gameplay_scene.cpp)
+    float player_half_height = 10.0f;       // == MoveServiceConfig::half_height
     float climb_waist_offset = 3.0f;        // grip probe height above feet (OG SolidWaistTestPos)
     float climb_head_offset = 10.0f;        // OG head probe band top (feet + 10)
     float climb_ledge_probe_extra = 1.0f;   // mantle probe = waist + 1 (OG ClimbCheckAt +1 UnitZ)
@@ -56,7 +56,7 @@ struct MovementConfig {
     // touching). Entry then re-anchors to the OG TryClimb spot, after which
     // the r4 sustain probe governs. NOT a deprecated alias — the entry probe
     // is its only consumer and it stays.
-    float wall_probe_radius = 5.0f;                 // == PlayerMotorConfig::radius (5.0)
+    float wall_probe_radius = 5.0f;                 // == MoveServiceConfig::wall_radius (3)/motor radius (5) legacy
 };
 
 struct MovementProfile {

@@ -310,19 +310,14 @@ int main() {
     }
 
     // --- Edge collision: player radius overhangs platform edge ---
-    // When player center is past edge but radius still over platform,
-    // sphere sweep should catch ground (not point raycast from center).
+    // og-mover-overhaul Inc 2: PlayerMotor is deleted; the single mover is
+    // MoveService (SweepMove + Popout + ray GroundCheck). This block verifies
+    // MoveService compiles/links in the gameplay link set.
     {
-        // This test verifies ProbeFloor signature accepts radius parameter.
-        // Actual collision mesh testing requires room setup with triangles.
-        // The fix changes ProbeFloor to use SweepSphereMesh instead of point raycast.
-        // If this compiles, the signature change is correct.
-        PlayerMotorConfig motor_config;
-        motor_config.radius = 3.0f;
-        motor_config.half_height = 5.0f;
-        PlayerMotor motor(motor_config);
-        // Motor compiles with new ProbeFloor(radius) signature.
-        (void)motor;
+        MoveServiceConfig mover_config;
+        mover_config.half_height = 5.0f;
+        MoveService mover(mover_config);
+        (void)mover;
     }
 
     return 0;

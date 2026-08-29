@@ -114,7 +114,7 @@ run_cpp actor_type_id_smoke tests/actor_type_id_smoke.cpp "${ACTOR_LINK[@]}"
 GAMEPLAY_LINK=(
     src/user/gameplay/player/player_controller.cpp
     src/user/gameplay/player/camera_controller.cpp
-    src/user/gameplay/player/player_motor.cpp
+    src/user/gameplay/player/player_movement.cpp
     src/user/gameplay/runtime/math.cpp
     src/user/gameplay/world/world.cpp
     src/user/gameplay/world/collectible.cpp
@@ -131,7 +131,7 @@ run_cpp gameplay_smoke tests/gameplay_smoke.cpp "${GAMEPLAY_LINK[@]}"
 # climb-wall-physics Inc 1: wall-rest stability on synthetic collmesh
 # (floor + vertical wall). Same link set minus controller-only deps.
 run_cpp motor_wall_rest_smoke tests/motor_wall_rest_smoke.cpp \
-    src/user/gameplay/player/player_motor.cpp \
+    src/user/gameplay/player/player_movement.cpp \
     src/user/gameplay/runtime/math.cpp \
     src/user/gameplay/world/world.cpp \
     src/user/gameplay/physics/coll_mesh.cpp \
@@ -149,6 +149,25 @@ MOVE_LINK=(
 )
 run_cpp move_service_smoke tests/move_service_smoke.cpp "${MOVE_LINK[@]}"
 
+# og-mover-overhaul Inc 2: migrated motor-behavioral tests onto MoveService +
+# the new tick pipeline (respawn contact, scene-update ordering, surface
+# parity/slope/ledge, state-phase split). These were dead motor tests; they now
+# guard the single-mover behaviors they replaced.
+run_cpp respawn_integration_smoke tests/respawn_integration_smoke.cpp "${GAMEPLAY_LINK[@]}"
+run_cpp scene_update_order_smoke tests/scene_update_order_smoke.cpp "${GAMEPLAY_LINK[@]}"
+run_cpp player_phase_smoke tests/player_phase_smoke.cpp "${GAMEPLAY_LINK[@]}"
+run_cpp surface_parity_smoke tests/surface_parity_smoke.cpp \
+    src/user/gameplay/player/player_movement.cpp \
+    src/user/gameplay/player/player_controller.cpp \
+    src/user/gameplay/player/camera_controller.cpp \
+    src/user/gameplay/world/room_data.cpp \
+    src/user/gameplay/runtime/math.cpp \
+    src/user/gameplay/world/world.cpp \
+    src/user/gameplay/world/respawn_system.cpp \
+    src/user/gameplay/physics/coll_mesh.cpp \
+    src/user/gameplay/physics/geom.cpp \
+    "${ACTOR_LINK[@]}"
+
 # climb-wall-physics Inc 2/3: motor-integrated climb + mantle behavior.
 run_cpp climb_mantle_smoke tests/climb_mantle_smoke.cpp "${GAMEPLAY_LINK[@]}"
 
@@ -158,7 +177,7 @@ run_cpp climb_corner_smoke tests/climb_corner_smoke.cpp "${GAMEPLAY_LINK[@]}"
 # climb-and-zoom-fix Inc 2: fall speed survives wall seams (face-plane
 # impact removal parity with OG Popout).
 run_cpp wall_slide_seam_smoke tests/wall_slide_seam_smoke.cpp \
-    src/user/gameplay/player/player_motor.cpp \
+    src/user/gameplay/player/player_movement.cpp \
     src/user/gameplay/runtime/math.cpp \
     src/user/gameplay/world/world.cpp \
     src/user/gameplay/physics/coll_mesh.cpp \

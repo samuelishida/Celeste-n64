@@ -9,7 +9,6 @@
 #include <libdragon.h>
 #endif
 
-#include "gameplay/player/player_motor.hpp"
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/runtime/math.hpp"
 
@@ -337,16 +336,10 @@ void ApplyJumpAndGravity(
 
 }  // namespace
 
-PlayerController::PlayerController(MovementConfig config) : config_(config) {
-#ifdef N64
-    // Parity contract: the controller's anchor copy must equal the motor's
-    // (fixtures that override one must override both).
-    if (config_.player_half_height != PlayerMotorConfig{}.half_height) {
-        debugf("[climb] WARNING player_half_height=%.2f != motor half_height=%.2f\n",
-               (double)config_.player_half_height,
-               (double)PlayerMotorConfig{}.half_height);
-    }
-#endif
+PlayerController::PlayerController(MovementConfig config) : config_(config), mover_() {
+    // og-mover-overhaul Inc 2: the parity warning against PlayerMotorConfig is
+    // gone (PlayerMotor is deleted). The single mover is MoveService (Inc 1);
+    // MoveServiceConfig::half_height stays default 10 == config_.player_half_height.
 }
 
 void PlayerController::Step(
@@ -360,9 +353,21 @@ void PlayerController::Step(
         return;
     }
 
-    StepContext context = TimerInputPhase(state, input, camera_forward, delta_seconds);
-    StatePhase(state, input, context, delta_seconds, room);
-    LateContactPhase(state);
+    if (room != nullptr) {
+        // Full OG pipeline (Inc 2): timers/input -> state (velocity edits) ->
+        // MovePhase (SweepMove + LateContact). The scene calls the three
+        // phases independently; this convenience keeps old host tests working
+        // when a room is supplied.
+        StepContext context = TimerInputPhase(state, input, camera_forward, delta_seconds);
+        StatePhase(state, input, context, delta_seconds, room);
+        MovePhase(state, delta_seconds, room);
+    } else {
+        // Caller supplied no room (controller-only fixtures): old behavior —
+        // no sweep, just state edits + contact snapshot.
+        StepContext context = TimerInputPhase(state, input, camera_forward, delta_seconds);
+        StatePhase(state, input, context, delta_seconds, nullptr);
+        LateContactPhase(state, delta_seconds, nullptr);
+    }
 }
 
 PlayerController::StepContext PlayerController::TimerInputPhase(
@@ -1060,7 +1065,60 @@ void PlayerController::StatePhase(
     }
 }
 
-void PlayerController::LateContactPhase(PlayerState& state) const {
+void PlayerController::MovePhase(
+    PlayerState& state,
+    float delta_seconds,
+    const Room* room
+) const {
+    if (delta_seconds <= 0.0f) {
+        return;
+    }
+    if (room == nullptr) {
+        LateContactPhase(state, delta_seconds, nullptr);
+        return;
+    }
+
+    // OG Single-update move + popout (Player.cs:341-373, +Y): after the state
+    // handler edits velocity, SweepMove applies velocity*dt through the ONE
+    // mover, then Popout(false) for good measure. Ground snap then pulls the
+    // feet down within 5 units when recently grounded and the cooldown has
+    // elapsed (OG LateUpdate).
+    const bool tNoMove = state.no_move_time_remaining > 0.0f;
+    const Vec3 amount = {
+        state.velocity.x * delta_seconds,
+        state.velocity.y * delta_seconds,
+        state.velocity.z * delta_seconds,
+    };
+    mover_.SweepMove(state, *room, amount, !tNoMove);
+
+    // OG LateUpdate ground checks (Player.cs:400-411): recompute grounded from
+    // the post-move position, then ground snap if we left the ground.
+    const bool prev_grounded = state.contact.was_grounded;
+    state.grounded = mover_.GroundCheck(state, *room, nullptr, nullptr);
+    if (!state.grounded && prev_grounded) {
+        mover_.GroundSnap(state, *room, delta_seconds);
+    }
+
+    // Coyote refresh + dash refill when grounded (OG: tCoyote reset, dash
+    // refill on ground within reset window).
+    if (state.grounded) {
+        state.coyote_time_remaining = profile_.coyote_time;
+        state.contact.coyote_height = state.position.y;
+        if (state.dash_reset_cooldown_remaining <= 0.0f) {
+            state.air_dash_available = true;
+        }
+    }
+
+    LateContactPhase(state, delta_seconds, room);
+}
+
+void PlayerController::LateContactPhase(
+    PlayerState& state,
+    float delta_seconds,
+    const Room* room
+) const {
+    (void)delta_seconds;
+    (void)room;
     state.contact.was_grounded = state.grounded;
 }
 

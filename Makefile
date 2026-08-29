@@ -221,7 +221,6 @@ src = \
 	src/user/gameplay/input/input_system.cpp \
 	src/user/gameplay/player/player_controller.cpp \
 	src/user/gameplay/player/player_movement.cpp \
-	src/user/gameplay/player/player_motor.cpp \
 	src/user/gameplay/player/camera_controller.cpp \
 	src/user/gameplay/world/collectible.cpp \
 	src/user/gameplay/world/respawn_system.cpp \
@@ -276,7 +275,7 @@ $(BUILD_DIR)/src/user/gameplay/render/textured_room_renderer.o: CXXFLAGS += -O2
 $(BUILD_DIR)/src/user/gameplay/render/lvl_room_renderer.o: CXXFLAGS += -O2
 $(BUILD_DIR)/src/user/gameplay/render/open_world_renderer.o: CXXFLAGS += -O2
 $(BUILD_DIR)/src/user/gameplay/player/camera_controller.o: CXXFLAGS += -O2
-$(BUILD_DIR)/src/user/gameplay/player/player_motor.o: CXXFLAGS += -O2
+$(BUILD_DIR)/src/user/gameplay/player/player_movement.o: CXXFLAGS += -O2
 
 all: madeline_cube_rom.z64
 

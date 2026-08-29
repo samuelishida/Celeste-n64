@@ -2,7 +2,7 @@
 #include <cmath>
 
 #include "../src/user/gameplay/player/movement_config.hpp"
-#include "../src/user/gameplay/player/player_motor.hpp"
+#include "../src/user/gameplay/player/player_movement.hpp"
 #include "../src/user/gameplay/player/player_state.hpp"
 #include "../src/user/gameplay/world/respawn_system.hpp"
 #include "../src/user/gameplay/world/world.hpp"
@@ -31,10 +31,10 @@ Room BuildRespawnRoom() {
 int main() {
     MovementConfig config;
     RespawnSystem respawn(config);
-    PlayerMotor motor;
+    MoveService mover;
     const Room room = BuildRespawnRoom();
 
-    // --- Respawn directly on the floor: motor.RefreshContacts resolves the
+    // --- Respawn directly on the floor: mover.GroundCheck resolves the
     //     grounded state instead of the respawn writing it directly. ---
     {
         PlayerState player;
@@ -48,10 +48,11 @@ int main() {
         player.platform_carry.stored_velocity = {10.0f, 0.0f, 0.0f};
         player.platform_carry.time_remaining = 0.25f;
 
-        // Spawn point sits exactly on the floor: motor.RefreshContacts
-        // should resolve grounded=true via QueryFloorSource.
-        const Vec3 checkpoint = {0.0f, 1.0f, 0.0f};
-        const bool did = respawn.Step(player, checkpoint, room, motor);
+        // Spawn point center is exactly half_height (10) above the floor at
+        // y=0, so the feet rest on the floor: mover.GroundCheck should
+        // resolve grounded=true.
+        const Vec3 checkpoint = {0.0f, 10.0f, 0.0f};
+        const bool did = respawn.Step(player, checkpoint, room, mover);
         assert(did);
         assert(ApproxEq(player.position.x, checkpoint.x));
         assert(ApproxEq(player.position.y, checkpoint.y));
@@ -59,7 +60,7 @@ int main() {
         assert(ApproxEq(player.velocity.x, 0.0f));
         assert(ApproxEq(player.velocity.y, 0.0f));
         assert(ApproxEq(player.velocity.z, 0.0f));
-        assert(player.grounded);  // motor resolved this, not the respawn
+        assert(player.grounded);  // mover resolved this, not the respawn
         assert(player.movement_state == PlayerMovementState::Normal);
         assert(player.air_dash_available);
         assert(ApproxEq(player.dash_time_remaining, 0.0f));
@@ -67,14 +68,16 @@ int main() {
         assert(ApproxEq(player.platform_carry.time_remaining, 0.0f));
     }
 
-    // --- Respawn above the floor: motor.RefreshContacts must leave the
+    // --- Respawn above the floor: mover.GroundSnap must leave the
     //     player ungrounded (no ground snap, since the player was not
     //     previously grounded after the reset). ---
     {
         PlayerState player;
         player.position.y = config.respawn_fall_height - 1.0f;
-        const Vec3 checkpoint = {0.0f, 5.0f, 0.0f};  // 4 units above floor
-        const bool did = respawn.Step(player, checkpoint, room, motor);
+        // feet = center - half_height = 6 (above the 5-unit ground ray from
+        // feet+5), so GroundCheck misses → ungrounded.
+        const Vec3 checkpoint = {0.0f, 16.0f, 0.0f};
+        const bool did = respawn.Step(player, checkpoint, room, mover);
         assert(did);
         assert(ApproxEq(player.position.y, checkpoint.y));
         assert(!player.grounded);
@@ -85,7 +88,7 @@ int main() {
         PlayerState player;
         player.position.y = config.respawn_fall_height + 1.0f;
         const Vec3 original = player.position;
-        const bool did = respawn.Step(player, {0.0f, 0.0f, 0.0f}, room, motor);
+        const bool did = respawn.Step(player, {0.0f, 0.0f, 0.0f}, room, mover);
         assert(!did);
         assert(player.position.y == original.y);
     }

@@ -18,7 +18,7 @@
 #include "gameplay/debug_hud.hpp"
 #include "gameplay/physics_contracts.hpp"
 #include "gameplay/player/player_controller.hpp"
-#include "gameplay/player/player_motor.hpp"
+#include "gameplay/player/player_movement.hpp"
 #include "gameplay/input/input_system.hpp"
 #include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/open_world_renderer.hpp"
@@ -195,7 +195,12 @@ struct GameplayScene::Impl {
 
     MovementConfig movement_config;
     PlayerController player_controller{movement_config};
-    PlayerMotor player_motor;
+    // og-mover-overhaul Inc 2: PlayerMotor is DELETED. Gameplay motion flows
+    // exclusively through the controller's MoveService (SweepMove+Popout+ground
+    // snap) — the one mover, one repair primitive. This member is kept so the
+    // reset path and telemetry reference the same config/half_height the
+    // controller uses.
+    MoveService mover;
     RespawnSystem respawn_system{movement_config};
     CameraController camera_controller;
     InputSystem input_system;
@@ -287,20 +292,21 @@ struct GameplayScene::Impl {
 
 void GameplayScene::Impl::ResetPlayerToRoomStart() {
     constexpr float kSpawnSkin = 0.2f;
-    const PlayerMotorConfig& motor_config = player_motor.Config();
-    const float spawn_lift = motor_config.half_height + kSpawnSkin;
+    const MoveServiceConfig& mover_config = mover.Config();
+    const float spawn_lift = mover_config.half_height + kSpawnSkin;
     const auto snap_spawn_center = [&](const Vec3& authored_point) {
         Vec3 center = authored_point;
         center.y += spawn_lift;
 
-        const GroundHit floor = ProbeFloorDebug(
-            room,
-            center,
-            motor_config.half_height,
-            motor_config.ground_snap_distance,
-            motor_config.radius);
-        if (floor.hit) {
-            center.y = floor.point.y + motor_config.half_height + kSpawnSkin;
+        // OG spawn snap: a single ray down from the feet (ray + ground snap
+        // distance 5). PlayerMotor's 9-point ProbeFloorDebug is gone with the
+        // motor; the OG ray ground model owns spawn placement now.
+        Vec3 pushout{};
+        Vec3 normal{};
+        PlayerState probe_state;
+        probe_state.position = center;
+        if (mover.GroundCheck(probe_state, room, &pushout, &normal)) {
+            center.y += pushout.y + kSpawnSkin;
         }
         return center;
     };
@@ -311,12 +317,13 @@ void GameplayScene::Impl::ResetPlayerToRoomStart() {
     player.position = snap_spawn_center(room.player_start);
     player.prev_position = player.position;
 
-    MotorInput refresh_input;
-    refresh_input.requested_velocity = {0.0f, 0.0f, 0.0f};
-    refresh_input.wants_ground_snap = false;
-    refresh_input.wants_coyote_refresh = true;
-    refresh_input.wants_dash_refill = true;
-    player_motor.RefreshContacts(player, room, refresh_input);
+    // Resolve the spawn grounded contact through the same single mover as
+    // gameplay (OG ground snap), replacing PlayerMotor::RefreshContacts.
+    player.grounded = mover.GroundCheck(player, room, nullptr, nullptr);
+    player.contact.was_grounded = player.grounded;
+    if (player.grounded) {
+        player.contact.coyote_height = player.position.y;
+    }
     player.prev_position = player.position;
 
     debugf("[spawn] authored=(%.2f,%.2f,%.2f) grounded=(%.2f,%.2f,%.2f) grounded=%d\n",
@@ -906,30 +913,35 @@ void GameplayScene::Update(float delta_seconds) {
     bool did_respawn = false;
 
     for (int tick = 0; tick < n_ticks; ++tick) {
-        // Motor first: resolves position/velocity and sets state.grounded
-        MotorInput motor_input;
-        motor_input.requested_velocity = impl_->player.velocity;
-        motor_input.wants_ground_snap = impl_->player.contact.was_grounded &&
-                                        impl_->player.movement_state != PlayerMovementState::Dashing;
-        motor_input.wants_coyote_refresh = true;
-        motor_input.wants_dash_refill = impl_->player.dash_reset_cooldown_remaining <= 0.0f;
+        // og-mover-overhaul Inc 2: PlayerMotor is deleted. The tick pipeline is
+        // now OG's shape: moving-surface carry -> TimerInput/State (velocity
+        // edits only) -> MovePhase (SweepMove + Popout + ground check + snap).
         AdvanceMovingSurfaces(impl_->room, FixedStepAccumulator::kTickDt);
-        was_grounded_pre_motor = impl_->player.contact.was_grounded;
-        if (kVerboseFrameLogging) {  // Inc 1 / D5: gated (see [update] above)
-            debugf("[tick%d] pre-step: coll_mesh=%p vel=(%.1f,%.1f,%.1f)\n",
-                   tick, (void*)impl_->room.coll_mesh,
-                   (double)impl_->player.velocity.x,
-                   (double)impl_->player.velocity.y,
-                   (double)impl_->player.velocity.z);
-        }
-        motor_result = impl_->player_motor.Step(impl_->player, impl_->room, motor_input, FixedStepAccumulator::kTickDt);
+        impl_->player.prev_position = impl_->player.position;
 
-        // Controller reads post-motor grounded state for FSM transitions
+        // Controller: timers/input + state handler edit velocity only.
         PlayerController::StepContext player_step = impl_->player_controller.TimerInputPhase(
             impl_->player, input, camera_forward, FixedStepAccumulator::kTickDt);
         const bool was_climbing_pre =
             impl_->player.movement_state == PlayerMovementState::Climbing;
         impl_->player_controller.StatePhase(impl_->player, input, player_step, FixedStepAccumulator::kTickDt, &impl_->room);
+
+        // MovePhase applies velocity*dt through the single mover and resolves
+        // contact. `grounded` reflects the post-move ground state.
+        impl_->player_controller.MovePhase(impl_->player, FixedStepAccumulator::kTickDt, &impl_->room);
+
+        // Collapse telemetry onto the controller-owned ground state. The old
+        // MotorResult is replaced by player.grounded / contact.ground_normal.
+        motor_result.grounded = impl_->player.grounded;
+        motor_result.ground_normal = impl_->player.contact.ground_normal;
+        motor_result.wall_contact = impl_->player.wall_contact;
+        // Death (spike/death faces) is n/a until spikes exist (Inc 3 plan);
+        // the active death trigger is the kill plane, which RespawnSystem
+        // evaluates via player.position.y < respawn_fall_height on the next
+        // Line. Keep motor_result.death reflecting that so the respawn call
+        // stays explicit.
+        motor_result.death = impl_->player.position.y <= impl_->room.kill_plane_y;
+
         if (!was_climbing_pre &&
             impl_->player.movement_state == PlayerMovementState::Climbing) {
             impl_->telemetry.RecordClimbStart();
@@ -970,9 +982,9 @@ void GameplayScene::Update(float delta_seconds) {
                    static_cast<double>(impl_->player.position.y),
                    static_cast<double>(impl_->player.position.z));
         }
-        impl_->player_controller.LateContactPhase(impl_->player);
+        // (was_grounded snapshot is owned by MovePhase's LateContactPhase.)
 
-        if (impl_->respawn_system.Step(impl_->player, impl_->checkpoint, impl_->room, impl_->player_motor, motor_result.death)) {
+        if (impl_->respawn_system.Step(impl_->player, impl_->checkpoint, impl_->room, impl_->mover, motor_result.death)) {
             did_respawn = true;
             impl_->player.prev_position = impl_->player.position;
             // Multi-room death-respawn: ensure the checkpoint's room is active
@@ -983,7 +995,7 @@ void GameplayScene::Update(float delta_seconds) {
                 if (cp_room && cp_room[0] != '\0') {
                     if (impl_->map_runtime_.CommitActive(cp_room)) {
                         // Mirror active room into the legacy `room` reference so
-                        // the next motor tick's collision query sees the chunk.
+                        // the next tick's collision query sees the chunk.
                         impl_->room.coll_mesh = impl_->map_runtime_.Active()->room.coll_mesh;
                     } else {
                         debugf("[respawn] CommitActive(%s) FAILED — using current room\n", cp_room);
@@ -1114,6 +1126,26 @@ void GameplayScene::Update(float delta_seconds) {
                raw.dash_down ? 1u : 0u,
                raw.climb_down ? 1u : 0u,
                raw.pause_down ? 1u : 0u);
+    }
+    // og-mover-overhaul Inc 2: ungated `[move]` line at 30-frame cadence so
+    // clip forensics are grep-able from the first device capture (a position
+    // inside a wall is unambiguous). State string derived from the FSM enum.
+    if (impl_->telemetry.frame_index % 30 == 0) {
+        const char* st = "N";
+        switch (impl_->player.movement_state) {
+            case PlayerMovementState::Dashing: st = "D"; break;
+            case PlayerMovementState::Climbing: st = "C"; break;
+            default: st = "N"; break;
+        }
+        debugf("[move] pos=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f) g=%u st=%s\n",
+               static_cast<double>(impl_->player.position.x),
+               static_cast<double>(impl_->player.position.y),
+               static_cast<double>(impl_->player.position.z),
+               static_cast<double>(impl_->player.velocity.x),
+               static_cast<double>(impl_->player.velocity.y),
+               static_cast<double>(impl_->player.velocity.z),
+               impl_->player.grounded ? 1u : 0u,
+               st);
     }
 }
 

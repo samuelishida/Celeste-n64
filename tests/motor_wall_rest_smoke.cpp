@@ -1,17 +1,18 @@
 // Inc 1 (climb-wall-physics plan): motor wall-rest stability smoke test.
 //
-// Builds a synthetic in-memory collmesh (floor + one vertical wall) and
-// verifies that a player resting adjacent to the wall:
+// og-mover-overhaul Inc 2: the motor is deleted. This now drives the SAME
+// synthetic collmesh (floor + one vertical wall) through the single MoveService
+// (SweepMove + Popout + ray GroundCheck), verifying a player resting adjacent
+// to the wall:
 //   1. does not drift horizontally over time,
-//   2. stays grounded without vertical oscillation,
-//   3. keeps valid wall flags even on zero-delta ticks (post-loop pass).
+//   2. stays grounded without vertical oscillation (rest distance = wall radius 3).
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
 
 #include "gameplay/physics/coll_mesh.hpp"
-#include "gameplay/player/player_motor.hpp"
+#include "gameplay/player/player_movement.hpp"
 #include "gameplay/player/player_state.hpp"
 #include "gameplay/world/world.hpp"
 
@@ -87,8 +88,7 @@ int main() {
     room.collider_count = 0;
     room.player_start = {0.0f, 12.0f, 8.0f};  // 3 units from the wall plane
 
-    PlayerMotorConfig config;
-    PlayerMotor motor(config);
+    MoveService mover;
     PlayerState state;
     state.position = room.player_start;
     state.velocity = {};
@@ -103,14 +103,14 @@ int main() {
 
     for (int i = 0; i < kTicks; ++i) {
         if (!state.grounded) vy -= kGravity * kDt;
-        MotorInput mi;
-        mi.requested_velocity = {0.0f, vy, 0.0f};
-        mi.wants_ground_snap = false;
-        mi.wants_coyote_refresh = true;
-        mi.wants_dash_refill = true;
-        const MotorResult mr = motor.Step(state, room, mi, kDt);
-        vy = mr.velocity.y;
-        if (mr.grounded && !landed) {
+        state.contact.was_grounded = state.grounded;
+        state.grounded = false;
+        state.velocity.y = vy;
+        const Vec3 amount = {0.0f, state.velocity.y * kDt, 0.0f};
+        mover.SweepMove(state, room, amount, true);
+        state.grounded = mover.GroundCheck(state, room, nullptr, nullptr);
+        vy = state.velocity.y;
+        if (state.grounded && !landed) {
             landed = true;
             first_rest_pos = state.position;
         }
@@ -118,7 +118,7 @@ int main() {
             min_y_after_land = std::fmin(min_y_after_land, state.position.y);
             max_y_after_land = std::fmax(max_y_after_land, state.position.y);
         }
-        if (i >= 20 && mr.grounded) ++grounded_ticks;
+        if (i >= 20 && state.grounded) ++grounded_ticks;
     }
 
     if (!landed) {
@@ -146,14 +146,16 @@ int main() {
         return 1;
     }
 
-    // Phase 2: exact zero-delta ticks must keep wall flags alive (post-loop
-    // unconditional wall contact pass).
-    MotorInput zero{};
-    zero.requested_velocity = {0.0f, 0.0f, 0.0f};
+    // Phase 2: exact zero-delta ticks must keep wall contact resolved (the
+    // unconditional Popout after SweepMove — OG single-mover property).
     bool flags_ok = true;
     for (int i = 0; i < 30; ++i) {
-        const MotorResult mr = motor.Step(state, room, zero, kDt);
-        if (!mr.wall_contact) flags_ok = false;
+        state.contact.was_grounded = state.grounded;
+        state.grounded = false;
+        const Vec3 zero_amount = {0.0f, 0.0f, 0.0f};
+        mover.SweepMove(state, room, zero_amount, false);
+        state.grounded = mover.GroundCheck(state, room, nullptr, nullptr);
+        if (!state.wall_contact) flags_ok = false;
     }
     if (!flags_ok) {
         printf("FAIL: wall flags dropped on zero-delta ticks\n");

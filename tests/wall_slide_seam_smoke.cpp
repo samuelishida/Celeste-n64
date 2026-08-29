@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "gameplay/physics/coll_mesh.hpp"
-#include "gameplay/player/player_motor.hpp"
+#include "gameplay/player/player_movement.hpp"
 #include "gameplay/player/player_state.hpp"
 #include "gameplay/world/world.hpp"
 
@@ -93,8 +93,7 @@ int main() {
     room.coll_mesh = &syn.mesh;
     room.collider_count = 0;
 
-    PlayerMotorConfig config;
-    PlayerMotor motor(config);
+    MoveService mover;
     PlayerState state;
     state.position = {16.0f, 400.0f, -30.0f};  // high enough to stay airborne 60 ticks
     state.velocity = {};
@@ -109,21 +108,21 @@ int main() {
     for (int i = 0; i < 60; ++i) {
         const float vy_before = state.velocity.y - kGravity * kDt;
         const float z_before = state.position.z;
-        MotorInput mi;
-        mi.requested_velocity = {20.0f, vy_before, 45.0f};  // into wall + along seam
-        mi.wants_ground_snap = false;
-        mi.wants_coyote_refresh = true;
-        mi.wants_dash_refill = true;
-        const MotorResult mr = motor.Step(state, room, mi, kDt);
-        if (mr.grounded) ever_grounded = true;
+        state.contact.was_grounded = state.grounded;
+        state.grounded = false;
+        state.velocity.x = 20.0f; state.velocity.y = vy_before; state.velocity.z = 45.0f;
+        const Vec3 amount = {state.velocity.x * kDt, state.velocity.y * kDt, state.velocity.z * kDt};
+        mover.SweepMove(state, room, amount, true);
+        state.grounded = mover.GroundCheck(state, room, nullptr, nullptr);
+        if (state.grounded) ever_grounded = true;
         if (z_before < 0.0f && state.position.z >= 0.0f && seam_cross_tick < 0) {
             seam_cross_tick = i;
         }
         max_x = std::fmax(max_x, state.position.x);
-        if (!mr.grounded) {
+        if (!state.grounded) {
             const float expected = vy_before;  // tangential speed must survive
             if (expected < -1.0f) {
-                worst_ratio = std::fmin(worst_ratio, mr.velocity.y / expected);
+                worst_ratio = std::fmin(worst_ratio, state.velocity.y / expected);
             }
         }
     }
@@ -150,13 +149,15 @@ int main() {
     }
 
     // Phase 2: rest against the wall — zero-net-force preservation.
-    MotorInput zero{};
-    zero.requested_velocity = {0.0f, 0.0f, 0.0f};
     Vec3 rest_start = state.position;
     bool flags_ok = true;
     for (int i = 0; i < 30; ++i) {
-        const MotorResult mr = motor.Step(state, room, zero, kDt);
-        if (!mr.wall_contact) flags_ok = false;
+        state.contact.was_grounded = state.grounded;
+        state.grounded = false;
+        const Vec3 zero_amount = {0.0f, 0.0f, 0.0f};
+        mover.SweepMove(state, room, zero_amount, false);
+        state.grounded = mover.GroundCheck(state, room, nullptr, nullptr);
+        if (!state.wall_contact) flags_ok = false;
     }
     const float drift =
         std::fabs(state.position.x - rest_start.x) +

@@ -24,7 +24,7 @@ bool IsFloorNormalOG(const Vec3& n) {
 }
 
 // One-way platforms are pass-through from below; never a floor/ceiling when
-// approaching from below (demake motor behavior, player_motor.cpp AcceptFloorHit).
+// approaching from below (demake behavior).
 bool IsOneWay(const Room& room, int face_id) {
     if (face_id < 0) return false;
     if (!room.coll_mesh) return false;
@@ -54,7 +54,10 @@ bool MoveService::GroundCheck(const PlayerState& state, const Room& room,
     Vec3 ray_origin = {origin.x, origin.y + config_.ground_ray_up, origin.z};
     const GroundHit hit = QueryFloorSource(room, ray_origin, config_.ground_ray_len);
     if (!hit.hit || !IsFloorNormalOG(hit.normal)) return false;
-    if (IsOneWay(room, hit.face_id) && origin.y <= hit.point.y) return false;
+    // One-way platforms ground only when the feet are AT or above the surface
+    // (landing from above). Strict `origin.y < hit.point.y` = feet strictly
+    // below = pass-through from below (never a floor).
+    if (IsOneWay(room, hit.face_id) && origin.y < hit.point.y) return false;
     // pushout carries `position` (the CENTER) to land the FEET on the hit:
     // center' = hit.point + half_height, so pushout = center' - position.
     if (pushout) *pushout = {hit.point.x - state.position.x,
@@ -70,7 +73,10 @@ bool MoveService::CeilingCheck(const PlayerState& state, const Room& room,
     Vec3 ray_origin = {origin.x, origin.y + config_.ceiling_probe_up, origin.z};
     const CeilingHit hit = QueryCeilingSource(room, ray_origin, config_.ceiling_height - 1.0f);
     if (!hit.hit) return false;
-    if (IsOneWay(room, hit.face_id) && origin.y >= hit.point.y) return false;
+    // One-way platforms are pass-through from below: never a ceiling when the
+    // feet are strictly below the surface. Only blocks from underneath when
+    // the feet are ABOVE the surface (a one-way above the head).
+    if (IsOneWay(room, hit.face_id) && origin.y < hit.point.y) return false;
     if (hit_out) *hit_out = hit.point;
     return true;
 }
@@ -134,7 +140,13 @@ bool MoveService::Popout(PlayerState& state, const Room& room, bool resolve_impa
 
 void MoveService::SweepMove(PlayerState& state, const Room& room, const Vec3& amount,
                             bool resolve_impact) const {
-    if (Length3(amount) <= 0.0001f) return;
+    if (Length3(amount) <= 0.0001f) {
+        // Zero movement: still run the unconditional idle popout (OG calls
+        // SweepTestMove then a separate Popout(false) "for good measure" every
+        // tick — Player.cs:358-373). Keeps contact flags alive on idle ticks.
+        Popout(state, room, false);
+        return;
+    }
 
     const float remaining = Length3(amount);
     const Vec3 step_normal = {amount.x / remaining, amount.y / remaining, amount.z / remaining};

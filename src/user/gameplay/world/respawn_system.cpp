@@ -35,19 +35,20 @@ bool RespawnSystem::Step(
     PlayerState& player,
     const Vec3& checkpoint,
     const Room& room,
-    const PlayerMotor& motor,
+    const MoveService& mover,
     bool death_triggered
 ) const {
     if (!death_triggered && player.position.y >= config_.respawn_fall_height) {
         return false;
     }
     ResetState(player, checkpoint);
-    MotorInput refresh_input;
-    refresh_input.requested_velocity = {0.0f, 0.0f, 0.0f};
-    refresh_input.wants_ground_snap = false;
-    refresh_input.wants_coyote_refresh = true;
-    refresh_input.wants_dash_refill = true;
-    motor.RefreshContacts(player, room, refresh_input);
+    // Resolve the grounded contact via the same single mover as gameplay
+    // (OG ground snap): if a floor is within 5 units below the spawn, ground
+    // the player on it.
+    player.contact.was_grounded = false;
+    mover.GroundSnap(player, room, 1.0f / 60.0f);
+    player.grounded = mover.GroundCheck(player, room, nullptr, nullptr);
+    player.contact.was_grounded = player.grounded;
     return true;
 }
 

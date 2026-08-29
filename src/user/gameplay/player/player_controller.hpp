@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gameplay/player/movement_config.hpp"
+#include "gameplay/player/player_movement.hpp"
 #include "gameplay/player/player_state.hpp"
 #include "gameplay/world/world.hpp"
 
@@ -43,11 +44,29 @@ public:
         float delta_seconds,
         const Room* room = nullptr
     ) const;
-    void LateContactPhase(PlayerState& state) const;
+    // OG LateUpdate equivalent (og-mover-overhaul Inc 2): after the state
+    // handler edits velocity, SweepMove applies it through the single mover,
+    // then LateContact resolves ground/ceiling contacts, refreshes coyote +
+    // dash refill, and runs the cooldown-gated ground snap. Called once per
+    // tick by the scene.
+    void MovePhase(
+        PlayerState& state,
+        float delta_seconds,
+        const Room* room = nullptr
+    ) const;
+    // Old post-step bookkeeping (was_grounded snapshot). Keep the name for
+    // callers that used to call LateContactPhase after StatePhase; the scene
+    // now calls MovePhase which internalizes contact resolution.
+    void LateContactPhase(
+        PlayerState& state,
+        float delta_seconds,
+        const Room* room = nullptr
+    ) const;
 
 private:
     MovementConfig config_;
     MovementProfile profile_;
+    MoveService mover_;
 };
 
 }  // namespace madeline_cube

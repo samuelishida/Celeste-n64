@@ -5,7 +5,7 @@
 // Build:
 //   g++ -std=c++17 -Isrc/user tests/feel_spec/ledge_smoke.cpp \
 //       src/user/gameplay/player/player_controller.cpp \
-//       src/user/gameplay/player/player_motor.cpp \
+//       src/user/gameplay/player/player_movement.cpp \
 //       src/user/gameplay/world/world.cpp \
 //       src/user/gameplay/world/room_data.cpp \
 //       src/user/gameplay/physics/coll_mesh.cpp \

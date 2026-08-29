@@ -17,7 +17,7 @@
 
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/player/player_controller.hpp"
-#include "gameplay/player/player_motor.hpp"
+#include "gameplay/player/player_movement.hpp"
 #include "gameplay/player/player_state.hpp"
 #include "gameplay/world/world.hpp"
 
@@ -96,7 +96,6 @@ PlayerInput MakeInput(bool climb_held, float move_y = 0.0f) {
 
 struct Harness {
     Room room;
-    PlayerMotor motor{{}};
     PlayerController controller{};
     PlayerState state{};
 
@@ -119,20 +118,14 @@ struct Harness {
         return false;
     }
 
-    // One fixed tick: motor first, controller second (scene tick order).
-    MotorResult Tick(const PlayerInput& input) {
-        MotorInput mi;
-        mi.requested_velocity = state.velocity;
-        mi.wants_ground_snap = state.contact.was_grounded &&
-                               state.movement_state != PlayerMovementState::Dashing;
-        mi.wants_coyote_refresh = true;
-        mi.wants_dash_refill = true;
-        const MotorResult mr = motor.Step(state, room, mi, kDt);
+    // og-mover-overhaul Inc 2: the tick is controller-owned — TimerInput ->
+    // StatePhase (velocity edits) -> MovePhase (SweepMove + contact). The old
+    // motor.Step is replaced by MovePhase's single mover.
+    void Tick(const PlayerInput& input) {
         PlayerController::StepContext ctx =
             controller.TimerInputPhase(state, input, kCamForward, kDt);
         controller.StatePhase(state, input, ctx, kDt, &room);
-        controller.LateContactPhase(state);
-        return mr;
+        controller.MovePhase(state, kDt, &room);
     }
 };
 
@@ -419,10 +412,7 @@ int main() {
         room.coll_mesh = &dm.mesh;
         room.collider_count = 0;
 
-        PlayerMotorConfig cfg;
-        cfg.radius = 5.0f;
-        cfg.half_height = 5.0f;
-        PlayerMotor motor(cfg);
+        MoveService mover;
         PlayerState st;
         st.position = {8.0f, 400.0f, 0.0f};  // well above the trim; drop straight down
         st.velocity = {};
@@ -436,18 +426,18 @@ int main() {
         bool ever_grounded = false;
         for (int i = 0; i < 120; ++i) {
             const float vy = st.grounded ? 0.0f : st.velocity.y - grav * kDt;
-            MotorInput mi;
-            mi.requested_velocity = {0.0f, vy, 0.0f};
-            mi.wants_ground_snap = false;  // no snap; must NOT hook the diagonal
-            mi.wants_coyote_refresh = true;
-            mi.wants_dash_refill = true;
-            MotorResult mr = motor.Step(st, room, mi, kDt);
-            if (mr.grounded && !ever_grounded) {
-                first_ground_y_feet = st.position.y - cfg.half_height;
+            st.velocity.y = vy;
+            st.contact.was_grounded = st.grounded;
+            st.grounded = false;
+            const Vec3 amount = {0.0f, st.velocity.y * kDt, 0.0f};
+            mover.SweepMove(st, room, amount, true);
+            st.grounded = mover.GroundCheck(st, room, nullptr, nullptr);
+            if (st.grounded && !ever_grounded) {
+                first_ground_y_feet = st.position.y - mover.Config().half_height;
                 ever_grounded = true;
             }
         }
-        const float feet = st.position.y - cfg.half_height;
+        const float feet = st.position.y - mover.Config().half_height;
         printf("diag: ever_grounded=%d first_ground_y_feet=%.2f final_feet=%.2f "
                "pos=(%.2f,%.2f,%.2f)\n",
                (int)ever_grounded, first_ground_y_feet, feet,
@@ -565,9 +555,8 @@ int main() {
         room.coll_mesh = &cm.mesh;
         room.collider_count = 0;
 
-        PlayerMotorConfig cfg;
-        cfg.radius = 5.0f;
-        PlayerMotor motor(cfg);
+        // og-mover-overhaul Inc 2: motor deleted; the controller owns the tick
+        // via MovePhase. Corner-sustain now runs through the single mover.
         PlayerController ctrl;
         PlayerState st;
         // Spawn touching wall A (x=20) at its corner edge (z=20), facing +x.
@@ -583,16 +572,10 @@ int main() {
         // Enter climb.
         bool entered = false;
         for (int i = 0; i < 20; ++i) {
-            MotorInput mi;
-            mi.requested_velocity = st.velocity;
-            mi.wants_ground_snap = false;
-            mi.wants_coyote_refresh = true;
-            mi.wants_dash_refill = true;
-            motor.Step(st, room, mi, kDt);
             PlayerController::StepContext ctx =
                 ctrl.TimerInputPhase(st, in, kCamForward, kDt);
             ctrl.StatePhase(st, in, ctx, kDt, &room);
-            ctrl.LateContactPhase(st);
+            ctrl.MovePhase(st, kDt, &room);
             if (st.movement_state == PlayerMovementState::Climbing) { entered = true; break; }
         }
         if (!entered) {
@@ -605,16 +588,10 @@ int main() {
         int entries = 1, exits = 0;
         bool was_climbing = true;
         for (int i = 0; i < 60; ++i) {
-            MotorInput mi;
-            mi.requested_velocity = st.velocity;
-            mi.wants_ground_snap = false;
-            mi.wants_coyote_refresh = true;
-            mi.wants_dash_refill = true;
-            motor.Step(st, room, mi, kDt);
             PlayerController::StepContext ctx =
                 ctrl.TimerInputPhase(st, in, kCamForward, kDt);
             ctrl.StatePhase(st, in, ctx, kDt, &room);
-            ctrl.LateContactPhase(st);
+            ctrl.MovePhase(st, kDt, &room);
             const bool climbing = st.movement_state == PlayerMovementState::Climbing;
             if (climbing && !was_climbing) ++entries;
             if (!climbing) ++exits;

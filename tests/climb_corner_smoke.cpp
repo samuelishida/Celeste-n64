@@ -15,7 +15,6 @@
 
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/player/player_controller.hpp"
-#include "gameplay/player/player_motor.hpp"
 #include "gameplay/player/player_state.hpp"
 #include "gameplay/world/world.hpp"
 
@@ -58,7 +57,6 @@ constexpr float kDt = 1.0f / 60.0f;
 
 struct Harness {
     Room room;
-    PlayerMotor motor{};
     PlayerController controller{};
     PlayerState state{};
 
@@ -70,19 +68,14 @@ struct Harness {
         return false;
     }
 
-    MotorResult Tick(const PlayerInput& input) {
-        MotorInput mi;
-        mi.requested_velocity = state.velocity;
-        mi.wants_ground_snap = false;
-        mi.wants_coyote_refresh = true;
-        mi.wants_dash_refill = true;
-        const MotorResult mr = motor.Step(state, room, mi, kDt);
+    // og-mover-overhaul Inc 2: the tick is now controller-owned — TimerInput ->
+    // StatePhase (velocity edits) -> MovePhase (SweepMove + contact). The old
+    // motor.Step is replaced by MovePhase's single mover.
+    void Tick(const PlayerInput& input) {
         PlayerController::StepContext ctx =
             controller.TimerInputPhase(state, input, cam_forward, kDt);
         controller.StatePhase(state, input, ctx, kDt, &room);
-        controller.LateContactPhase(state);
-        (void)mr;
-        return mr;
+        controller.MovePhase(state, kDt, &room);
     }
 
     Vec3 cam_forward{0.0f, 0.0f, -1.0f};

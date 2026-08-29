@@ -1,7 +1,8 @@
 #include <cassert>
 
 #include "../src/user/gameplay/player/player_controller.hpp"
-#include "../src/user/gameplay/player/player_motor.hpp"
+#include "../src/user/gameplay/player/player_movement.hpp"
+#include "../src/user/gameplay/world/world.hpp"
 
 using namespace madeline_cube;
 
@@ -10,7 +11,7 @@ int main() {
     PlayerController controller(config);
     const Vec3 camera_forward = {0.0f, 0.0f, 1.0f};
 
-    // Source-required runtime bookkeeping exists before the new motor owns it.
+    // Source-required runtime bookkeeping exists in PlayerState.
     {
         PlayerState player;
         assert(player.contact.ground_normal.y == 1.0f);
@@ -31,7 +32,7 @@ int main() {
 
         PlayerInput input;
         input.move = {1.0f, 0.0f};
-        const PlayerController::StepContext context =
+        PlayerController::StepContext context =
             controller.TimerInputPhase(player, input, camera_forward, 0.25f);
 
         assert(context.has_move_input);
@@ -44,7 +45,8 @@ int main() {
         assert(player.platform_carry.time_remaining == 0.75f);
     }
 
-    // State changes velocity, motor applies position, and late contact observes resolver results.
+    // State changes velocity; MovePhase applies it through the single mover.
+    // og-mover-overhaul Inc 2: the old motor.Step is now MovePhase.
     {
         Room room;
         room.colliders[room.collider_count++] = {
@@ -53,29 +55,21 @@ int main() {
             .solid = true,
         };
 
-        PlayerMotor motor;
-
         PlayerState player;
-        player.position = {0.0f, 1.0f, 0.0f};
+        player.position = {0.0f, 10.0f, 0.0f};  // feet on the floor at y=0
         player.grounded = true;
 
         PlayerInput input;
         input.jump_pressed = true;
         input.jump_held = true;
-        const PlayerController::StepContext context =
+        PlayerController::StepContext context =
             controller.TimerInputPhase(player, input, camera_forward, 1.0f / 60.0f);
         controller.StatePhase(player, input, context, 1.0f / 60.0f);
-        assert(player.velocity.y > 0.0f);
-        assert(player.position.y == 1.0f);  // controller does NOT move the player
+        assert(player.velocity.y > 0.0f);       // state handler edits velocity
+        assert(player.position.y == 10.0f);     // state phase does NOT move
 
-        MotorInput motor_input;
-        motor_input.requested_velocity = player.velocity;
-        motor_input.wants_ground_snap = false;  // takeoff frame
-        motor.Step(player, room, motor_input, 1.0f / 60.0f);
-        assert(player.position.y > 1.0f);
-
-        controller.LateContactPhase(player);
-        // Late contact mirrors current grounded into was_grounded for next frame.
+        controller.MovePhase(player, 1.0f / 60.0f, &room);
+        assert(player.position.y > 10.0f);      // jump applied through the mover
     }
 
     return 0;
