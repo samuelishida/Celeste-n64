@@ -140,6 +140,9 @@ run_cpp motor_wall_rest_smoke tests/motor_wall_rest_smoke.cpp \
 # climb-wall-physics Inc 2/3: motor-integrated climb + mantle behavior.
 run_cpp climb_mantle_smoke tests/climb_mantle_smoke.cpp "${GAMEPLAY_LINK[@]}"
 
+# climb-parity-3 Inc 3: OG corner system (inner/slope/outer rays + ease).
+run_cpp climb_corner_smoke tests/climb_corner_smoke.cpp "${GAMEPLAY_LINK[@]}"
+
 # climb-and-zoom-fix Inc 2: fall speed survives wall seams (face-plane
 # impact removal parity with OG Popout).
 run_cpp wall_slide_seam_smoke tests/wall_slide_seam_smoke.cpp \

@@ -93,6 +93,21 @@ struct ClimbState {
     // boundary mid-wall; the mantle must not fire on a single-frame flicker,
     // only after the ledge is confirmed clear for several ticks (real lip).
     int ledge_miss_ticks = 0;
+
+    // ── OG corner system (climb-parity-3 Inc 3; OG climbCorner* fields) ──
+    // Corner ease: on an outer-corner adopt, position + facing lerp from
+    // corner_from → corner_to over climb_corner_ease_time (0.2 s). 0 = idle;
+    // while > 0 the ease branch REPLACES normal wall movement (OG structure).
+    Vec3 corner_from{};
+    Vec3 corner_to{};
+    Vec3 corner_facing_from{};
+    Vec3 corner_facing_to{};
+    // Travel origin for OG's "> 2 units traveled → force a corner ease"
+    // trigger: stashed on every corner adopt / ease end, so displacement
+    // accumulates across ticks exactly like OG's (Position - climbCornerFrom)
+    // check (climbCornerFrom only resets when a corner eases).
+    Vec3 corner_travel_origin{};
+    float corner_ease = 0.0f;
 };
 
 struct PlayerState {

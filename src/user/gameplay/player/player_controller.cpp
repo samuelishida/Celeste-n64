@@ -18,6 +18,15 @@ namespace {
 
 constexpr float kEpsilon = 0.0001f;
 
+// Shortest signed angle difference in (-pi, pi] (OG Calc.AngleLerp parity for
+// the corner-ease facing lerp).
+inline float ShortestAngle(float a) {
+    constexpr float kTau = 6.28318530717958647692f;
+    a = std::fmod(a + 3.14159265358979323846f, kTau);
+    if (a < 0.0f) a += kTau;
+    return a - 3.14159265358979323846f;
+}
+
 // Climb-parity-3 Inc 1: single parity anchor between the controller's copy of
 // the half-height and the motor's. Fixture configs that override one must
 // override both (movement_config.hpp documents the pairing).
@@ -138,6 +147,101 @@ bool LedgeHopMiss(const PlayerState& state, const MovementConfig& config,
         return false;  // some face of the same wall supports the probe: NO miss
     }
     return true;  // no supporting wall at the probe point: LEDGE MISSES
+}
+
+// ── OG corner mechanics (climb-parity-3 Inc 3; Player.cs:1567-1630) ────
+// Z-up→Y-up conversion: OG `.XY()` = demake XZ, OG UnitZ = demake +Y.
+// All adopts re-anchor the CENTER to the new wall (same form as entry)
+// and reset grip identity + facing INTO the new wall.
+
+// Adopt a ray-hit as the new gripped wall: re-anchor + identity swap.
+inline void AdoptCornerWall(PlayerState& state, const MovementConfig& config,
+                            const WallHit& hit) {
+    const Vec3 n = hit.plane_normal;
+    state.climb.wall_normal = n;
+    state.climb.grip_face_id = hit.face_id;
+    state.position = {
+        hit.point.x + n.x * config.climb_pushout_dist,
+        hit.point.y + (config.player_half_height - config.climb_waist_offset),
+        hit.point.z + n.z * config.climb_pushout_dist,
+    };
+    state.target_facing = NormalizeXZ({-n.x, 0.0f, -n.z}, state.target_facing);
+    state.last_facing = state.target_facing;
+}
+
+// 1. Inner corner (OG :1567-1574): pressing sideways into a joining wall —
+// a side ray at the waist finds the new face and snaps her onto it. OG's
+// move_x sign picks the BODY-RELATIVE side: sideways = the wall-tangent
+// direction of the player's intent, i.e. the component of the move input
+// PERPENDICULAR to the wall normal (XZ-projected), not a world-axis ray.
+bool InnerCornerSideRay(PlayerState& state, const MovementConfig& config,
+                        const Room* room, const Vec3& climb_normal,
+                        const Vec3& move_xz) {
+    if (room == nullptr) return false;
+    // Side direction = move intent projected onto the wall tangent plane,
+    // normalized (zero when the intent is purely up/into the wall).
+    const Vec3 tangent = NormalizeXZ(
+        {move_xz.x + climb_normal.x * (move_xz.x * climb_normal.x + move_xz.z * climb_normal.z) * -1.0f,
+         0.0f,
+         move_xz.z + climb_normal.z * (move_xz.x * climb_normal.x + move_xz.z * climb_normal.z) * -1.0f},
+        Vec3{});
+    if (LengthXZ(tangent) < 0.1f) return false;  // no sideways component
+    
+    WallHit out{};
+    QueryWallRay(*room, ClimbWaistPoint(state, config),
+                 {tangent.x, 0.0f, tangent.z}, config.climb_check_dist, &out);
+    if (!out.hit) return false;
+    // Only adopt when the ray found a DIFFERENT wall than the gripped one
+    // (a side ray along her own wall hits the same wall — that's movement,
+    // not a corner).
+    if (DotXZ(out.plane_normal, state.climb.wall_normal) > 0.5f) return false;
+    AdoptCornerWall(state, config, out);
+    return true;
+}
+
+// 2. Slope-away snap (OG :1576-1583): raycast back into the wall along
+// -climb_normal keeps the grip glued to walls that lean away. Skipped when
+// the grip probe already reports the same face this tick (CONSIDER adopted).
+bool SlopeSnapRay(PlayerState& state, const MovementConfig& config,
+                  const Room* room, const Vec3& climb_normal) {
+    if (room == nullptr) return false;
+    WallHit out{};
+    QueryWallRay(*room, ClimbWaistPoint(state, config),
+                 {-climb_normal.x, 0.0f, -climb_normal.z},
+                 config.climb_check_dist + 2.0f, &out);
+    if (!out.hit) return false;
+    AdoptCornerWall(state, config, out);
+    return true;
+}
+
+// 3. Outer corner rotation (OG :1585-1601): climbing up/over a convex edge —
+// forward+side raycast finds the new wall; the adopt starts the 0.2 s ease.
+bool OuterCornerRay(PlayerState& state, const MovementConfig& config,
+                    const Room* room, const Vec3& climb_normal,
+                    const Vec3& move_xz, const WallHit& gripped) {
+    if (room == nullptr) return false;
+    (void)gripped;
+    const Vec3 fwd = NormalizeXZ({-climb_normal.x, 0.0f, -climb_normal.z});
+    // Body-relative side (same tangent projection as InnerCornerSideRay).
+    const float into = move_xz.x * climb_normal.x + move_xz.z * climb_normal.z;
+    const Vec3 side = NormalizeXZ(
+        {move_xz.x - climb_normal.x * into,
+         0.0f,
+         move_xz.z - climb_normal.z * into},
+        Vec3{});
+    if (LengthXZ(side) < 0.1f) return false;
+    const Vec3 waist = ClimbWaistPoint(state, config);
+    const Vec3 origin = {
+        waist.x + fwd.x * (config.climb_check_dist + 1.0f) + side.x,
+        waist.y,
+        waist.z + fwd.z * (config.climb_check_dist + 1.0f) + side.z,
+    };
+    WallHit out{};
+    QueryWallRay(*room, origin, {-side.x, 0.0f, -side.z}, config.climb_check_dist * 2.0f, &out);
+    if (!out.hit) return false;
+    if (DotXZ(out.plane_normal, state.climb.wall_normal) > 0.5f) return false;
+    AdoptCornerWall(state, config, out);
+    return true;
 }
 
 void StartJump(PlayerState& state, const MovementConfig& config, const Vec3& move_input) {
@@ -515,6 +619,140 @@ void PlayerController::StatePhase(
             state.no_dash_jump_remaining = 0.10f;
             context.dash_momentum = {};
             state.velocity = {};
+            return;
+        }
+
+        // ── Corner ease integration (OG structure: the ease branch REPLACES
+        // the movement branch). Runs before release checks? No — release +
+        // mantle + walljump are handled above (release always wins, OG checks
+        // Climb.Down first at :1451). When easing: zero velocity, lerp the
+        // position + facing, advance the timer, and SKIP wall movement.
+        if (state.climb.corner_ease > 0.0f) {
+            const float t = 1.0f - state.climb.corner_ease / config_.climb_corner_ease_time;
+            const float u = Clamp(t, 0.0f, 1.0f);
+            state.velocity = {};
+            state.position = {
+                state.climb.corner_from.x +
+                    (state.climb.corner_to.x - state.climb.corner_from.x) * u,
+                state.climb.corner_from.y +
+                    (state.climb.corner_to.y - state.climb.corner_from.y) * u,
+                state.climb.corner_from.z +
+                    (state.climb.corner_to.z - state.climb.corner_from.z) * u,
+            };
+            // Shortest-arc facing lerp (OG Calc.AngleLerp parity).
+            const float a_from = AngleXZ(state.climb.corner_facing_from);
+            const float a_to = AngleXZ(state.climb.corner_facing_to);
+            const float a_target = a_from + ShortestAngle(a_to - a_from) * u;
+            state.target_facing = DirectionFromAngle(a_target);
+            state.last_facing = state.target_facing;
+            state.climb.corner_ease = Approach(
+                state.climb.corner_ease, 0.0f, delta_seconds);
+            state.locomotion_state = LocomotionState::Climb;
+            return;
+        }
+
+        // Corner mechanics (OG :1567-1630). move_x: camera-relative horizontal
+        // intent projected on the wall tangent sign — raw XZ side direction:
+        const Vec3 move_xz = context.has_move_input
+            ? Vec3{context.move_input.x, 0.0f, context.move_input.z}
+            : Vec3{0.0f, 0.0f, 0.0f};
+        const bool move_side = LengthXZ(move_xz) > 0.1f;
+
+        // 1. Inner corner: sideways press into a joining wall.
+        bool corner_adopted = false;
+        if (room != nullptr && move_side &&
+            InnerCornerSideRay(state, config_, room, climb_normal, move_xz)) {
+            corner_adopted = true;
+        }
+        // 2. Slope-away snap: skipped when the grip probe already reports the
+        // same face this tick (CONSIDER adopted — saves a raycast + avoids
+        // coplanar seam-face normal flapping). Guarded on room != nullptr:
+        // controller-only fixtures sustain wall-less climbs via the flag path.
+        if (!corner_adopted && room != nullptr &&
+            !(gripped.hit && gripped.face_id == state.climb.grip_face_id)) {
+            const WallHit slope_probe = [&]() {
+                WallHit out{};
+                QueryWallRay(*room, ClimbWaistPoint(state, config_),
+                             {-climb_normal.x, 0.0f, -climb_normal.z},
+                             config_.climb_check_dist + 2.0f, &out);
+                return out;
+            }();
+            if (slope_probe.hit &&
+                std::fabs(slope_probe.plane_normal.y) < 0.35f &&
+                DotXZ(slope_probe.plane_normal, climb_normal) < 0.99f) {
+                AdoptCornerWall(state, config_, slope_probe);
+                corner_adopted = true;
+            }
+        }
+        // 3. Outer corner rotation: climbing around a convex edge → ease.
+        if (!corner_adopted && move_side) {
+            // Pre-move position for the ease origin (C1: "position before this
+            // tick's corner-adopting change").
+            const Vec3 pre_adopt = state.position;
+            const Vec3 pre_facing = state.last_facing;
+            if (OuterCornerRay(state, config_, room, climb_normal, move_xz,
+                               gripped)) {
+                state.climb.corner_from = pre_adopt;
+                state.climb.corner_to = state.position;
+                // Facing ease: from the pre-adopt facing INTO the old wall →
+                // INTO the new wall (AdoptCornerWall set the new one).
+                state.climb.corner_facing_from = pre_facing;
+                state.climb.corner_facing_to = state.target_facing;
+                state.climb.corner_ease = config_.climb_corner_ease_time;
+                state.climb.corner_travel_origin = state.position;
+                state.locomotion_state = LocomotionState::Climb;
+                return;
+            }
+        }
+
+        // Force-corner trigger (OG :1617-1620 review SHOULD-FIX #3): measure
+        // displacement against the STASHED origin — accumulates across ticks
+        // (origin only resets on adopt / ease end). Per-tick displacement is
+        // ≤0.67 u at climb_speed 40/60 Hz, so a per-tick > 2 test never fires;
+        // OG's accumulated test does. Implemented as: travel > 2 since the
+        // last origin stash → stash from/to and START the ease.
+        // NOTE: the force-corner ease is only meaningful when the travel is
+        // AROUND geometry (velocity got clipped by the wall plane) — a plain
+        // up-climb moving > 2 units must NOT trigger it. Gate on actual
+        // lateral intent AND the corner rays reporting a NEW wall this tick;
+        // a pure vertical climb (climb_normal unchanged, position advancing
+        // along the wall) never eases.
+        bool force_corner = false;
+        WallHit side_probe{};
+        if (corner_adopted) {
+            state.climb.corner_travel_origin = state.position;
+        } else {
+            const Vec3 travel = {
+                state.position.x - state.climb.corner_travel_origin.x,
+                state.position.y - state.climb.corner_travel_origin.y,
+                state.position.z - state.climb.corner_travel_origin.z,
+            };
+            const float travel_len = std::sqrt(
+                (travel.x * travel.x) + (travel.y * travel.y) + (travel.z * travel.z));
+            if (travel_len > 2.0f && move_side && room != nullptr) {
+                // OG :1617-1620: (Position - climbCornerFrom).Length() > 2 →
+                // force a corner adopt: re-probe along the side ray with a
+                // LONG reach; only when a genuinely new wall is found does the
+                // ease start. A plain up-climb (rays miss) never eases.
+                QueryWallRay(*room, ClimbWaistPoint(state, config_),
+                             {-climb_normal.x, 0.0f, -climb_normal.z},
+                             config_.climb_check_dist * 2.0f, &side_probe);
+                if (side_probe.hit &&
+                    side_probe.face_id != state.climb.grip_face_id &&
+                    DotXZ(side_probe.plane_normal, climb_normal) < 0.99f) {
+                    force_corner = true;
+                }
+            }
+        }
+        if (force_corner) {
+            state.climb.corner_from = state.position;
+            AdoptCornerWall(state, config_, side_probe);
+            state.climb.corner_to = state.position;
+            state.climb.corner_facing_from = state.last_facing;
+            state.climb.corner_facing_to = state.target_facing;
+            state.climb.corner_ease = config_.climb_corner_ease_time;
+            state.climb.corner_travel_origin = state.position;
+            state.locomotion_state = LocomotionState::Climb;
             return;
         }
 
