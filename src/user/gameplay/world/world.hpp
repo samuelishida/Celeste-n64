@@ -216,6 +216,9 @@ int QueryWalls(const Room& room, const Vec3& point, float radius, WallHit* out_h
 WallHit QueryWallNearest(const Room& room, const Vec3& point, float radius);
 
 // True if any solid wall overlaps the sphere (buffer-free wrapper).
+// DEPRECATED for gameplay use (climb-parity-3 Inc 4): climb paths now use the
+// unified plane-based QueryClimbWall/QueryClimbWallPresent family. Kept for
+// debug tooling / non-climb callers.
 bool QueryWallPresent(const Room& room, const Vec3& point, float radius);
 
 // Wall whose normal is closest to the given direction.

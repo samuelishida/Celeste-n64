@@ -49,11 +49,13 @@ struct MovementConfig {
     float climb_pushout_dist = 3.0f;        // entry reposition target (OG WallPushoutDist)
     float climb_corner_ease_time = 0.20f;   // corner position/facing ease (OG 0.2 s)
 
-    // DEPRECATED — removed in Inc 4: the ledge probe and the inner re-acquire
-    // fallback are the last consumers of the old shell (center-anchored bands,
-    // radius = wall_probe_radius). Grip/entry/corner probes now use
-    // climb_check_dist (4) at the climb_waist_offset anchor (feet + 3).
-    float climb_ledge_probe_center_offset = -2.5f;  // center-anchored lip band [feet+5, feet+10]
+    // Entry visibility radius (climb-parity-3 Inc 1/2): the entry probe uses
+    // this (5.0 = motor tangent rest distance) because at exact tangency her
+    // waist rests one unit beyond climb_check_dist (4) reach, yet OG still
+    // grabs there (Popout first pulls her in; dist == radius counts as
+    // touching). Entry then re-anchors to the OG TryClimb spot, after which
+    // the r4 sustain probe governs. NOT a deprecated alias — the entry probe
+    // is its only consumer and it stays.
     float wall_probe_radius = 5.0f;                 // == PlayerMotorConfig::radius (5.0)
 };
 

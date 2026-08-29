@@ -490,23 +490,19 @@ void PlayerController::StatePhase(
         // decision). OG's miss is against actual geometry — the plane query
         // projects onto the face's INFINITE plane, so a lip probe beside an
         // open vertical edge (a triangle boundary, not geometry) would still
-        // "hit" unless caller-bounded. The grep ring enforces that OG
+        // "hit" unless caller-bounded. LedgeHopMiss enforces that OG
         // geometry-bounded miss: the hit's plane-point must carry real wall
         // support at the probe's height on the gripped face (or any face
         // sharing its normal) between the triple's vertex extremes.
-        // (Inc 4 replaces this with the end-state ClimbCheckAt miss; the
-        // bounded-miss helper arrives there.)
         // Mantle persistence: the probe can flicker at the tangency boundary
         // mid-wall (real-geometry pump while climbing up). Require the ledge
         // to be clear for several consecutive ticks before launching so a
-        // single-frame flicker can't eject her.
-        const bool ledge_clear =
-            room == nullptr ||
-            !QueryWallPresent(*room,
-                {state.position.x,
-                 state.position.y + config_.climb_ledge_probe_center_offset,
-                 state.position.z},
-                config_.wall_probe_radius);
+        // single-frame flicker can't eject her. The counter resets whenever
+        // the lip probe reports supported again (the else branch below) —
+        // that is the probe-agreement guard: while the lip still reads as a
+        // wall, the top has not been reached. (A raw grip-probe reset is NOT
+        // used: the plane grip query hits the infinite plane even above the
+        // wall top, so it would suppress the mantle at the real lip.)
         if (input.climb_held &&
             input.move.y > 0.3f &&
             room != nullptr &&
