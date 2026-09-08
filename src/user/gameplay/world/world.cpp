@@ -255,7 +255,8 @@ static Vec3 PlaneProject(
 static int QueryWallsFacePlaneMesh(const Room& room, const physics::CollMesh& mesh,
                                     const Vec3& point, float radius,
                                     WallHit* out_hits, int max_hits,
-                                    CollisionQueryDiagnostics* diagnostics) {
+                                    CollisionQueryDiagnostics* diagnostics,
+                                    bool orient_to_point) {
     using namespace physics;
     physics::AABB q = {
         { point.x - radius, point.y - radius, point.z - radius },
@@ -280,21 +281,79 @@ static int QueryWallsFacePlaneMesh(const Room& room, const physics::CollMesh& me
         const Vec3& b = mesh.world_verts[ct.i1];
         const Vec3& c = mesh.world_verts[ct.i2];
 
-        // Face plane normal, oriented toward the query point (baked winding can
-        // be reversed — see .agents/common-mistakes/og-map-polygon-winding.md).
+        // Face plane normal (baked winding can be reversed — see
+        // .agents/common-mistakes/og-map-polygon-winding.md). The normal is
+        // ALWAYS oriented toward the query point (the flip) — the popout
+        // pushes the body along the direction from the closest point to the
+        // body (OG: pushout = (radius - dist) * diff.Normalized(),
+        // World.cs:527), so a body behind the plane is pushed to radius on
+        // the side it is on, never through the face. `orient_to_point` now
+        // selects ONLY the grip/entry front-side gate (Inc 4) — the popout
+        // (false) must handle bodies behind the plane with no side gate.
         Vec3 pn = physics::Norm(physics::Cross(physics::Sub(b, a), physics::Sub(c, a)));
         const Vec3 to_p = physics::Sub(point, a);
-        if (physics::Dot(pn, to_p) < 0.0f) {
+        const float signed_dist = physics::Dot(pn, to_p);
+        if (signed_dist < 0.0f) {
             pn = {-pn.x, -pn.y, -pn.z};
         }
 
         // OG ClimbNormalCheck: only near-vertical faces are walls. |Y| < 0.35.
         if (std::fabs(pn.y) >= 0.35f) continue;
 
+        // Geometry-bounds (hoisted: reused by the front-side gate below AND
+        // the hit-emission geometry bound).
+        const Vec3 vmin = {std::min(a.x, std::min(b.x, c.x)),
+                           std::min(a.y, std::min(b.y, c.y)),
+                           std::min(a.z, std::min(b.z, c.z))};
+        const Vec3 vmax = {std::max(a.x, std::max(b.x, c.x)),
+                           std::max(a.y, std::max(b.y, c.y)),
+                           std::max(a.z, std::max(b.z, c.z))};
+
+        // ── Inc 4 (controls-physics-port): winding-independent front-side
+        // gate for the grip/entry path (orient_to_point=true). The OLD gate
+        // (`orient_to_point && signed_dist < 0 → continue`) read the RAW
+        // winding normal to decide "in front of the wall" — but the baked
+        // collision winding is REVERSED (raw normals point INTO walls), so
+        // every real-map wall had signed_dist < 0 at the player's approach
+        // and the grab NEVER fired (device: 0 [climb] START lines). The
+        // front side is now decided WITHOUT the winding:
+        //   (a) Height band: the face's vertical extent must overlap the
+        //       player's body band. Grip callers probe at the WAIST
+        //       (ClimbWaistPoint = feet + 3); the +Y-up body spans
+        //       [point.y - 3, point.y + 7] (half_height 10 up from feet).
+        //       Faces entirely above the head or below the feet (eaves /
+        //       overhangs / window ledges beyond reach) are not grab targets
+        //       no matter which way the triangle winds.
+        //   (b) Overhead clearance: the "under an overhang from behind"
+        //       auto-latch guard — if ANY solid hangs within kHeadClear above
+        //       the waist, the player is under a roof/eave/ledge and the
+        //       face is an overhang lip, not a wall she can climb. Measured
+        //       on the real baked map: 0% of wall-adjacent sample waists have
+        //       solid within 6 units above, so this rejects nothing legit.
+        //   The intent gates (climb_held, cooldown, facing-dot >= 0.5,
+        //   into-wall input) stay — they are the winding-independent
+        //   "deliberate approach" enforcement (auto-latch without Z stays
+        //   impossible). The popout path (orient_to_point=false) is
+        //   untouched (OG pushout semantics are load-bearing for the
+        //   step-down snap and the climb anchor).
+        if (orient_to_point) {
+            constexpr float kBandBelow = 3.0f;   // waist (feet+3) → feet
+            constexpr float kBandAbove = 7.0f;   // waist → head (feet+10)
+            constexpr float kBandSkin = 2.0f;    // airborne/reach grace
+            if (vmin.y > point.y + kBandAbove + kBandSkin) continue;
+            if (vmax.y < point.y - kBandBelow - kBandSkin) continue;
+
+            constexpr float kHeadClear = 8.0f;   // covers the head (waist+7)
+            const physics::RayHit ceil_hit = physics::RaycastMeshVertical(
+                mesh, point, 1.0f, kHeadClear,
+                physics::BackfaceCull::Ignore, nullptr);
+            if (ceil_hit.hit) continue;
+        }
+
         // Closest point on the face plane to the query point, at the query's own
-        // level. pushout = radius - plane distance. Accept pushout >= 0 (the
-        // tangent boundary still counts as touching, matching OG which accepts
-        // dist < radius and anchors the player into the wall).
+        // level. pushout = radius - plane distance (UNSIGNED — OG semantics:
+        // the body is pushed along the oriented normal by (radius - dist), so
+        // a body behind the plane is pushed to radius on the side it is on).
         const Vec3 closest = PlaneProject(a, b, c, point);
         const Vec3 delta = physics::Sub(point, closest);
         const float dist = std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
@@ -312,12 +371,6 @@ static int QueryWallsFacePlaneMesh(const Room& room, const physics::CollMesh& me
         // Same bounding LedgeHopMiss applies (player_controller.cpp); keeping
         // a small tangent skin so the pushout-tangent boundary still grabs.
         {
-            Vec3 vmin = {std::min(a.x, std::min(b.x, c.x)),
-                         std::min(a.y, std::min(b.y, c.y)),
-                         std::min(a.z, std::min(b.z, c.z))};
-            Vec3 vmax = {std::max(a.x, std::max(b.x, c.x)),
-                         std::max(a.y, std::max(b.y, c.y)),
-                         std::max(a.z, std::max(b.z, c.z))};
             constexpr float kSkin = 0.5f;
             if (closest.x < vmin.x - kSkin || closest.x > vmax.x + kSkin) continue;
             if (closest.y < vmin.y - kSkin || closest.y > vmax.y + kSkin) continue;
@@ -647,13 +700,15 @@ WallHit QueryWallClosestToNormal(const Room& room, const Vec3& point, float radi
 
 int QueryWallsFacePlane(const Room& room, const Vec3& point, float radius,
                         WallHit* out_hits, int max_hits,
-                        CollisionQueryDiagnostics* diagnostics) {
+                        CollisionQueryDiagnostics* diagnostics,
+                        bool orient_to_point) {
     int count = 0;
     // Static world geometry: plane-projected wall query (OG parity). This is
     // the source of truth for climb grip identity and wall contact.
     if (room.coll_mesh) {
         count = QueryWallsFacePlaneMesh(room, *room.coll_mesh, point, radius,
-                                        out_hits, max_hits, diagnostics);
+                                        out_hits, max_hits, diagnostics,
+                                        orient_to_point);
         if (count >= max_hits) return count;
     }
 
@@ -701,7 +756,11 @@ WallHit QueryWallClosestToFace(const Room& room, const Vec3& point, float radius
 // single-sourced (M3: no near-duplicate wall family).
 WallHit QueryWallPushout(const Room& room, const Vec3& point, float radius) {
     WallHit hits[kMaxWallHits];
-    const int count = QueryWallsFacePlane(room, point, radius, hits, kMaxWallHits);
+    // orient_to_point=false: TRUE normal + SIGNED pushout. The popout must
+    // push a body OUT of the wall along the wall's own normal — a body behind
+    // the plane (embedded) is pushed through to the front, not deeper in.
+    const int count = QueryWallsFacePlane(room, point, radius, hits, kMaxWallHits,
+                                          nullptr, false);
     if (count == 0) return WallHit{};
 
     WallHit best = hits[0];
@@ -724,7 +783,10 @@ static bool ClimbNormalCheck(const Vec3& n) {
 
 WallHit QueryClimbWall(const Room& room, const Vec3& point, float radius, const Vec3& prefer_dir) {
     WallHit hits[kMaxWallHits];
-    const int count = QueryWallsFacePlane(room, point, radius, hits, kMaxWallHits);
+    // orient_to_point=true: normal oriented toward the query point (the grip
+    // wants the front-facing normal for the facing gate) + unsigned pushout.
+    const int count = QueryWallsFacePlane(room, point, radius, hits, kMaxWallHits,
+                                          nullptr, true);
     if (count == 0) return WallHit{};
 
     // Prefer-rank like OG SolidWallCheckClosestToNormal (World.cs:577-594):
@@ -872,6 +934,12 @@ bool WorldCollision::Load(const char* path) {
         return false;
     }
     return true;
+}
+
+bool WorldCollision::LoadFromBuffer(const uint8_t* data, size_t size) {
+    Reset();
+    mesh_ = physics::LoadCollMeshFromBuffer(data, size);
+    return mesh_ != nullptr;
 }
 
 void WorldCollision::Reset() {

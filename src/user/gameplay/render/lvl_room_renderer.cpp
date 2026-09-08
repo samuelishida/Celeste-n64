@@ -41,11 +41,28 @@ uint16_t ReadU16(FILE* f) {
 
 }  // namespace
 
+void LvlRoomRenderer::AttachSlotBuffer(uint8_t* slot, size_t slot_size,
+                                       uint8_t* scratch,
+                                       size_t scratch_size) {
+    // memory-opt Inc 4: (re)attach the pool slot buffer + shared scratch.
+    slot_buf_ = slot;
+    slot_buf_size_ = slot_size;
+    slot_buf_used_ = 0;
+    scratch_ = scratch;
+    scratch_size_ = scratch_size;
+    scratch_used_ = 0;
+}
+
 bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
                            float pos_scale) {
     // Free the previous block + arrays before rebuilding (streaming re-loads
     // / SetCenter call Load repeatedly and would leak otherwise).
     FreeBlock();
+    // memory-opt Inc 4: reset the slot-buffer + scratch bump cursors (the
+    // previous occupant's buffers are rebuilt from the start; this parser is
+    // FILE-streaming, so no file buffer was bump-allocated into the scratch).
+    slot_buf_used_ = 0;
+    scratch_used_ = 0;
     render_origin_ = render_origin;
     // Sanity-clamp the fixed-point scale so a bad distant LOD scale cannot
     // produce a degenerate (inverted / overflowing) transform.
@@ -88,7 +105,8 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
     }
 
     // Read faces
-    LvlFace* faces = static_cast<LvlFace*>(malloc(sizeof(LvlFace) * face_count));
+    LvlFace* faces = static_cast<LvlFace*>(ScratchAlloc(sizeof(LvlFace) * face_count));
+    if (!faces) { fclose(f); return false; }
     fseek(f, (long)off_faces, SEEK_SET);
     for (uint32_t i = 0; i < face_count; ++i) {
         LvlFace& lf = faces[i];
@@ -102,7 +120,8 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
     }
 
     // Read vertices
-    LvlVertex* lvl_verts = static_cast<LvlVertex*>(malloc(sizeof(LvlVertex) * vertex_count));
+    LvlVertex* lvl_verts = static_cast<LvlVertex*>(ScratchAlloc(sizeof(LvlVertex) * vertex_count));
+    if (!lvl_verts) { fclose(f); return false; }
     fseek(f, (long)off_vertices, SEEK_SET);
     for (uint32_t i = 0; i < vertex_count; ++i) {
         LvlVertex& lv = lvl_verts[i];
@@ -120,7 +139,7 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
     vert_count_ = vertex_count;
     verts_ = static_cast<T3DVertPacked*>(
         malloc_uncached(sizeof(T3DVertPacked) * pair_count_));
-    if (!verts_) { free(faces); free(lvl_verts); return false; }
+    if (!verts_) return false;
 
     for (uint32_t pi = 0; pi < pair_count_; ++pi) {
         T3DVertPacked& p = verts_[pi];
@@ -174,10 +193,8 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
         const int batch_cap = static_cast<int>(face_count) < kMaxBatches
             ? static_cast<int>(face_count) : kMaxBatches;
         if (batch_cap > 0) {
-            batches_ = static_cast<Batch*>(malloc(sizeof(Batch) * batch_cap));
+            batches_ = static_cast<Batch*>(SlotAlloc(sizeof(Batch) * batch_cap));
             if (!batches_) {
-                free(faces);
-                free(lvl_verts);
                 debugf("[lvlroom] batch alloc FAILED\n");
                 return false;
             }
@@ -199,19 +216,15 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
     // (Inc 3 / compressed-LOD: factored into a shared helper so the LVL and
     // DLOD load paths can't drift.)
     {
-        FaceSpec* specs = static_cast<FaceSpec*>(malloc(sizeof(FaceSpec) * batch_count_));
+        FaceSpec* specs = static_cast<FaceSpec*>(ScratchAlloc(sizeof(FaceSpec) * batch_count_));
         if (specs) {
             for (int s = 0; s < batch_count_; ++s) {
                 specs[s] = {batches_[s].first_vertex, batches_[s].vertex_count,
                             batches_[s].tri_count, batches_[s].material_id};
             }
             BuildRunsAndBlock(specs, batch_count_);
-            free(specs);
         }
     }
-
-    free(faces);
-    free(lvl_verts);
 
     // Model matrix: compensate for kPosScale AND translate back to world
     // space. The vertices were rebased by `render_origin` before packing, so
@@ -529,6 +542,8 @@ bool LvlRoomRenderer::BuildRunsAndBlock(const FaceSpec* faces, int face_count) {
 void LvlRoomRenderer::Free() {
     if (verts_) { free_uncached(verts_); verts_ = nullptr; }
     if (matrix_fp_) { free_uncached(matrix_fp_); matrix_fp_ = nullptr; }
+    // memory-opt Inc 4: batches_/runs_/run_faces_ live in the pool slot
+    // buffer — FreeBatches/FreeRuns null them WITHOUT free.
     FreeBatches();
     FreeRuns();
     FreeBlock();
@@ -554,13 +569,15 @@ void LvlRoomRenderer::FreeBlock() {
 }
 
 void LvlRoomRenderer::FreeBatches() {
-    if (batches_) { free(batches_); batches_ = nullptr; }
+    // memory-opt Inc 4: pool-slot buffer — null without free.
+    batches_ = nullptr;
     batch_count_ = 0;
 }
 
 void LvlRoomRenderer::FreeRuns() {
-    if (runs_) { free(runs_); runs_ = nullptr; }
-    if (run_faces_) { free(run_faces_); run_faces_ = nullptr; }
+    // memory-opt Inc 4: pool-slot buffer — null without free.
+    runs_ = nullptr;
+    run_faces_ = nullptr;
     run_count_ = 0;
 }
 

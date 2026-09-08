@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "gameplay/math_types.hpp"
@@ -159,7 +160,7 @@ struct Room {
     Vec3 snow_dir = {0.0f, 0.0f, 0.0f};
     Vec3 cassette = {0.0f, 0.0f, 0.0f};
     bool has_cassette = false;
-    char cassette_target[32] = {};  // map path to load on cassette pickup (e.g. "rom:/lvl/1-1.lvl")
+    char cassette_target[32] = {};  // map path to load on cassette pickup (e.g. "rom:/lvl/first-room.lvl")
 
     Vec3 player_start = {0.0f, 30.0f, 0.0f};
     Vec3 checkpoint = {0.0f, 30.0f, 0.0f};
@@ -232,7 +233,8 @@ WallHit QueryWallClosestToNormal(const Room& room, const Vec3& point, float radi
 // OG ClimbNormalCheck) are walls. Returns up to max_hits.
 int QueryWallsFacePlane(const Room& room, const Vec3& point, float radius,
                         WallHit* out_hits, int max_hits,
-                        CollisionQueryDiagnostics* diagnostics = nullptr);
+                        CollisionQueryDiagnostics* diagnostics = nullptr,
+                        bool orient_to_point = true);
 
 // OG SolidWallCheckClosestToNormal parity: the plane-projected wall whose
 // normal is closest to `normal` (used for climb entry/sustain grip identity).
@@ -287,6 +289,9 @@ public:
 
     // Load the global CMSH from a path. Returns false on failure.
     bool Load(const char* path);
+    // memory-opt Inc 2: load the global mesh from an in-RAM buffer (the asset
+    // path). Copies the data; the caller may free the source after.
+    bool LoadFromBuffer(const uint8_t* data, size_t size);
 
     // Release the global mesh.
     void Reset();

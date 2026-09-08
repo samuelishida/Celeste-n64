@@ -29,6 +29,10 @@ struct MovementConfig {
     float dash_jump_hold_speed = 20.0f;
     float dash_jump_hold_time = 0.30f;
     float dash_jump_xy_boost = 16.0f;
+    // OG Spring (Player.cs:919-937): a spring board launches her at 160 with
+    // a 0.30 s hold (auto_jump keeps velocity pinned at the launch speed).
+    float spring_jump_speed = 160.0f;
+    float spring_jump_hold_time = 0.30f;
     float respawn_fall_height = -200.0f;
 
     float wall_jump_speed_x = 83.2f;    // WallJumpXYSpeed = MaxSpeed * 1.3

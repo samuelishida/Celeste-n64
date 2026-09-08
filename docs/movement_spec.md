@@ -138,6 +138,29 @@ Remoções:
    (listado por completude, não é desvio).
 9. clamps de velocidade de plataforma `Z [0,180]` / `XY 300` (OG
    `AddPlatformVelocity`).
+10. **Mola (Inc 3, OG Player.cs:919-937):** implementada como OG — handler
+    `PlayerController::Spring` sai de Climbing/Dashing para Normal, snap na
+    placa (`y+3` escalar, XY approach 4), lançamento `spring_jump_speed=160`
+    com hold `0.30` (auto_jump), zera momentum XY (approach 30), refila o dash
+    (`Max(dashes,1)`) e cancela o ground snap. Constantes únicas em
+    `movement_config.hpp`. `SpringActor` ganhou o cooldown de bordo do OG
+    (`tCooldown = 1.0 s` — OG Spring.cs) para não relançar a cada tick; o
+    raio de pickup é 16 (OG `PickupRadius`). Sem desvios conhecidos.
+11. **Gate de frente de escalada independente de winding (Inc 4):** o gate
+    antigo (`signed_dist < 0`, lendo a normal crua do winding) rejeitava TODO
+    paredão do mapa real porque o winding do bake de colisão é REVERSO (normais
+    cruas apontam PARA DENTRO das paredes) — o grab nunca disparava em device
+    (0 linhas `[climb] START`). O gate grip/entry agora é independente de
+    winding: (a) banda de altura (extensão Y da face deve sobrepor o corpo
+    `[waist-3, waist+7]`) e (b) clearance de topo — se houver sólido a até 8
+    acima do probe de cintura, a face é beirada de beiral/sob-telhado e o grab
+    é rejeitado (guarda do auto-latch "debaixo do beiral"). Medido no mapa
+    real: 0% das amostras junto a paredes têm sólido a <6 acima — não rejeita
+    nada legítimo. O caminho popout (`orient_to_point=false`) não mudou
+    (semântica OG de pushout intacta). A verificação do probe: parede de
+    winding reverso escala sustentadamente; sob-beiral NÃO agarra; sem Z não
+    agarra. Grab em device: `[climb] START` dispara em paredes reais com Z +
+    direção; sem Z → 0 linhas (sem auto-latch).
 
 Sem clipping por construção: toda tick termina num estado "popped-out"
 (`SweepMove` + `Popout(false)` final), de modo que a posição fica fora de toda

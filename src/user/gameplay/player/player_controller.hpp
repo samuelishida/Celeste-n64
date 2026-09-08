@@ -62,6 +62,12 @@ public:
         float delta_seconds,
         const Room* room = nullptr
     ) const;
+    // OG Spring parity (Player.cs:919-937): the world calls this when the
+    // player overlaps a spring board. Exits Climbing/Dashing (state = Normal),
+    // snaps her onto the board (approach spring + 3 up, XY approach 4),
+    // launches at spring_jump_speed with a hold window, refills the dash,
+    // and cancels the ground snap so the launch isn't pulled back.
+    void Spring(PlayerState& state, const Vec3& spring_position) const;
 
 private:
     MovementConfig config_;
@@ -69,6 +75,44 @@ private:
     // every feel constant now. The single mover lives here so scene/respawn
     // and tests can share the SAME instance (S1).
     MoveService mover_;
+
+    // ── Inc 2: real state machine (controls-physics-port) ──
+    // StatePhase dispatches to the per-state St*Update handlers; enter/exit
+    // hooks fire on each transition. The bodies are the pre-FSM hand-switched
+    // blocks moved verbatim (no logic reordering).
+    void OnStateEnter(PlayerState& state, PlayerMovementState prev, PlayerMovementState next) const;
+    void OnStateExit(PlayerState& state, PlayerMovementState prev, PlayerMovementState next) const;
+    // OG TryDash parity (Player.cs:939): shared by the Normal and Skidding
+    // updates (OG runs TryDash from both StNormalUpdate and StSkiddingUpdate).
+    bool TryDashAccept(PlayerState& state, const PlayerInput& input, StepContext& context) const;
+    void StNormalUpdate(
+        PlayerState& state,
+        const PlayerInput& input,
+        StepContext& context,
+        float delta_seconds,
+        const Room* room
+    ) const;
+    void StDashingUpdate(
+        PlayerState& state,
+        const PlayerInput& input,
+        StepContext& context,
+        float delta_seconds,
+        const Room* room
+    ) const;
+    void StSkiddingUpdate(
+        PlayerState& state,
+        const PlayerInput& input,
+        StepContext& context,
+        float delta_seconds,
+        const Room* room
+    ) const;
+    void StClimbingUpdate(
+        PlayerState& state,
+        const PlayerInput& input,
+        StepContext& context,
+        float delta_seconds,
+        const Room* room
+    ) const;
 
 public:
     // Shared-mover access (review S1): the ONE mover instance. The scene and

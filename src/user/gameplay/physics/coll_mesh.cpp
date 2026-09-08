@@ -1,5 +1,6 @@
 #include "coll_mesh.hpp"
 
+#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -102,24 +103,10 @@ static void SwapSurfaceLinks(CollSurfaceLink* links, uint32_t count) {
 // Load / free
 // ---------------------------------------------------------------------------
 
-CollMesh* LoadCollMesh(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) return nullptr;
-
-    fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (file_size < (long)sizeof(CollHeader)) { fclose(f); return nullptr; }
-
-    void* buf = malloc((size_t)file_size);
-    if (!buf) { fclose(f); return nullptr; }
-
-    if (fread(buf, 1, (size_t)file_size, f) != (size_t)file_size) {
-        free(buf); fclose(f); return nullptr;
-    }
-    fclose(f);
-
+// Parse a CMSH buffer in place (byte-swaps + validates + builds the runtime
+// handle). On success the mesh owns `buf` (freed by FreeCollMesh); on failure
+// `buf` is freed here — callers must not free again.
+static CollMesh* ParseCollMeshBuffer(void* buf, size_t file_size) {
     CollHeader* hdr = static_cast<CollHeader*>(buf);
     if (memcmp(hdr->magic, "CMSH", 4) != 0) { free(buf); return nullptr; }
 
@@ -198,6 +185,46 @@ CollMesh* LoadCollMesh(const char* path) {
     }
 
     return mesh;
+}
+
+CollMesh* LoadCollMesh(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return nullptr;
+
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (file_size < (long)sizeof(CollHeader)) { fclose(f); return nullptr; }
+
+    void* buf = malloc((size_t)file_size);
+    if (!buf) { fclose(f); return nullptr; }
+    // memory-opt Inc 3: CPU-copied buffer (fopen→fread; `dfs_read` DMA's into
+    // its own internal aligned buffer and CPU-copies to ours) — no DMA
+    // dependency, so alignment is n/a. Assert the newlib malloc >=8 guarantee
+    // as a sanity check only.
+    assert((reinterpret_cast<uintptr_t>(buf) & 0x7) == 0);
+
+    if (fread(buf, 1, (size_t)file_size, f) != (size_t)file_size) {
+        free(buf); fclose(f); return nullptr;
+    }
+    fclose(f);
+
+    return ParseCollMeshBuffer(buf, (size_t)file_size);
+}
+
+CollMesh* LoadCollMeshFromBuffer(const uint8_t* data, size_t size) {
+    // memory-opt Inc 2: load from an already-in-RAM buffer (the asset_load
+    // path). The mesh keeps its own copy — the parse byte-swaps in place and
+    // the handle points into the buffer — so the caller may free `data` after.
+    if (data == nullptr || size < sizeof(CollHeader)) return nullptr;
+    void* buf = malloc(size);
+    if (!buf) return nullptr;
+    // memory-opt Inc 3: CPU-copied buffer (memcpy from the caller's asset
+    // buffer) — no DMA dependency; alignment n/a (sanity assert only).
+    assert((reinterpret_cast<uintptr_t>(buf) & 0x7) == 0);
+    std::memcpy(buf, data, size);
+    return ParseCollMeshBuffer(buf, size);
 }
 
 void FreeCollMesh(CollMesh* mesh) {

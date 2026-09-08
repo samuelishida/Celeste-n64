@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
     Room room = {};
     room.has_cassette = true;
     room.cassette = {10.0f, 0.0f, 10.0f};
-    const char* target = "rom:/lvl/1-1.lvl";
+    const char* target = "rom:/lvl/first-room.lvl";
     for (int i = 0; i < 31 && target[i]; ++i) room.cassette_target[i] = target[i];
     room.cassette_target[31] = '\0';
 
@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
     actor.target_level_path = room.cassette_target;
 
     assert(actor.target_level_path != nullptr);
-    assert(std::strncmp(actor.target_level_path, "rom:/lvl/1-1.lvl", 32) == 0);
+    assert(std::strncmp(actor.target_level_path, "rom:/lvl/first-room.lvl", 32) == 0);
     printf("PASS: cassette actor wired with target level\n");
 
     // 3. Simulate pickup.
@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
 
     // 4. Verify the target is preserved after pickup (for scene to read).
     assert(actor.target_level_path != nullptr);
-    assert(std::strncmp(actor.target_level_path, "rom:/lvl/1-1.lvl", 32) == 0);
+    assert(std::strncmp(actor.target_level_path, "rom:/lvl/first-room.lvl", 32) == 0);
     printf("PASS: target level preserved after pickup\n");
 
     // 5. Room without cassette target (main map case).

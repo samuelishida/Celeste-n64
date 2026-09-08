@@ -62,11 +62,10 @@ the runtime yet**:
 
 ## Baseline
 
-The versioned reference for `1-1` lives in `tests/fixtures/baseline/`:
-
-- `baseline.json` — map SHA-256, scale, format versions and artifact counts.
-- `1-1/` — decoded summaries of LVL2, colmesh, NAV and the current T3DM, plus
-  the manifest and the T3DM bytes.
+The versioned artifact baseline (`tests/fixtures/baseline/`, previously the
+reference for the imported `1-1` map) was removed together with the 1-1 map.
+Artifact parity is now validated by the bake smokes and the map-pack boot
+(manifest + global CMSH + per-cell LVL2 loads).
 
 ## Map-pack (multi-room) layer
 

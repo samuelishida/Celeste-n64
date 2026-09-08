@@ -10,9 +10,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
 from ogmap_lib import parse_map, compute_face_polygon
 
+# The OG bake pipeline (tools/bake.py + ogmap_lib) is exercised against the
+# project-owned first-room map (the imported OG maps were removed).
+FIRST_ROOM_MAP = "assets/rooms/first-room/first-room.map"
+
 def test_brush_separation():
     """Verify worldspawn brushes are parsed as separate brushes, not merged."""
-    pm = parse_map("assets/og_converted/maps/1-1.map")
+    pm = parse_map(FIRST_ROOM_MAP)
     ws = pm.entities[0]
     brushes = ws.brushes
     assert len(brushes) >= 5, f"Expected >= 5 brushes, got {len(brushes)}"
@@ -23,7 +27,7 @@ def test_brush_separation():
 
 def test_face_polygon():
     """Verify that per-face polygon clipping produces valid convex polygons."""
-    pm = parse_map("assets/og_converted/maps/1-1.map")
+    pm = parse_map(FIRST_ROOM_MAP)
     ws = pm.entities[0]
     b0 = ws.brushes[0]  # first box brush
 
@@ -42,7 +46,7 @@ def test_bake_output():
     """Verify the baked LVL file has reasonable face/vertex counts."""
     from lvl_format import LvlFile
 
-    lvl = LvlFile.read("filesystem/lvl/1-1.lvl")
+    lvl = LvlFile.read("filesystem/lvl/first-room.lvl")
 
     assert len(lvl.faces) > 0, "No faces in LVL file"
     assert len(lvl.vertices) > 0, "No vertices in LVL file"
@@ -55,13 +59,13 @@ def test_bake_output():
     print(f"PASS: LVL has {len(lvl.faces)} faces, {len(lvl.vertices)} vertices, {len(lvl.entities)} entities")
     return True
 
-def test_normalize_og_1_1():
-    """Test that ogmap_lib correctly parses normalized map with death textures."""
+def test_normalize_og_map():
+    """Test that ogmap_lib correctly parses the map with death textures."""
     # This test is now simplified - just verify parse_map works
     # The normalization logic is tested elsewhere
-    pm = parse_map("assets/og_converted/maps/1-1.map")
+    pm = parse_map(FIRST_ROOM_MAP)
     assert len(pm.entities) > 0, "No entities parsed"
-    print(f"PASS: normalize_og_1_1 — {len(pm.entities)} entities parsed")
+    print(f"PASS: normalize_og_map — {len(pm.entities)} entities parsed")
     return True
 
 
@@ -70,7 +74,7 @@ def test_normalized_bake_matches_manifest():
     import subprocess
     from pathlib import Path
 
-    in_map = "assets/og_converted/maps/1-1.map"
+    in_map = FIRST_ROOM_MAP
     out_dir = "build/bake-test-smoke"
 
     # Run bake.py
@@ -101,7 +105,7 @@ if __name__ == "__main__":
     all_pass &= test_brush_separation()
     all_pass &= test_face_polygon()
     all_pass &= test_bake_output()
-    all_pass &= test_normalize_og_1_1()
+    all_pass &= test_normalize_og_map()
     all_pass &= test_normalized_bake_matches_manifest()
 
     if all_pass:

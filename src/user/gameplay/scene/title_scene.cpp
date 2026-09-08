@@ -19,7 +19,6 @@ struct MapEntry {
 };
 
 static constexpr MapEntry kMaps[] = {
-    {"1-1",        "rom:/lvl/1-1.lvl",         "1-1"},
     {"first-room", "rom:/lvl/first-room.lvl",   "first-room"},
 };
 static constexpr int kMapCount = static_cast<int>(sizeof(kMaps) / sizeof(kMaps[0]));

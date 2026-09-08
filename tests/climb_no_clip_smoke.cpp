@@ -82,7 +82,7 @@ int main() {
     mb.tris = {
         {0, 1, 2, m, 0, 0}, {0, 2, 3, m, 1, 0},
         {4, 5, 6, m, 2, 0}, {4, 6, 7, m, 3, 0},     // wall A
-        {8, 9, 10, m, 4, 0}, {8, 10, 11, m, 5, 0},  // wall B
+        {8, 10, 9, m, 4, 0}, {8, 11, 10, m, 5, 0},  // wall B (n -z, consistent winding)
     };
     mb.nodes = {{{-H, 0, -H}, {H, top, H}, 0, static_cast<uint16_t>(mb.tris.size())}};
     mb.Finalize();

@@ -137,14 +137,20 @@ void DrawCube(const T3DVertPacked* vertices, T3DMat4FP* matrix_fp) {
 // Build the PlayerInput snapshot from the frame's InputSystem state.
 // Called once per render frame and replayed across all fixed-step ticks so
 // the physics sees one consistent input snapshot (§34: capture raw once).
-PlayerInput ReadPlayerInput(const InputSystem& input_system) {
+//
+// Inc 1: reads the device-owned virtual states (deadzone + press buffer +
+// consume-once) and wires the device pointers so the controller's
+// ConsumeJumpPress/ConsumeDashPress ALSO consume the device edge (OG
+// VirtualButton parity) — otherwise the buffered press re-fires next frame.
+PlayerInput ReadPlayerInput(InputSystem& input_system) {
     PlayerInput result;
-    const Vec2 move = input_system.MoveValue();
-    result.move = move;
-    result.jump_pressed = input_system.jump.Pressed();
-    result.jump_held = input_system.jump.Down();
-    result.dash_pressed = input_system.dash.Pressed();
-    result.climb_held = input_system.climb.Down();
+    result.move = input_system.MoveValue();
+    result.jump_pressed = input_system.Jump().pressed;
+    result.jump_held = input_system.Jump().down;
+    result.dash_pressed = input_system.Dash().pressed;
+    result.climb_held = input_system.Climb().down;
+    result.jump_device = const_cast<VirtualButtonState*>(&input_system.Jump());
+    result.dash_device = const_cast<VirtualButtonState*>(&input_system.Dash());
     return result;
 }
 
@@ -254,8 +260,8 @@ struct GameplayScene::Impl {
         return use_map_pack_ ? map_runtime_.Active()->room : room;
     }
 
-    const char* lvl_path  = "rom:/lvl/1-1.lvl";
-    const char* level_name = "1-1";
+    const char* lvl_path  = "rom:/lvl/first-room.lvl";
+    const char* level_name = "first-room";
 
     void ResetPlayerToRoomStart();
     void ReloadBakedLevel();
@@ -735,6 +741,55 @@ int GameplayScene::ResidentLoads() const {
     return impl_ ? impl_->open_world_.ResidentLoads() : 0;
 }
 
+size_t GameplayScene::FrameArenaUsed() const {
+    // memory-opt Inc 1: [memory] bucket — frame-arena bytes in use.
+    return impl_ ? impl_->open_world_.Arena().Used() : 0;
+}
+
+size_t GameplayScene::StreamingStagingBytes() const {
+    // memory-opt Inc 1: [memory] bucket — staging pool bytes.
+    return impl_ ? impl_->open_world_.StreamingStagingBytes() : 0;
+}
+
+size_t GameplayScene::StreamingResidentBytes() const {
+    // memory-opt Inc 1: [memory] bucket — resident renderer object bytes.
+    return impl_ ? impl_->open_world_.StreamingResidentBytes() : 0;
+}
+
+size_t GameplayScene::PoolHighWater() const {
+    // memory-opt Inc 4: [memory] bucket — renderer-pool high-water.
+    return impl_ ? impl_->open_world_.PoolHighWater() : 0;
+}
+
+size_t GameplayScene::FrameArenaPeak() const {
+    // memory-opt Inc 4: [memory] bucket — frame-arena peak since boot.
+    return impl_ ? impl_->open_world_.FrameArenaPeak() : 0;
+}
+
+size_t GameplayScene::LiveCollMeshBytes() const {
+    // memory-opt Inc 1: [memory] bucket — active room's collision mesh bytes.
+    // Pre-init-safe: resolve the active room without dereferencing an
+    // uninitialized map runtime (the report only fires post-boot, but the
+    // accessor is hardened anyway).
+    if (!impl_) return 0;
+    const physics::CollMesh* mesh = nullptr;
+    if (impl_->map_runtime_.HasMap()) {
+        if (impl_->map_runtime_.Active()) {
+            mesh = impl_->map_runtime_.Active()->room.coll_mesh;
+        }
+    } else {
+        mesh = impl_->room.coll_mesh;
+    }
+    return mesh ? mesh->UsedBytes() : 0;
+}
+
+size_t GameplayScene::MapSpecBytes() const {
+    // memory-opt Inc 1: [memory] bucket — map-pack manifest struct footprint.
+    if (!impl_) return 0;
+    const MapSpecV2& spec = impl_->map_runtime_.Spec();
+    return impl_->map_runtime_.HasMap() ? sizeof(spec) : 0;
+}
+
 void GameplayScene::Init() {
     impl_ = new Impl();
     impl_->lvl_path   = lvl_path_;
@@ -845,12 +900,12 @@ void GameplayScene::Update(float delta_seconds) {
     // Sample the controller once per render frame; same snapshot replayed
     // across all fixed-step substeps (§34: capture raw input once).
     joypad_poll();
-    impl_->input_system.Poll();
+    impl_->input_system.Poll(delta_seconds);
 
     // Start (N64) toggles the room fixture overlay (debug aid). The spec maps
     // Start -> Pause/menu; the fixture toggle is kept as a temporary stand-in
     // until a full pause menu exists.
-    if (impl_->input_system.pause.Pressed()) {
+    if (impl_->input_system.Pause().pressed) {
         impl_->room_fixture_visible_ = !impl_->room_fixture_visible_;
         debugf("[fixture] room fixture %s\n", impl_->room_fixture_visible_ ? "ON" : "OFF");
     }
@@ -937,6 +992,29 @@ void GameplayScene::Update(float delta_seconds) {
         // MovePhase applies velocity*dt through the single mover and resolves
         // contact. `grounded` reflects the post-move ground state.
         impl_->player_controller.MovePhase(impl_->player, FixedStepAccumulator::kTickDt, &impl_->room);
+
+        // Spring board (OG Spring.cs Pickup/pickupRadius + Player.Spring):
+        // when the player overlaps an active, non-cooling-down board, launch
+        // her (OG parity v.y=160). The board's own 1.0 s cooldown prevents a
+        // standing player being relaunched every tick (OG Spring.cs tCooldown).
+        if (SpringActor* sp = impl_->actor_world.Get<SpringActor>()) {
+            if (sp->active && sp->cooldown_remaining <= 0.0f) {
+                const float dx = impl_->player.position.x - sp->position.x;
+                const float dy = impl_->player.position.y - sp->position.y;
+                const float dz = impl_->player.position.z - sp->position.z;
+                if ((dx * dx + dy * dy + dz * dz) <= sp->pickup_radius * sp->pickup_radius) {
+                    impl_->player_controller.Spring(impl_->player, sp->position);
+                    sp->cooldown_remaining = SpringActor::kCooldown;
+                    // UNGATED (Inc 3): a spring launch must be attributable on
+                    // device — fires once per overlap (board cooldown gates re-fire).
+                    debugf("[spring] launch v.y=%.1f pos=(%.1f,%.1f,%.1f)\n",
+                           static_cast<double>(impl_->player.velocity.y),
+                           static_cast<double>(impl_->player.position.x),
+                           static_cast<double>(impl_->player.position.y),
+                           static_cast<double>(impl_->player.position.z));
+                }
+            }
+        }
 
         // Collapse telemetry onto the controller-owned ground state. The old
         // MotorResult is a 4-field adapter now (position/velocity/ice/oneway
@@ -1039,6 +1117,11 @@ void GameplayScene::Update(float delta_seconds) {
     impl_->telemetry.RecordCollisionQueryCounters(
         impl_->map_runtime_.GlobalCollision().Counters());
     if (did_respawn) {
+        // Inc 1: the device owns the dash press buffer — clear the buffered
+        // edge on respawn (the old ResetState cleared the controller's
+        // dash_buffer_remaining) so a pre-death press cannot fire after respawn.
+        impl_->input_system.ConsumeDashPress();
+        input.dash_pressed = false;
         impl_->telemetry.RecordRespawn();
         impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
     }

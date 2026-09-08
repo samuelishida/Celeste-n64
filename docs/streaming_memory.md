@@ -10,9 +10,15 @@ streaming behavior on the N64.
 The ROM targets the N64 with the **Expansion Pak (8 MB RDRAM)**.
 `rom_main.cpp` calls `assert_memory_expanded()` at boot, so it fails early
 with a clear error screen if the pak is absent. The heap is the full 8 MB
-arena (measured `[memory] total` ≈ 5.48 MB heap arena at boot; `used` ≈ 5.39
-MB, ~90 KB free). The whole-map interconnected renderer's streaming budget
-assumes this headroom — the 4 MB base-RDRAM target was dropped.
+arena. **The authoritative memory figures, component caps, and revert knobs
+live in [`docs/memory_budget.md`](memory_budget.md) (memory-opt Inc 5) — this
+doc links there instead of duplicating numbers.** In short: the Inc 1
+pre-pooling capture was `[memory] total=2921672 used=2899576 free=22096`
+(≈ 2.79 MiB arena, ≈ 99.2 % used); the Inc 4 post-pooling capture is
+`total=5858072 used=5822032 free=36040` (the renderer pools preallocate
+~2.9 MB at boot so cell transitions allocate nothing from the heap). The
+whole-map interconnected renderer's streaming budget assumes this headroom —
+the 4 MB base-RDRAM target was dropped.
 
 ## Frame model: RSP-bound
 

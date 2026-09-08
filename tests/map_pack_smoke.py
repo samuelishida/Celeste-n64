@@ -91,8 +91,8 @@ def test_main_a_side():
 
 
 def test_b_side_single_room():
-    """Bake the small B-side 1-1.map as a single-room submap; assert 1 chunk."""
-    map_path = str(REPO / "assets" / "og_converted" / "maps" / "1-1.map")
+    """Bake the small first-room.map as a single-room submap; assert 1 chunk."""
+    map_path = str(REPO / "assets" / "rooms" / "first-room" / "first-room.map")
     tmp_out = "/tmp/madeline-map-pack-smoke-bside"
     subprocess.run(
         [
@@ -108,11 +108,11 @@ def test_b_side_single_room():
     )
     with open(Path(tmp_out) / "chunks.json") as f:
         inv = json.load(f)
-    assert inv["chunk_count"] == 1, f"B-side 1-1 should be 1 chunk, got {inv['chunk_count']}"
+    assert inv["chunk_count"] == 1, f"first-room should be 1 chunk, got {inv['chunk_count']}"
     c = inv["chunks"][0]
     assert c["faces"] <= K_MAX_FACES
     assert c["vertices"] <= K_MAX_VERTICES
-    print(f"PASS: 1-1.map (B-side) → 1 chunk ({c['faces']} faces, {c['vertices']} verts)")
+    print(f"PASS: first-room.map → 1 chunk ({c['faces']} faces, {c['vertices']} verts)")
 
 
 def test_cap_guard_fires():

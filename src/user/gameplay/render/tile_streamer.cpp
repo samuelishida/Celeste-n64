@@ -1,5 +1,6 @@
 #include "gameplay/render/tile_streamer.hpp"
 
+#include <cassert>
 #include <cstdio>
 #include <cstring>
 
@@ -9,13 +10,74 @@
 #include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/open_world_renderer.hpp"  // RenderCounters (Inc 1 / D7)
 #include "gameplay/render/lod_math.hpp"             // CellAabbInNearCone
+#include "gameplay/debug_flags.hpp"                 // kEnableCompressedCells (memory-opt Inc 2)
 #include "gameplay/render/textured_room_renderer.hpp"
 #include "gameplay/debug_flags.hpp"  // kEnableCellReveal / kRevealDurationSec (Inc 4)
 #include "n64/profiler.hpp"  // FrameProfiler (Inc 1 / D7)
+#include "gameplay/render/renderer_pool.hpp"  // memory-opt Inc 4
 
 namespace madeline_cube {
 
 namespace {
+
+// memory-opt Inc 4: pool sizes (per-cell caps from the .lvl header; recorded
+// in the Inc 5 budget table). Textured slot: 1024-face persistent peak
+// (batches + runs + run_faces + material groups = 53,248 B). Textured
+// scratch: fopen file buf (max cell 93 KB) + parse (faces + lvl_verts @ 4096
+// verts + specs + order + sorted_specs ≈ 237 KB). Flat slot: 1024-face peak
+// (40,960 B). Flat scratch: parse only (≈ 141 KB — the flat parser is
+// FILE-streaming, no whole-file buffer).
+constexpr size_t kTexSlotBytes = 56 * 1024;
+constexpr size_t kTexScratchBytes = 240 * 1024;
+constexpr size_t kFlatSlotBytes = 44 * 1024;
+constexpr size_t kFlatScratchBytes = 144 * 1024;
+
+}  // namespace
+
+// memory-opt Inc 4: the two per-cell renderer pools (PIMPL — needs the
+// complete renderer types).
+struct RendererPools {
+    RendererPool<TexturedRoomRenderer, kMaxResident + 1, kTexSlotBytes,
+                 kTexScratchBytes> tex;
+    RendererPool<LvlRoomRenderer, kMaxResident + 1, kFlatSlotBytes,
+                 kFlatScratchBytes> flat;
+};
+
+namespace {
+
+// Acquire a textured renderer from the pool and attach its slot buffer +
+// the pool's shared parse scratch. Returns nullptr on pool exhaustion
+// (capacity = kMaxResident + 1 makes that a programming error — callers
+// assert).
+TexturedRoomRenderer* AcquireTextured(RendererPools* pools) {
+    PoolIndex idx = -1;
+    TexturedRoomRenderer* tr = pools->tex.Acquire(&idx);
+    if (!tr) return nullptr;
+    tr->SetPoolSlot(idx);
+    tr->AttachSlotBuffer(pools->tex.SlotBuffer(idx, kTexSlotBytes),
+                         kTexSlotBytes, pools->tex.ScratchPtr(),
+                         kTexScratchBytes);
+    return tr;
+}
+
+LvlRoomRenderer* AcquireFlat(RendererPools* pools) {
+    PoolIndex idx = -1;
+    LvlRoomRenderer* r = pools->flat.Acquire(&idx);
+    if (!r) return nullptr;
+    r->SetPoolSlot(idx);
+    r->AttachSlotBuffer(pools->flat.SlotBuffer(idx, kFlatSlotBytes),
+                        kFlatSlotBytes, pools->flat.ScratchPtr(),
+                        kFlatScratchBytes);
+    return r;
+}
+
+void ReleaseTextured(RendererPools* pools, TexturedRoomRenderer* tr) {
+    if (tr) pools->tex.Release(tr->PoolSlot());
+}
+
+void ReleaseFlat(RendererPools* pools, LvlRoomRenderer* r) {
+    if (r) pools->flat.Release(r->PoolSlot());
+}
 
 // Localize a "rom:/lvl/<pack>/<chunk>.lvl" path to a filesystem path
 // "<build_dir>/<chunk>.lvl" for host-side loading. On device (build_dir null)
@@ -31,16 +93,24 @@ const char* LocalizePath(const char* rom_path, const char* build_dir) {
 
 }  // namespace
 
+TileStreamer::TileStreamer() {
+    // streaming-experience Inc 4: all residents start fully revealed.
+    for (int i = 0; i < kMaxResident; ++i) reveal_scale_[i] = 1.0f;
+    // memory-opt Inc 4: allocate the renderer pools (PIMPL — the complete
+    // renderer types are available here).
+    pools_ = new RendererPools();
+}
+
 TileStreamer::~TileStreamer() {
     for (int i = 0; i < set_.count; ++i) {
+        // memory-opt Inc 4: pool Release runs the destructor (which calls
+        // Free()).
         if (renderers_[i]) {
-            renderers_[i]->Free();
-            delete renderers_[i];
+            ReleaseFlat(pools_, renderers_[i]);
             renderers_[i] = nullptr;
         }
         if (textured_renderers_[i]) {
-            textured_renderers_[i]->Free();
-            delete textured_renderers_[i];
+            ReleaseTextured(pools_, textured_renderers_[i]);
             textured_renderers_[i] = nullptr;
         }
     }
@@ -58,6 +128,8 @@ TileStreamer::~TileStreamer() {
         staging_size_ = 0;
     }
     pending_ = PendingLoadQueue{};
+    delete pools_;
+    pools_ = nullptr;
 }
 
 void TileStreamer::SetAsyncStagingPool(uint8_t* pool, uint32_t pool_size) {
@@ -71,6 +143,33 @@ void TileStreamer::SetAsyncStagingPool(uint8_t* pool, uint32_t pool_size) {
     }
     staging_ = pool;
     staging_size_ = pool_size;
+    // memory-opt Inc 3: the staging pool is a `dma_read_async` target — the
+    // RSP DMA contract needs 16-byte alignment. `malloc_uncached` guarantees
+    // it; assert so a caller-owned pool cannot regress it.
+    assert((reinterpret_cast<uintptr_t>(staging_) & 0xF) == 0);
+}
+
+size_t TileStreamer::ResidentRendererBytes() const {
+    // memory-opt Inc 1: sum of the live resident renderer objects (textured
+    // path preferred when both exist for a slot; a slot holds one or the
+    // other). Flat-path renderers are typically smaller; the estimate is a
+    // live byte count for the [memory] report bucket.
+    size_t bytes = 0;
+    for (int i = 0; i < kMaxResident; ++i) {
+        if (textured_renderers_[i] != nullptr) {
+            bytes += sizeof(TexturedRoomRenderer);
+        } else if (renderers_[i] != nullptr) {
+            bytes += sizeof(LvlRoomRenderer);
+        }
+    }
+    return bytes;
+}
+
+size_t TileStreamer::PoolHighWater() const {
+    // memory-opt Inc 4: high-water of concurrently-live renderer objects
+    // across both pools (textured + flat).
+    if (!pools_) return 0;
+    return pools_->tex.PeakHighWater() + pools_->flat.PeakHighWater();
 }
 
 bool TileStreamer::ReserveStreamingBudget(uint32_t max_lvl_size) {
@@ -90,6 +189,9 @@ bool TileStreamer::ReserveStreamingBudget(uint32_t max_lvl_size) {
     }
     staging_ = pool;
     staging_size_ = pool_size;
+    // memory-opt Inc 3: DMA-direct staging pool — 16-byte alignment is the
+    // RSP DMA contract (`malloc_uncached` guarantees it; assert anyway).
+    assert((reinterpret_cast<uintptr_t>(staging_) & 0xF) == 0);
     return true;
 }
 
@@ -148,13 +250,11 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
         for (int k = 0; k < set_.count; ++k) {
             DropPending(set_.spec[k]);
             if (renderers_[k]) {
-                renderers_[k]->Free();
-                delete renderers_[k];
+                ReleaseFlat(pools_, renderers_[k]);
                 renderers_[k] = nullptr;
             }
             if (textured_renderers_[k]) {
-                textured_renderers_[k]->Free();
-                delete textured_renderers_[k];
+                ReleaseTextured(pools_, textured_renderers_[k]);
                 textured_renderers_[k] = nullptr;
             }
         }
@@ -168,13 +268,11 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
         if (k < 0) continue;  // defensive: already gone
         DropPending(set_.spec[k]);
         if (renderers_[k]) {
-            renderers_[k]->Free();
-            delete renderers_[k];
+            ReleaseFlat(pools_, renderers_[k]);
             renderers_[k] = nullptr;
         }
         if (textured_renderers_[k]) {
-            textured_renderers_[k]->Free();
-            delete textured_renderers_[k];
+            ReleaseTextured(pools_, textured_renderers_[k]);
             textured_renderers_[k] = nullptr;
         }
     }
@@ -199,7 +297,8 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
     };
     LoadRecord loaded[kMaxResident] = {};
     int loaded_count = 0;
-    const bool async_ok = kEnableTextures && catalog_ && staging_ != nullptr;
+    const bool async_ok = kEnableTextures && catalog_ && staging_ != nullptr &&
+                          !kEnableCompressedCells;  // memory-opt Inc 2: async reads RAW bytes; compressed cells must load via the asset layer (sync)
     // streaming-experience Inc 5: no per-transition load cap — every new ring
     // cell gets its load work in THIS call. The center still loads
     // synchronously (it must be ready before it draws); non-center cells are
@@ -217,9 +316,10 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
         if (kEnableTextures && catalog_) {
             if (is_center) {
                 // Center: synchronous, fatal on failure (reset + false).
-                TexturedRoomRenderer* tr = new TexturedRoomRenderer();
+                TexturedRoomRenderer* tr = AcquireTextured(pools_);
+                if (!tr) { free_all(); return false; }
                 if (!tr->Load(path, rs.render_origin, catalog_)) {
-                    delete tr;
+                    ReleaseTextured(pools_, tr);
                     free_all();
                     return false;
                 }
@@ -234,9 +334,10 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
                 loaded[loaded_count++] = {&rs, nullptr, nullptr};
             } else {
                 // Async unavailable (no pool / queue full): synchronous fallback.
-                TexturedRoomRenderer* tr = new TexturedRoomRenderer();
+                TexturedRoomRenderer* tr = AcquireTextured(pools_);
+                if (!tr) { free_all(); return false; }
                 if (!tr->Load(path, rs.render_origin, catalog_)) {
-                    delete tr;
+                    ReleaseTextured(pools_, tr);
                     if (is_center) { free_all(); return false; }
                     continue;  // non-center failure: skip (existing behavior)
                 }
@@ -246,9 +347,10 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
         } else {
             // Flat-color fallback path (kEnableTextures off / no catalog):
             // synchronous only (the async split is for the textured renderer).
-            LvlRoomRenderer* r = new LvlRoomRenderer();
+            LvlRoomRenderer* r = AcquireFlat(pools_);
+            if (!r) { free_all(); return false; }
             if (!r->Load(path, rs.render_origin)) {
-                delete r;
+                ReleaseFlat(pools_, r);
                 if (is_center) { free_all(); return false; }
                 continue;
             }
@@ -359,6 +461,10 @@ uint64_t TileStreamer::IssueAsyncRead(const V2RoomSpec* spec) {
     if (!staging_) {
         staging_ = static_cast<uint8_t*>(malloc_uncached(kStagingFallbackBytes));
         staging_size_ = staging_ ? kStagingFallbackBytes : 0;
+        // memory-opt Inc 3: DMA-direct fallback staging — 16-byte alignment
+        // is the RSP DMA contract (`malloc_uncached` guarantees it).
+        assert(staging_ == nullptr ||
+               (reinterpret_cast<uintptr_t>(staging_) & 0xF) == 0);
     }
     if (!staging_ || spec->lvl_size == 0) return 0;
     uint64_t ticket = 0;
@@ -376,18 +482,18 @@ bool TileStreamer::PromoteStaged(const V2RoomSpec* spec) {
     // success (the cell is now READY and drawn).
     const int slot = set_.IndexOf(spec);
     if (slot < 0) return false;  // cell was evicted while in-flight
-    TexturedRoomRenderer* tr = new TexturedRoomRenderer();
+    TexturedRoomRenderer* tr = AcquireTextured(pools_);
+    if (!tr) return false;
     if (!tr->ParseStaged(staging_, spec->lvl_size, spec->render_origin,
                          catalog_)) {
-        delete tr;
+        ReleaseTextured(pools_, tr);
         return false;
     }
     tr->SetCounters(counters_);
     // Free any stale renderer in the slot (shouldn't happen — a pending cell
     // has a null slot — but be safe).
     if (textured_renderers_[slot]) {
-        textured_renderers_[slot]->Free();
-        delete textured_renderers_[slot];
+        ReleaseTextured(pools_, textured_renderers_[slot]);
     }
     textured_renderers_[slot] = tr;
     return true;
@@ -402,18 +508,20 @@ bool TileStreamer::LoadSync(const V2RoomSpec& spec, const char* build_dir) {
     if (textured_renderers_[slot] || renderers_[slot]) return true;  // already ready
     const char* path = LocalizePath(spec.lvl_path, build_dir);
     if (kEnableTextures && catalog_) {
-        TexturedRoomRenderer* tr = new TexturedRoomRenderer();
+        TexturedRoomRenderer* tr = AcquireTextured(pools_);
+        if (!tr) return false;
         if (!tr->Load(path, spec.render_origin, catalog_)) {
-            delete tr;
+            ReleaseTextured(pools_, tr);
             return false;
         }
         tr->SetCounters(counters_);
         textured_renderers_[slot] = tr;
         return true;
     }
-    LvlRoomRenderer* r = new LvlRoomRenderer();
+    LvlRoomRenderer* r = AcquireFlat(pools_);
+    if (!r) return false;
     if (!r->Load(path, spec.render_origin)) {
-        delete r;
+        ReleaseFlat(pools_, r);
         return false;
     }
     r->SetCounters(counters_);
@@ -430,7 +538,9 @@ void TileStreamer::RequeueResidentLoads() {
     // by the pump, (c) queue-full stragglers from SetCenter. The queue (128
     // slots) is the backlog; the pump drains it one DMA + one parse per
     // frame. Idempotent — Enqueue dedups against every tracked spec.
-    if (!(kEnableTextures && catalog_ && staging_ != nullptr)) return;
+    if (!(kEnableTextures && catalog_ && staging_ != nullptr) ||
+        kEnableCompressedCells)  // memory-opt Inc 2: no async when compressed
+        return;
     for (int i = 0; i < set_.count; ++i) {
         if (set_.spec[i] == nullptr) continue;
         if (textured_renderers_[i] || renderers_[i]) continue;
@@ -531,13 +641,11 @@ bool TileStreamer::UpdateCamera(const CameraDesc& cam, float dt) {
             // for the evicted cell (its DMA, if in flight, drains harmlessly).
             DropPending(set_.spec[victim]);
             if (renderers_[victim]) {
-                renderers_[victim]->Free();
-                delete renderers_[victim];
+                ReleaseFlat(pools_, renderers_[victim]);
                 renderers_[victim] = nullptr;
             }
             if (textured_renderers_[victim]) {
-                textured_renderers_[victim]->Free();
-                delete textured_renderers_[victim];
+                ReleaseTextured(pools_, textured_renderers_[victim]);
                 textured_renderers_[victim] = nullptr;
             }
             for (int k = victim; k < set_.count - 1; ++k) {

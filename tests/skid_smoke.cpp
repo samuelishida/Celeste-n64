@@ -121,13 +121,13 @@ int main() {
         p.dash_cooldown_remaining = 0.06f;  // ~4 ticks of block
 
         PlayerInput in;
-        in.dash_pressed = true;         // press with the cooldown blocking
+        in.dash_pressed = true;         // device-buffered edge (live 0.10 s)
         controller.Step(p, in, cam, kDt, &no_room);
         assert(p.movement_state != PlayerMovementState::Dashing);
 
-        // Cooldown expires within the 0.10 s buffer window; the buffered press
-        // fires the dash once the opportunity opens (no re-press needed).
-        in.dash_pressed = false;
+        // Inc 1: the input device keeps the pressed edge live for the 0.10 s
+        // buffer window, so the same snapshot replays the buffered press until
+        // the cooldown expires and the dash fires (no re-press needed).
         for (int i = 0; i < 5; ++i) controller.Step(p, in, cam, kDt, &no_room);
         assert(p.movement_state == PlayerMovementState::Dashing);
         printf("dash-buffer: fired from buffered press\n");

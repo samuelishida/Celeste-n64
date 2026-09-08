@@ -51,6 +51,17 @@ public:
     void SweepMove(PlayerState& state, const Room& room, const Vec3& amount,
                    bool resolve_impact) const;
 
+    // Climb-specific sweep (climb-bug fix): move by `amount` along the wall
+    // plane with a WAIST-ONLY wall popout. The full Popout's head query and
+    // ceiling check fight the climb on sloped walls (the head sits 10 above
+    // the center at a different distance from a sloped plane, so the head
+    // popout fires every frame with a full-3D push including Y → down-push,
+    // wiggle, ejection). The climb state maintains the anchor; the mantle
+    // handles the wall top. Waist-only keeps the body out of the wall without
+    // fighting the climb.
+    void SweepMoveClimb(PlayerState& state, const Room& room,
+                        const Vec3& amount) const;
+
     // OG Popout (Player.cs:669-718). Order: GroundCheck (pushout + on
     // resolve_impact vy=max(vy,0)) -> else CeilingCheck (vy=min(vy,0)) -> else
     // wall at waist then head (position += pushout; on resolve_impact

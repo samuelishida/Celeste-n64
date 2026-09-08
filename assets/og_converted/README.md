@@ -110,7 +110,7 @@ Subdirectories preserved:
 ## Maps (`maps/`)
 
 12 `.map` files copied as-is (Trenchbroom format, parsed at runtime):
-- `1.map`, `1-1.map` … `1-10.map`, `Palette.map`
+- `1.map`, `1-2.map` … `1-10.map`, `Palette.map`
 
 ---
 

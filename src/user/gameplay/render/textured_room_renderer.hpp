@@ -1,6 +1,8 @@
 #pragma once
 
 #include <t3d/t3dmodel.h>
+#include <cassert>
+#include <cstddef>
 #include <cstdint>
 
 #include "gameplay/math_types.hpp"
@@ -68,6 +70,19 @@ public:
 
     // Free all allocated resources.
     void Free();
+
+    // memory-opt Inc 4: attach the renderer's pool slot buffer + the pool's
+    // shared parse scratch. Called by TileStreamer right after pool Acquire.
+    // The persistent per-cell buffers (batches, runs, run_faces, material
+    // groups) are carved from `slot`; the transient parse buffers (file buf,
+    // faces, lvl_verts, specs, order, sorted_specs) from `scratch`. Both are
+    // bump-allocated and reset here (the slot block is reused by the next
+    // occupant; the scratch is shared across parses, which are serialized).
+    void AttachSlotBuffer(uint8_t* slot, size_t slot_size,
+                          uint8_t* scratch, size_t scratch_size);
+    // Pool slot index (for TileStreamer's pool Release). -1 = not pooled.
+    int PoolSlot() const { return pool_slot_; }
+    void SetPoolSlot(int s) { pool_slot_ = s; }
 
     // streaming-memory-opt Inc 4: per-material run accessors for the global
     // near-pass material grouping. The active path's coalesced runs are
@@ -262,6 +277,54 @@ private:
                                             // matrix rebuild)
     const MaterialCatalog* catalog_ = nullptr;
     RenderCounters* counters_ = nullptr;  // per-frame draw counters (Inc 1 / D7)
+
+    // memory-opt Inc 4: pool slot buffer + shared scratch (bump allocators).
+    // The persistent per-cell buffers live in `slot_buf_`; the transient
+    // parse buffers in `scratch_`. verts_/matrix_fp_ stay malloc_uncached
+    // (DMA-direct, uncached — pooling them into cached RAM would need a
+    // per-frame cache writeback for the reveal matrix; documented deviation).
+    uint8_t* slot_buf_ = nullptr;
+    size_t slot_buf_size_ = 0;
+    size_t slot_buf_used_ = 0;
+    uint8_t* scratch_ = nullptr;
+    size_t scratch_size_ = 0;
+    size_t scratch_used_ = 0;
+    int pool_slot_ = -1;
+
+    // Bump-allocate from the slot buffer (persistent) / scratch (transient).
+    // Every allocation is 16-aligned (the pool blocks are 16-aligned; the
+    // cursor advances to the next 16-byte boundary) so the struct writes
+    // (LvlFace/LvlVertex/Batch/...) never misalign on MIPS. Overflow asserts
+    // AND returns nullptr — a cell exceeding its budget fails loudly
+    // (callers null-check), never partial-loads.
+    void* SlotAlloc(size_t need) {
+        if (slot_buf_ == nullptr) {
+            assert(false && "renderer slot buffer not attached");
+            return nullptr;
+        }
+        const size_t aligned = (slot_buf_used_ + 15u) & ~size_t(15u);
+        if (aligned + need > slot_buf_size_) {
+            assert(false && "renderer slot buffer overflow");
+            return nullptr;
+        }
+        void* p = slot_buf_ + aligned;
+        slot_buf_used_ = aligned + need;
+        return p;
+    }
+    void* ScratchAlloc(size_t need) {
+        if (scratch_ == nullptr) {
+            assert(false && "renderer parse scratch not attached");
+            return nullptr;
+        }
+        const size_t aligned = (scratch_used_ + 15u) & ~size_t(15u);
+        if (aligned + need > scratch_size_) {
+            assert(false && "renderer parse scratch overflow");
+            return nullptr;
+        }
+        void* p = scratch_ + aligned;
+        scratch_used_ = aligned + need;
+        return p;
+    }
 };
 
 }  // namespace madeline_cube

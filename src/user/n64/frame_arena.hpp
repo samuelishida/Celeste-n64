@@ -26,6 +26,7 @@ public:
         const size_t new_offset = static_cast<size_t>(aligned - reinterpret_cast<uintptr_t>(buffer_)) + size;
         if (new_offset > kArenaSize) return nullptr;
         offset_ = new_offset;
+        if (offset_ > peak_used_) peak_used_ = offset_;
         return reinterpret_cast<void*>(aligned);
     }
 
@@ -37,9 +38,17 @@ public:
     // Bytes remaining this frame.
     size_t Remaining() const { return kArenaSize - offset_; }
 
+    // memory-opt Inc 4: high-water mark of `Used()` since construction (or
+    // since the last `ResolvePeak`). For telemetry — the frame arena is
+    // static storage outside the mallinfo heap, so its peak is reported as a
+    // bucket, not folded into `used`.
+    size_t PeakUsed() const { return peak_used_; }
+    void ResolvePeak() { peak_used_ = offset_; }
+
 private:
     alignas(8) uint8_t buffer_[kArenaSize];
     size_t offset_ = 0;
+    size_t peak_used_ = 0;
 };
 
 }  // namespace n64

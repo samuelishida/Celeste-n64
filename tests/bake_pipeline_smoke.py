@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pipeline smoke tests — validates bake.py produces correct artifacts.
 
-Runs tools/bake.py once against 1-1.map, then inspects the output
+Runs tools/bake.py once against first-room.map, then inspects the output
 colmesh, LVL, manifest, and nav files for structural correctness.
 """
 
@@ -17,7 +17,7 @@ from pathlib import Path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, ".."))
 TOOLS_DIR = os.path.join(REPO_DIR, "tools")
-OG_MAP = os.path.join(REPO_DIR, "assets", "og_converted", "maps", "1-1.map")
+OG_MAP = os.path.join(REPO_DIR, "assets", "rooms", "first-room", "first-room.map")
 SCALE = "0.2"
 INT16_MAX = 32767
 
@@ -70,16 +70,16 @@ def test_library_parse():
     sys.path.insert(0, TOOLS_DIR)
     from ogmap_lib import parse_map
     pm = parse_map(OG_MAP)
-    check("56 entities", len(pm.entities) == 56, f"got {len(pm.entities)}")
-    check("6 textures", len(pm.textures) == 6, f"got {len(pm.textures)}")
+    check("3 entities", len(pm.entities) == 3, f"got {len(pm.entities)}")
+    check("5 textures", len(pm.textures) == 5, f"got {len(pm.textures)}")
     textures = set(pm.textures)
-    for t in ("rock_1", "snow_1", "rock_2", "metal_floor_1",
-              "floor_dirty_concrete", "TB_empty"):
+    for t in ("rock_1", "rock_1_climbable", "rock_1_death",
+              "rock_1_ice", "rock_1_oneway"):
         check(f"texture '{t}'", t in textures)
 
 
 def test_class_registry():
-    """Verify all OG entity classes in 1-1.map have a ClassDef or a skip reason."""
+    """Verify all OG entity classes in first-room.map have a ClassDef or a skip reason."""
     print("\n[test_class_registry]")
     sys.path.insert(0, TOOLS_DIR)
     from ogmap_lib import parse_map, classify_entity, is_skipped
@@ -160,7 +160,9 @@ def test_colmesh_material_flags(bake_dir):
             check("no DEATH+CLIMBABLE combo", False, f"at tri {i}")
 
     check(f"solid-only triangles ({solid_only})", solid_only >= 10)
-    check(f"death triangles ({death})", death > 0)
+    # first-room has no death geometry (rock_1_death texture exists but no
+    # death faces); the pipeline must emit 0 death tris for it.
+    check(f"death triangles ({death})", death == 0, "first-room has no death geometry")
     check("all death tris also solid",
           all(
               struct.unpack_from(">H", d, to + i * 12 + 6)[0] & MAT_SOLID
@@ -198,7 +200,7 @@ def test_lvl_entity_spawns(bake_dir):
     d = open(lvl_path, "rb").read()
     h = struct.unpack_from(">IIIIIII", d, 4)
     ec = h[4]
-    check(f"entity_count == 3 ({ec})", ec == 3, f"expected 3")
+    check(f"entity_count == 2 ({ec})", ec == 2, f"expected 2 (PlayerSpawn + Strawberry)")
 
     off_entities = struct.unpack_from(">I", d, 0x3C)[0]
     has_player = has_strawberry = has_cassette = False
@@ -213,7 +215,7 @@ def test_lvl_entity_spawns(bake_dir):
             has_cassette = True
     check("PlayerSpawn (id=0)", has_player)
     check("Strawberry (id=1)", has_strawberry)
-    check("Cassette (id=9)", has_cassette)
+    check("no Cassette (id=9)", not has_cassette)
 
 
 def test_lvl_atmosphere(bake_dir):
@@ -231,11 +233,10 @@ def test_lvl_atmosphere(bake_dir):
     check("skybox string present", skybox_id > 0 or skybox_id == 0)
     if skybox_id > 0:
         print(f"    skybox set (str_id={skybox_id})")
-    check("music string present", music_id > 0, f"music_str_id=0")
-    if music_id > 0:
-        print(f"    music set (str_id={music_id})")
-    check("ambience string present", ambience_id > 0, f"ambience_str_id=0")
-    check("snow amount present", snow_q8 > 0, f"snow_q8={snow_q8}")
+    # first-room has no music/ambience/snow (the removed OG map did).
+    check("no music string (first-room)", music_id == 0, f"music_str_id={music_id}")
+    check("no ambience string (first-room)", ambience_id == 0, f"ambience_str_id={ambience_id}")
+    check("no snow amount (first-room)", snow_q8 == 0, f"snow_q8={snow_q8}")
     print(f"    snow_amount_q8={snow_q8} snow_dir={snow_dir}")
 
 
@@ -245,9 +246,10 @@ def test_manifest_clean(bake_dir):
     manifest_path = os.path.join(bake_dir, "output.manifest")
     check("manifest file exists", os.path.exists(manifest_path))
     text = open(manifest_path).read()
-    check("no _death suffix", "_death" not in text, "found _death in manifest")
-    for m in ("rock_1", "snow_1", "rock_2", "metal_floor_1",
-              "floor_dirty_concrete", "TB_empty"):
+    # first-room uses rock_1_death (unlike the removed 1-1 map).
+    check("has _death suffix (first-room)", "_death" in text, "missing _death in manifest")
+    for m in ("rock_1", "rock_1_climbable", "rock_1_death",
+              "rock_1_ice", "rock_1_oneway"):
         check(f"contains {m}", m in text)
 
 
@@ -276,7 +278,8 @@ def test_nav_waypoints(bake_dir):
     d = open(nav_path, "rb").read()
     check("magic NAV1", d[:4] == b"NAV1")
     count = struct.unpack_from("<H", d, 4)[0]
-    check(f"platform count == 5 ({count})", count == 5)
+    # first-room has no moving platforms (the removed 1-1 map had 5).
+    check(f"platform count == 0 ({count})", count == 0, "first-room has no moving platforms")
 
     off = 6
     all_finite = True

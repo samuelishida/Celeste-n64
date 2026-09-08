@@ -61,6 +61,20 @@ inline constexpr bool kEnableBackCull = false;
 // preserves the shipped perf; flip ON only after the distant pass is made
 // cheap (per-cell cull + smaller budget).
 inline constexpr bool kEnableDistantTier = false;
+
+// memory-opt Inc 2: route cell/map-pack loads through libdragon's asset
+// compression layer (level-1 LZ4, documented faster-than-uncompressed) when
+// the bake shipped compressed files. Host builds (no __mips__) always use the
+// plain-fopen path so host tests exercise the same parsing. The shipped
+// filesystem and this flag MUST flip together (a mismatch fails loud via the
+// CMSH magic canary).
+inline constexpr bool kEnableCompressedCells =
+#ifdef __mips__
+    true
+#else
+    false
+#endif
+    ;
 // Reveal ramp duration in seconds (0.3–0.5 s per the plan).
 inline constexpr float kRevealDurationSec = 0.4f;
 // Reveal start scale (a degenerate point would be invisible; epsilon avoids

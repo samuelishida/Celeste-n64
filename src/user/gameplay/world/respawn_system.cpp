@@ -57,10 +57,10 @@ bool RespawnSystem::Step(
     }
     // Review S3: clear the timers the old ResetState never touched — a death
     // within the coyote window otherwise leaves a stale coyote_height that a
-    // post-respawn jump would snap to.
+    // post-respawn jump would snap to. (Inc 1: the dash press buffer moved to
+    // the input device; the scene consumes the device dash edge on respawn.)
     player.coyote_time_remaining = 0.0f;
     player.no_move_time_remaining = 0.0f;
-    player.dash_buffer_remaining = 0.0f;
     player.contact.ground_snap_cooldown_remaining = 0.0f;
     return true;
 }

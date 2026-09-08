@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "gameplay/math_types.hpp"
+#include "gameplay/input/virtual_input.hpp"
 
 namespace madeline_cube {
 
@@ -13,6 +14,10 @@ namespace madeline_cube {
 // never fire more than one action (e.g. wall-jump + normal jump + dash-jump
 // in the same frame). The flags are `mutable` so a const PlayerInput& can be
 // consumed by the controller's const StatePhase.
+// controls-physics-port Inc 1: the input DEVICE owns the 0.10 s press buffer
+// (OG VirtualButton parity) — `jump_pressed`/`dash_pressed` are the
+// device-buffered edges, live for the buffer window until consumed. The
+// controller no longer owns buffer timers.
 struct PlayerInput {
     Vec2 move;
     bool jump_pressed = false;
@@ -25,11 +30,20 @@ struct PlayerInput {
     // True once the dash press has been claimed by an action this frame.
     mutable bool dash_press_consumed = false;
 
+    // Device-level consume propagation (Inc 1): consuming the PlayerInput
+    // copy must ALSO consume the device edge — otherwise the buffered press
+    // re-fires on the next frame's snapshot (OG VirtualButton.ConsumePress
+    // parity). Set by ReadPlayerInput; null in host fixtures that build
+    // PlayerInput by hand.
+    VirtualButtonState* jump_device = nullptr;
+    VirtualButtonState* dash_device = nullptr;
+
     // Claim the jump press edge. Returns true if a press was available and
     // not already claimed; afterwards jump_pressed() reads false.
     bool ConsumeJumpPress() const {
         if (jump_pressed && !jump_press_consumed) {
             jump_press_consumed = true;
+            if (jump_device != nullptr) ConsumePress(*jump_device);
             return true;
         }
         return false;
@@ -39,6 +53,7 @@ struct PlayerInput {
     bool ConsumeDashPress() const {
         if (dash_pressed && !dash_press_consumed) {
             dash_press_consumed = true;
+            if (dash_device != nullptr) ConsumePress(*dash_device);
             return true;
         }
         return false;
@@ -133,9 +148,6 @@ struct PlayerState {
     // Coyote time: counts down after leaving ground.
     float coyote_time_remaining = 0.0f;
 
-    // Jump buffer: counts down after jump pressed in air.
-    float jump_buffer_remaining = 0.0f;
-
     // Celeste-like jump sustain.
     float hold_jump_time_remaining = 0.0f;
     float hold_jump_speed = 0.0f;
@@ -150,9 +162,6 @@ struct PlayerState {
     // tNoSkidJump (OG StSkiddingEnter): skid-jump unlock delay after entering
     // skid (0.10 s). Counts down in the timer block.
     float no_skid_jump_remaining = 0.0f;
-    // Dash input buffer (og-mover-overhaul Inc 4): a dash press with no dash
-    // opportunity stores this grace timer; TryDash drains it within dash_buffer_time.
-    float dash_buffer_remaining = 0.0f;
 
     // Surface material flags (set by the mover alongside `grounded`).
     bool on_ice = false;

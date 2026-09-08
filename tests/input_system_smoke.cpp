@@ -156,12 +156,117 @@ static void TestMoveSampling() {
     std::printf("[input] TestMoveSampling PASS\n");
 }
 
+static void TestDeviceBufferConsumeOnce() {
+    // OG VirtualButton parity (Inc 1): a press arms a 0.10 s buffer; the
+    // buffered edge stays live until consumed or expired; consuming at the
+    // device level prevents re-fire on the next frame.
+    VirtualButtonState jump;
+    // Frame 1: press in air (no jump opportunity yet).
+    UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
+    assert(jump.pressed);
+    // Frames 2-3: still held, buffer decays, edge stays live.
+    UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
+    assert(jump.pressed);
+    UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
+    assert(jump.pressed);
+    // Consume at the device level (what the controller's ConsumeJumpPress
+    // propagation does): the edge is dead for the rest of the buffer window.
+    assert(ConsumePress(jump));
+    assert(!jump.pressed);
+    // Next frame: no re-fire.
+    UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
+    assert(!jump.pressed);
+    // Release + re-press arms a fresh edge.
+    UpdateVirtualButton(jump, false, 0.10f, 1.0f / 60.0f);
+    UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
+    assert(jump.pressed);
+
+    std::printf("[input] TestDeviceBufferConsumeOnce PASS\n");
+}
+
+static void TestBufferExpiry() {
+    // A press with no consume expires after the 0.10 s window (6 frames at
+    // 60 Hz) — the buffered edge must not stay live forever.
+    VirtualButtonState jump;
+    UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
+    assert(jump.pressed);
+    // 0.10 s = 6 decays of 1/60, but float rounding leaves ~4e-9 after 6, so
+    // the edge expires on the 8th total frame (7 decays).
+    for (int i = 0; i < 7; ++i) {
+        UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
+    }
+    assert(!jump.pressed);
+
+    std::printf("[input] TestBufferExpiry PASS\n");
+}
+
+static void TestUnbufferedSingleFrameEdge() {
+    // Climb/pause are unbuffered (buffer_seconds == 0): the pressed edge must
+    // be a single-frame event, not sticky (a sticky pause edge would toggle
+    // the fixture overlay every frame).
+    VirtualButtonState pause;
+    UpdateVirtualButton(pause, true, 0.0f, 1.0f / 60.0f);
+    assert(pause.pressed);
+    UpdateVirtualButton(pause, true, 0.0f, 1.0f / 60.0f);
+    assert(!pause.pressed);
+    UpdateVirtualButton(pause, false, 0.0f, 1.0f / 60.0f);
+    UpdateVirtualButton(pause, true, 0.0f, 1.0f / 60.0f);
+    assert(pause.pressed);
+
+    std::printf("[input] TestUnbufferedSingleFrameEdge PASS\n");
+}
+
+static void TestPlayerInputDevicePropagation() {
+    // Inc 1: the controller's ConsumeJumpPress must ALSO consume the device
+    // edge so the buffered press cannot re-fire on the next frame's snapshot.
+    VirtualButtonState jump;
+    UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
+    PlayerInput in;
+    in.jump_pressed = jump.pressed;
+    in.jump_device = &jump;
+    assert(in.ConsumeJumpPress());
+    assert(!jump.pressed);  // device edge consumed
+    // Next frame: no re-fire.
+    UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
+    assert(!jump.pressed);
+
+    // Same for dash.
+    VirtualButtonState dash;
+    UpdateVirtualButton(dash, true, 0.10f, 1.0f / 60.0f);
+    PlayerInput in2;
+    in2.dash_pressed = dash.pressed;
+    in2.dash_device = &dash;
+    assert(in2.ConsumeDashPress());
+    assert(!dash.pressed);
+
+    std::printf("[input] TestPlayerInputDevicePropagation PASS\n");
+}
+
+static void TestMoveDeadzone() {
+    // Deadzone 0 (default): any deflection is live.
+    VirtualStickState s0 = ApplyCircularDeadzone({0.05f, 0.0f}, 0.0f);
+    assert(s0.value.x == 0.05f);
+    // Deadzone 0.35 (OG): inside the circle is zeroed.
+    VirtualStickState s1 = ApplyCircularDeadzone({0.2f, 0.1f}, 0.35f);
+    assert(s1.value.x == 0.0f && s1.value.y == 0.0f);
+    // Outside the circle: the raw value passes through.
+    VirtualStickState s2 = ApplyCircularDeadzone({0.4f, 0.0f}, 0.35f);
+    assert(s2.value.x == 0.4f);
+
+    std::printf("[input] TestMoveDeadzone PASS\n");
+}
+
 int main() {
     TestButtonTransitions();
     TestAnalogDeadzone();
     TestDigitalCardinal();
     TestPlayerInputConsumption();
     TestMoveSampling();
+    TestDeviceBufferConsumeOnce();
+    TestBufferExpiry();
+    TestUnbufferedSingleFrameEdge();
+    TestPlayerInputDevicePropagation();
+    TestMoveDeadzone();
     std::printf("[input] ALL PASS\n");
     return 0;
 }

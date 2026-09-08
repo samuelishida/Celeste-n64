@@ -10,7 +10,7 @@
 //   Kill walkway:   x=[200,500]   y=[200,240]   z=[0,16]
 //   Strawberry:     at (350, -250, 64)
 //
-// Brush face convention (matching OG 1-1):
+// Brush face convention (matching the OG maps):
 //   Left(xmin):  (xmin,ymin,zmin) (xmin,ymax,zmin) (xmin,ymin,zmax) → normal (+1,0,0) → x >= xmin
 //   Right(xmax): (xmax,ymin,zmax) (xmax,ymax,zmax) (xmax,ymin,zmin) → normal (-1,0,0) → x <= xmax
 //   Back(ymin):  (xmax,ymin,zmin) (xmin,ymin,zmin) (xmax,ymin,zmax) → normal (0,+1,0) → y >= ymin

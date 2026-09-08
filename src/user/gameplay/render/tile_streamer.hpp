@@ -21,6 +21,11 @@ class TexturedRoomRenderer;
 class MaterialCatalog;
 struct RenderCounters;  // defined in open_world_renderer.hpp (Inc 1 / D7)
 
+// memory-opt Inc 4: fixed-capacity pools for the per-cell renderer objects
+// + their per-cell buffers (defined in tile_streamer.cpp — needs the complete
+// renderer types).
+struct RendererPools;
+
 // Texturing gate (Inc 5). When true, the near pass uses `TexturedRoomRenderer`
 // (per-material sprites); when false, it uses the flat-color `LvlRoomRenderer`
 // (the validated fallback). Defaults ON; can be disabled if RDP state-change
@@ -466,10 +471,7 @@ inline bool IsDrawnCell(const V2RoomSpec& cell, const V2RoomSpec& center) {
 // the camera moves, never evicting the center. Gameplay stays active-only.
 class TileStreamer {
 public:
-    TileStreamer() {
-        // streaming-experience Inc 4: all residents start fully revealed.
-        for (int i = 0; i < kMaxResident; ++i) reveal_scale_[i] = 1.0f;
-    }
+    TileStreamer();
     ~TileStreamer();
     TileStreamer(const TileStreamer&) = delete;
     TileStreamer& operator=(const TileStreamer&) = delete;
@@ -549,6 +551,21 @@ public:
         return reveal_scale_[i];
     }
 
+    // memory-opt Inc 1: live staging-buffer bytes on the heap (the attached
+    // async pool, or the lazily-allocated fallback when no pool is attached).
+    size_t StagingBytes() const {
+        return staging_ ? (staging_size_ ? staging_size_ : kStagingFallbackBytes)
+                        : 0u;
+    }
+
+    // memory-opt Inc 1: heap bytes of the resident renderer objects (flat +
+    // textured paths). Defined in the .cpp — needs complete renderer types.
+    size_t ResidentRendererBytes() const;
+
+    // memory-opt Inc 4: high-water mark of concurrently-live renderer objects
+    // across both pools (textured + flat). Defined in the .cpp (PIMPL).
+    size_t PoolHighWater() const;
+
 private:
     // streaming-experience Inc 1: fallback staging size when no pool is
     // attached (>= the current manifest's largest cell, 93 KB, + margin).
@@ -595,6 +612,9 @@ private:
     ResidentVisibility visibility_;
     LvlRoomRenderer* renderers_[kMaxResident] = {};
     TexturedRoomRenderer* textured_renderers_[kMaxResident] = {};
+    // memory-opt Inc 4: renderer object + per-cell buffer pools (PIMPL — the
+    // complete renderer types live in the .cpp).
+    RendererPools* pools_ = nullptr;
     const MaterialCatalog* catalog_ = nullptr;
     RenderCounters* counters_ = nullptr;      // per-frame draw counters (Inc 1 / D7)
     n64::FrameProfiler* profiler_ = nullptr;    // per-phase profiler (Inc 1 / D7)

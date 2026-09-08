@@ -21,16 +21,6 @@ float ClampSigned(float value, float magnitude) {
     return value;
 }
 
-void SampleMoveAxis(InputActionVec2& move, const joypad_inputs_t& inputs) {
-    // Normalize stick via the pure host-testable helper (see input_system.hpp).
-    //   move_x = -stick_x/max  (stick right -> +X move)
-    //   move_y = +stick_y/max  (stick up -> +Y move)
-    const Vec2 s = SampleStickAxis(inputs.stick_x, inputs.stick_y, kStickMax);
-    // No deadzone on the move axis (matches pre-overhaul). The unit-magnitude
-    // clamp for a full diagonal happens inside Update.
-    move.Update(s.x, s.y, 0.0f);
-}
-
 void SampleCameraAxis(InputActionVec2& camera, const joypad_inputs_t& inputs, float deadzone) {
     // C-Stick is the analog camera input; C-Buttons are its digital fallback.
     // On N64 the cstick is emulated from C-buttons by libdragon, so both fire
@@ -56,7 +46,7 @@ void SampleCameraAxis(InputActionVec2& camera, const joypad_inputs_t& inputs, fl
 
 }  // namespace
 
-void InputSystem::Poll() {
+void InputSystem::Poll(float delta_seconds) {
     // libdragon requires joypad_poll() each frame (gameplay_scene already does
     // this before calling Poll; keep a defensive call here is NOT added so we
     // avoid double-polling. Callers MUST joypad_poll() before Poll()).
@@ -64,7 +54,11 @@ void InputSystem::Poll() {
     const joypad_inputs_t inputs = joypad_get_inputs(JOYPAD_PORT_1);
     const joypad_buttons_t held = joypad_get_buttons_held(JOYPAD_PORT_1);
 
-    SampleMoveAxis(move, inputs);
+    // Move: raw stick -> circular deadzone (config; default 0 preserves the
+    // pre-overhaul feel; OG 0.35 available behind move_deadzone).
+    const Vec2 s = SampleStickAxis(inputs.stick_x, inputs.stick_y, kStickMax);
+    move_ = ApplyCircularDeadzone(s, move_deadzone);
+
     SampleCameraAxis(camera, inputs, deadzone);
 
     // Face buttons: Jump = A (Y is a GameCube-only face button, treated as an
@@ -79,10 +73,12 @@ void InputSystem::Poll() {
     const bool climb_held = (held.z != 0) || (held.l != 0) || (held.r != 0);
     const bool pause_held = (held.start != 0);
 
-    jump.Update(jump_held);
-    dash.Update(dash_held);
-    climb.Update(climb_held);
-    pause.Update(pause_held);
+    // Device-owned press buffers (OG VirtualButton parity): jump/dash carry
+    // the 0.10 s buffer; climb/pause are unbuffered (OG Climb has no buffer).
+    UpdateVirtualButton(jump_, jump_held, 0.10f, delta_seconds);
+    UpdateVirtualButton(dash_, dash_held, 0.10f, delta_seconds);
+    UpdateVirtualButton(climb_, climb_held, 0.0f, delta_seconds);
+    UpdateVirtualButton(pause_, pause_held, 0.0f, delta_seconds);
 
     last_raw_.z = held.z;
     last_raw_.l = held.l;

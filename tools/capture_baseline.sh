@@ -103,7 +103,7 @@ cleanup
 trap - EXIT
 
 # Extract the report lines, preserving order.
-grep -nE '\[(profiler|render-phases|counters|distant-cells|memory)\]' "$RAW" > "$OUT" || true
+grep -nE '\[(profiler|render-phases|counters|distant-cells|memory|budget)\]' "$RAW" > "$OUT" || true
 
 echo "[capture_baseline] wrote $OUT"
 echo "=== captured report lines ==="

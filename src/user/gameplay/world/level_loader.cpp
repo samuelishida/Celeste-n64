@@ -5,11 +5,13 @@
 #include <string>
 #include <vector>
 
+#include "gameplay/debug_flags.hpp"  // kEnableCompressedCells (memory-opt Inc 2)
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/world/entity_ids.hpp"
 
 #ifdef __mips__
 #include <libdragon.h>
+#include <asset.h>
 #define LVL_LOG debugf
 #else
 #define LVL_LOG printf
@@ -19,38 +21,70 @@ namespace madeline_cube {
 
 namespace {
 
-static uint32_t ReadU32(FILE* f) {
-    uint8_t b[4];
-    fread(b, 1, 4, f);
+// memory-opt Inc 2: the parser reads from a memory cursor instead of a FILE*,
+// so the same parse runs over an asset_load buffer (compressed cells) or a
+// plain fopen read (host tests / flag-off builds). The FILE* parser was
+// fseek-based; asset_fopen asserts on fseek, so the whole-file buffer path is
+// the only one that works for compressed cells.
+struct MemReader {
+    const uint8_t* data;
+    size_t size;
+    size_t off = 0;
+    bool ok = true;
+};
+
+static uint32_t ReadU32(MemReader& r) {
+    if (r.off + 4 > r.size) { r.ok = false; return 0; }
+    const uint8_t* b = r.data + r.off;
+    r.off += 4;
     return (static_cast<uint32_t>(b[0]) << 24) |
            (static_cast<uint32_t>(b[1]) << 16) |
            (static_cast<uint32_t>(b[2]) << 8) |
            static_cast<uint32_t>(b[3]);
 }
 
-static uint16_t ReadU16(FILE* f) {
-    uint8_t b[2];
-    fread(b, 1, 2, f);
+static uint16_t ReadU16(MemReader& r) {
+    if (r.off + 2 > r.size) { r.ok = false; return 0; }
+    const uint8_t* b = r.data + r.off;
+    r.off += 2;
     return static_cast<uint16_t>((static_cast<uint16_t>(b[0]) << 8) | b[1]);
 }
 
-static int16_t ReadS16(FILE* f) {
-    return static_cast<int16_t>(ReadU16(f));
+static int16_t ReadS16(MemReader& r) {
+    return static_cast<int16_t>(ReadU16(r));
 }
 
-static float ReadF32(FILE* f) {
-    const uint32_t v = ReadU32(f);
+static float ReadF32(MemReader& r) {
+    const uint32_t v = ReadU32(r);
     float result;
     memcpy(&result, &v, sizeof(float));
     return result;
 }
 
-static Vec3 ReadVec3(FILE* f) {
+static Vec3 ReadVec3(MemReader& r) {
     Vec3 v;
-    v.x = ReadF32(f);
-    v.y = ReadF32(f);
-    v.z = ReadF32(f);
+    v.x = ReadF32(r);
+    v.y = ReadF32(r);
+    v.z = ReadF32(r);
     return v;
+}
+
+static uint8_t ReadByte(MemReader& r) {
+    if (r.off + 1 > r.size) { r.ok = false; return 0; }
+    return r.data[r.off++];
+}
+
+static bool ReadBytes(MemReader& r, void* dst, size_t n) {
+    if (r.off + n > r.size) { r.ok = false; return false; }
+    if (n > 0) memcpy(dst, r.data + r.off, n);
+    r.off += n;
+    return true;
+}
+
+static bool Seek(MemReader& r, size_t off) {
+    if (off > r.size) { r.ok = false; return false; }
+    r.off = off;
+    return true;
 }
 
 static void CopyString(char* dst, size_t dst_size, const char* src) {
@@ -66,36 +100,32 @@ static void CopyString(char* dst, size_t dst_size, const char* src) {
 
 }  // namespace
 
-bool LoadLevelInto(const char* path, Room& room, LevelGeometry& geometry) {
-    FILE* f = fopen(path, "rb");
-    if (!f) {
-        LVL_LOG("[lvl] open FAILED: %s\n", path);
-        return false;
-    }
+// Shared buffer parser (memory-opt Inc 2). `data`/`size` are the whole LVL2
+// file; the parser seeks to section offsets internally. Returns false on bad
+// magic/version/truncation.
+bool ParseLevelFromBuffer(const uint8_t* data, size_t size, Room& room,
+                          LevelGeometry& geometry) {
+    MemReader f{data, size};
 
     // --- Header ---
-    char magic[4];
-    fread(magic, 1, 4, f);
+    char magic[4] = {0, 0, 0, 0};
+    if (!ReadBytes(f, magic, 4)) return false;
     if (magic[0] == 'L' && magic[1] == 'V' && magic[2] == 'L' && magic[3] == '1') {
         LVL_LOG("[lvl] file is LVL1; re-bake required (run 'make clean && make')\n");
-        fclose(f);
         return false;
     }
     if (magic[0] != 'L' || magic[1] != 'V' || magic[2] != 'L' || magic[3] != '2') {
-        LVL_LOG("[lvl] bad magic in %s\n", path);
-        fclose(f);
+        LVL_LOG("[lvl] bad magic\n");
         return false;
     }
 
     const uint32_t version = ReadU32(f);
     if (version == 1) {
         LVL_LOG("[lvl] file is LVL1; re-bake required (run 'make clean && make')\n");
-        fclose(f);
         return false;
     }
     if (version != 2) {
         LVL_LOG("[lvl] unsupported version %lu\n", static_cast<unsigned long>(version));
-        fclose(f);
         return false;
     }
 
@@ -124,30 +154,28 @@ bool LoadLevelInto(const char* path, Room& room, LevelGeometry& geometry) {
     std::vector<std::string> strings;
     strings.reserve(string_count);
     if (string_count > 0) {
-        fseek(f, static_cast<long>(off_strings), SEEK_SET);
+        Seek(f, off_strings);
         for (uint32_t i = 0; i < string_count; ++i) {
-            const uint8_t str_len = static_cast<uint8_t>(fgetc(f));
+            const uint8_t str_len = ReadByte(f);
             std::string s;
             s.resize(str_len);
             if (str_len > 0) {
-                fread(&s[0], 1, str_len, f);
+                ReadBytes(f, &s[0], str_len);
             }
             strings.push_back(std::move(s));
         }
     }
 
     std::vector<uint8_t> props_blob;
-    long file_size = 0;
-    fseek(f, 0, SEEK_END);
-    file_size = ftell(f);
+    const long file_size = static_cast<long>(f.size);
     if (off_props_blob > 0 &&
         file_size >= 0 &&
         off_props_blob <= static_cast<uint32_t>(file_size)) {
         const size_t props_size = static_cast<size_t>(file_size) - off_props_blob;
         props_blob.resize(props_size);
-        fseek(f, static_cast<long>(off_props_blob), SEEK_SET);
+        Seek(f, off_props_blob);
         if (props_size > 0) {
-            fread(props_blob.data(), 1, props_size, f);
+            ReadBytes(f, props_blob.data(), props_size);
         }
     }
 
@@ -192,10 +220,9 @@ bool LoadLevelInto(const char* path, Room& room, LevelGeometry& geometry) {
     if (face_count > static_cast<unsigned>(LevelGeometry::kMaxFaces)) {
         LVL_LOG("[lvl] face_count %lu exceeds kMaxFaces %d\n",
                 static_cast<unsigned long>(face_count), LevelGeometry::kMaxFaces);
-        fclose(f);
         return false;
     }
-    fseek(f, static_cast<long>(off_faces), SEEK_SET);
+    Seek(f, off_faces);
     geometry.face_count = 0;
     for (uint32_t i = 0; i < face_count; ++i) {
         const uint32_t vs = ReadU32(f);
@@ -216,10 +243,9 @@ bool LoadLevelInto(const char* path, Room& room, LevelGeometry& geometry) {
     if (vertex_count > static_cast<unsigned>(LevelGeometry::kMaxVertices)) {
         LVL_LOG("[lvl] vertex_count %lu exceeds kMaxVertices %d\n",
                 static_cast<unsigned long>(vertex_count), LevelGeometry::kMaxVertices);
-        fclose(f);
         return false;
     }
-    fseek(f, static_cast<long>(off_vertices), SEEK_SET);
+    Seek(f, off_vertices);
     geometry.vertex_count = 0;
     for (uint32_t i = 0; i < vertex_count; ++i) {
         LevelVertex& lv = geometry.vertices[geometry.vertex_count++];
@@ -233,7 +259,7 @@ bool LoadLevelInto(const char* path, Room& room, LevelGeometry& geometry) {
         LVL_LOG("[lvl] entity_count %lu large; clamping spawns to kMaxSpawns\n",
                 static_cast<unsigned long>(entity_count));
     }
-    fseek(f, static_cast<long>(off_entities), SEEK_SET);
+    Seek(f, off_entities);
     room.spawn_count = 0;
     for (uint32_t i = 0; i < entity_count; ++i) {
         const uint16_t classname_id = ReadU16(f);
@@ -257,13 +283,57 @@ bool LoadLevelInto(const char* path, Room& room, LevelGeometry& geometry) {
         }
     }
 
-    fclose(f);
+    // Truncation guard: any read past the buffer invalidated the cursor.
+    if (!f.ok) {
+        LVL_LOG("[lvl] truncated or malformed buffer\n");
+        return false;
+    }
 
-    LVL_LOG("[lvl] loaded %s: colliders=%d faces=%d vertices=%d entities=%lu\n",
-            path, room.collider_count, geometry.face_count,
+    LVL_LOG("[lvl] loaded: colliders=%d faces=%d vertices=%d entities=%lu\n",
+            room.collider_count, geometry.face_count,
             geometry.vertex_count, static_cast<unsigned long>(entity_count));
 
     return true;
+}
+
+bool LoadLevelInto(const char* path, Room& room, LevelGeometry& geometry) {
+#ifdef __mips__
+    if (kEnableCompressedCells) {
+        // memory-opt Inc 2: asset_load (whole-buffer, transparent decompress).
+        // asset_fopen is NOT usable here — it asserts on fseek, and this
+        // parser seeks to section offsets.
+        int sz = 0;
+        uint8_t* data = static_cast<uint8_t*>(asset_load(path, &sz));
+        if (data) {
+            const bool ok = ParseLevelFromBuffer(data, static_cast<size_t>(sz),
+                                                 room, geometry);
+            free(data);
+            return ok;
+        }
+        LVL_LOG("[lvl] asset_load FAILED (falling back to fopen): %s\n", path);
+    }
+#endif
+    // Plain path: read the whole file into a buffer, then run the shared
+    // buffer parser (host tests + flag-off builds exercise this path).
+    // memory-opt Inc 3: CPU-copied read (fread / asset_load decompression) —
+    // the .lvl buffer is never handed to DMA, so alignment is n/a.
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        LVL_LOG("[lvl] open FAILED: %s\n", path);
+        return false;
+    }
+    fseek(f, 0, SEEK_END);
+    const long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (file_size <= 0) { fclose(f); return false; }
+    std::vector<uint8_t> buf(static_cast<size_t>(file_size));
+    if (fread(buf.data(), 1, static_cast<size_t>(file_size), f) !=
+        static_cast<size_t>(file_size)) {
+        fclose(f);
+        return false;
+    }
+    fclose(f);
+    return ParseLevelFromBuffer(buf.data(), buf.size(), room, geometry);
 }
 
 bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry) {

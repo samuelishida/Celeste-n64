@@ -40,6 +40,26 @@ int OpenWorldRenderer::ResidentLoads() const {
     return tile_streamer_ ? tile_streamer_->ResidentCount() : 0;
 }
 
+size_t OpenWorldRenderer::StreamingStagingBytes() const {
+    // memory-opt Inc 1: [memory] bucket — live staging pool bytes.
+    return tile_streamer_ ? tile_streamer_->StagingBytes() : 0;
+}
+
+size_t OpenWorldRenderer::StreamingResidentBytes() const {
+    // memory-opt Inc 1: [memory] bucket — live resident renderer objects.
+    return tile_streamer_ ? tile_streamer_->ResidentRendererBytes() : 0;
+}
+
+size_t OpenWorldRenderer::PoolHighWater() const {
+    // memory-opt Inc 4: [memory] bucket — renderer-pool high-water.
+    return tile_streamer_ ? tile_streamer_->PoolHighWater() : 0;
+}
+
+size_t OpenWorldRenderer::FrameArenaPeak() const {
+    // memory-opt Inc 4: [memory] bucket — frame-arena peak since boot.
+    return arena_.PeakUsed();
+}
+
 void OpenWorldRenderer::RenderHighPriority(const CameraDesc& cam) {
     tile_streamer_->DrawHighPriority(cam);
 }

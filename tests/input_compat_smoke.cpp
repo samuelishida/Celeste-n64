@@ -20,5 +20,22 @@ int main() {
     assert(ResolveTakeNewerAxis(1.0f, 1.0f, axis) < 0.0f);
     assert(ResolveTakeNewerAxis(0.0f, 1.0f, axis) > 0.0f);
     assert(ResolveTakeNewerAxis(1.0f, 1.0f, axis) > 0.0f);
+
+    // Unbuffered button (climb/pause, buffer_seconds == 0): the pressed edge
+    // is a single-frame event, not sticky (Inc 1 fix).
+    VirtualButtonState pause;
+    UpdateVirtualButton(pause, true, 0.0f, 1.0f / 60.0f);
+    assert(pause.pressed);
+    UpdateVirtualButton(pause, true, 0.0f, 1.0f / 60.0f);
+    assert(!pause.pressed);
+
+    // Buffered edge expires after the 0.10 s window without a consume.
+    VirtualButtonState dash;
+    UpdateVirtualButton(dash, true, 0.10f, 1.0f / 60.0f);
+    assert(dash.pressed);
+    for (int i = 0; i < 7; ++i) {
+        UpdateVirtualButton(dash, true, 0.10f, 1.0f / 60.0f);
+    }
+    assert(!dash.pressed);
     return 0;
 }

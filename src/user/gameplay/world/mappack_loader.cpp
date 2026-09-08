@@ -4,14 +4,42 @@
 #include <cstring>
 #include <cstdlib>
 
+#include "gameplay/debug_flags.hpp"  // kEnableCompressedCells (memory-opt Inc 2)
+
 #ifdef __mips__
 #include <libdragon.h>
+#include <asset.h>
 #define MP_LOG debugf
 #else
 #define MP_LOG printf
 #endif
 
 namespace madeline_cube {
+
+namespace {
+
+// memory-opt Inc 2: open a map-pack file through the asset layer when
+// compression is enabled (streaming decompression via asset_fopen — the
+// manifest is read sequentially, never fseek'd), else the plain fopen path.
+// Host builds (no __mips__) always use fopen. Tolerant: on asset_fopen
+// failure we fall back to fopen (a wrong-level bake then fails loud in the
+// magic checks below).
+// memory-opt Inc 3: both paths are CPU-copied reads (fread / asset
+// streaming decompression) — the manifest buffer is never handed to DMA, so
+// alignment is n/a.
+FILE* OpenMapPackFile(const char* path) {
+#ifdef __mips__
+    if (kEnableCompressedCells) {
+        int size = 0;
+        FILE* f = asset_fopen(path, &size);
+        if (f) return f;
+        MP_LOG("[mappack] asset_fopen FAILED (falling back to fopen): %s\n", path);
+    }
+#endif
+    return fopen(path, "rb");
+}
+
+}  // namespace
 
 namespace {
 
@@ -100,7 +128,7 @@ const MapRoomSpec* MapSpec::FindRoom(const char* id) const {
 }
 
 bool LoadMapPack(const char* path, MapSpec& out) {
-    FILE* f = fopen(path, "rb");
+    FILE* f = OpenMapPackFile(path);
     if (!f) {
         MP_LOG("[mappack] open FAILED: %s\n", path);
         return false;
@@ -192,7 +220,7 @@ const V2SpawnSpec* MapSpecV2::FindStartSpawn() const {
 }
 
 bool LoadMapPackV2(const char* path, MapSpecV2& out) {
-    FILE* f = fopen(path, "rb");
+    FILE* f = OpenMapPackFile(path);
     if (!f) {
         MP_LOG("[mappack] v2 open FAILED: %s\n", path);
         return false;

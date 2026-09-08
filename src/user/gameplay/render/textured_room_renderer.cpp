@@ -1,12 +1,18 @@
 #include "gameplay/render/textured_room_renderer.hpp"
 
+#include <cassert>
 #include <cstdio>
 #include <cstring>
+#ifdef __mips__
+#include <asset.h>
+#endif
 #include <libdragon.h>
 #include <rdpq.h>
 #include <rdpq_sprite.h>
 #include <t3d/t3d.h>
 #include <t3d/t3dmath.h>
+
+#include "gameplay/debug_flags.hpp"  // kEnableCompressedCells (memory-opt Inc 2)
 
 // streaming-experience Inc 1: async DMA read + DFS→PI address resolution.
 // `dragonfs.h` (NOT `dfs.h` — the SDK header is dragonfs.h) exposes
@@ -93,27 +99,60 @@ struct LvlMemReader {
     void seek(uint32_t n) { off = n; if (off > size) ok = false; }
 };
 
+void TexturedRoomRenderer::AttachSlotBuffer(uint8_t* slot, size_t slot_size,
+                                            uint8_t* scratch,
+                                            size_t scratch_size) {
+    // memory-opt Inc 4: (re)attach the pool slot buffer + shared scratch.
+    // Resets both bump cursors — the previous occupant's buffers are gone
+    // (the pool reuses the block; the scratch is shared across parses).
+    slot_buf_ = slot;
+    slot_buf_size_ = slot_size;
+    slot_buf_used_ = 0;
+    scratch_ = scratch;
+    scratch_size_ = scratch_size;
+    scratch_used_ = 0;
+}
+
 bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
                                 const MaterialCatalog* catalog,
                                 float pos_scale) {
+    // memory-opt Inc 4: reset the shared parse scratch cursor — the previous
+    // parse's transient buffers are gone (parses are serialized).
+    scratch_used_ = 0;
     // Synchronous fallback (streaming-experience Inc 1): read the whole file
     // into a temp buffer, then run the shared parse. Used at boot (center
     // cell) and whenever the async path is unavailable (pool exhausted, DMA
     // issue failure, queue full).
+#ifdef __mips__
+    if (kEnableCompressedCells) {
+        // memory-opt Inc 2: asset_load (whole-buffer, transparent decompress).
+        // asset_fopen is NOT usable here — it asserts on fseek, and this load
+        // needs the file size.
+        int sz = 0;
+        uint8_t* data = static_cast<uint8_t*>(asset_load(lvl_path, &sz));
+        if (data) {
+            const bool ok = ParseFromBytes(data, static_cast<uint32_t>(sz),
+                                           render_origin, catalog, pos_scale);
+            free(data);
+            return ok;
+        }
+        debugf("[texroom] asset_load FAILED (falling back to fopen): %s\n", lvl_path);
+    }
+#endif
     FILE* f = fopen(lvl_path, "rb");
     if (!f) { debugf("[texroom] open FAILED: %s\n", lvl_path); return false; }
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
     const long file_size = ftell(f);
     if (file_size <= 0) { fclose(f); return false; }
     fseek(f, 0, SEEK_SET);
-    uint8_t* buf = static_cast<uint8_t*>(malloc((size_t)file_size));
-    if (!buf) { fclose(f); return false; }
+    // memory-opt Inc 4: the file buffer comes from the shared parse scratch
+    // (bump-allocated; the scratch is reset at the next parse). No heap alloc.
+    uint8_t* buf = static_cast<uint8_t*>(ScratchAlloc((size_t)file_size));
     const size_t got = fread(buf, 1, (size_t)file_size, f);
     fclose(f);
-    if (got != (size_t)file_size) { free(buf); return false; }
+    if (got != (size_t)file_size) return false;
     const bool ok = ParseFromBytes(buf, (uint32_t)file_size, render_origin,
                                    catalog, pos_scale);
-    free(buf);
     return ok;
 }
 
@@ -124,6 +163,11 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
     // Free the previous block + arrays before rebuilding (streaming re-loads
     // / SetCenter call Load repeatedly and would leak otherwise).
     FreeBlock();
+    // memory-opt Inc 4: reset the slot-buffer bump cursor — the previous
+    // occupant's persistent buffers are rebuilt from the start. The scratch
+    // cursor is NOT reset here: Load may have bump-allocated the file buffer
+    // into it before calling us (it must stay live while we parse).
+    slot_buf_used_ = 0;
     render_origin_ = render_origin;
     catalog_ = catalog;
     kPosScale = (pos_scale > 0.0f && pos_scale <= 256.0f) ? pos_scale
@@ -160,7 +204,8 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
         debugf("[texroom] empty level\n"); return false;
     }
 
-    LvlFace* faces = static_cast<LvlFace*>(malloc(sizeof(LvlFace) * face_count));
+    LvlFace* faces = static_cast<LvlFace*>(ScratchAlloc(sizeof(LvlFace) * face_count));
+    if (!faces) return false;
     rd.seek(off_faces);
     for (uint32_t i = 0; i < face_count; ++i) {
         LvlFace& lf = faces[i];
@@ -173,7 +218,8 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
         rd.f32(lf.nz);
     }
 
-    LvlVertex* lvl_verts = static_cast<LvlVertex*>(malloc(sizeof(LvlVertex) * vertex_count));
+    LvlVertex* lvl_verts = static_cast<LvlVertex*>(ScratchAlloc(sizeof(LvlVertex) * vertex_count));
+    if (!lvl_verts) return false;
     rd.seek(off_vertices);
     for (uint32_t i = 0; i < vertex_count; ++i) {
         LvlVertex& lv = lvl_verts[i];
@@ -183,13 +229,17 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
         rd.f32(lv.u);
         rd.f32(lv.v);
     }
-    if (!rd.ok) { free(faces); free(lvl_verts); return false; }
+    if (!rd.ok) return false;
 
     pair_count_ = (vertex_count + 1) / 2;
     vert_count_ = vertex_count;
     verts_ = static_cast<T3DVertPacked*>(
         malloc_uncached(sizeof(T3DVertPacked) * pair_count_));
-    if (!verts_) { free(faces); free(lvl_verts); return false; }
+    if (!verts_) return false;
+    // memory-opt Inc 3: DMA-direct (RSP vertex DMA) — `malloc_uncached` is
+    // 16-byte aligned by contract; assert so a future allocator change
+    // cannot regress it.
+    assert((reinterpret_cast<uintptr_t>(verts_) & 0xF) == 0);
 
     for (uint32_t pi = 0; pi < pair_count_; ++pi) {
         T3DVertPacked& p = verts_[pi];
@@ -241,10 +291,8 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
         const int batch_cap = static_cast<int>(face_count) < kMaxBatches
             ? static_cast<int>(face_count) : kMaxBatches;
         if (batch_cap > 0) {
-            batches_ = static_cast<Batch*>(malloc(sizeof(Batch) * batch_cap));
+            batches_ = static_cast<Batch*>(SlotAlloc(sizeof(Batch) * batch_cap));
             if (!batches_) {
-                free(faces);
-                free(lvl_verts);
                 debugf("[texroom] batch alloc FAILED\n");
                 return false;
             }
@@ -273,24 +321,24 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
     // but it is only used if coalescing fails.
     FreeRuns();
     {
-        FaceSpec* specs = static_cast<FaceSpec*>(malloc(sizeof(FaceSpec) * batch_count_));
+        FaceSpec* specs = static_cast<FaceSpec*>(ScratchAlloc(sizeof(FaceSpec) * batch_count_));
         if (specs) {
             for (int s = 0; s < batch_count_; ++s) {
                 specs[s] = {batches_[s].first_vertex, batches_[s].vertex_count,
                             batches_[s].tri_count, batches_[s].material_id};
             }
             const int alloc = batch_count_ > 0 ? batch_count_ : 1;
-            runs_ = static_cast<BatchRun*>(malloc(sizeof(BatchRun) * alloc));
-            run_faces_ = static_cast<RunFace*>(malloc(sizeof(RunFace) * alloc));
+            runs_ = static_cast<BatchRun*>(SlotAlloc(sizeof(BatchRun) * alloc));
+            run_faces_ = static_cast<RunFace*>(SlotAlloc(sizeof(RunFace) * alloc));
             if (runs_ && run_faces_ && batch_count_ > 0) {
                 // Inc 3 / D2: stable-sort by material, then physically reorder
                 // a scratch FaceSpec array using the permutation (CoalesceBatches
                 // takes a contiguous array and iterates linearly — it cannot
                 // consume indices directly).
                 uint16_t* order = static_cast<uint16_t*>(
-                    malloc(sizeof(uint16_t) * batch_count_));
+                    ScratchAlloc(sizeof(uint16_t) * batch_count_));
                 FaceSpec* sorted_specs = static_cast<FaceSpec*>(
-                    malloc(sizeof(FaceSpec) * batch_count_));
+                    ScratchAlloc(sizeof(FaceSpec) * batch_count_));
                 if (order && sorted_specs) {
                     const int groups = SortFacesByMaterial(
                         specs, batch_count_, order, batch_count_);
@@ -307,22 +355,19 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
                 } else {
                     run_count_ = -1;  // scratch alloc failed — fall back
                 }
-                free(order);
-                free(sorted_specs);
                 if (run_count_ <= 0) {  // coalescing failed — fall back
                     FreeRuns();
                 }
             } else {
                 FreeRuns();
             }
-            free(specs);
         }
     }
 
-    free(faces);
-    free(lvl_verts);
-
     matrix_fp_ = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
+    // memory-opt Inc 3: DMA-direct (RSP matrix DMA) — 16-byte aligned by
+    // contract; assert.
+    assert((reinterpret_cast<uintptr_t>(matrix_fp_) & 0xF) == 0);
     T3DMat4 m;
     const float s[3] = {kInvScale, kInvScale, kInvScale};
     const float rot[3] = {0, 0, 0};
@@ -369,7 +414,7 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
     if (material_groups_) { free(material_groups_); material_groups_ = nullptr; }
     material_group_count_ = 0;
     if (run_count_ > 0 && runs_ && run_faces_) {
-        material_groups_ = (MaterialGroup*)malloc(sizeof(MaterialGroup) * (size_t)run_count_);
+        material_groups_ = (MaterialGroup*)SlotAlloc(sizeof(MaterialGroup) * (size_t)run_count_);
         if (material_groups_) {
             int g = 0;
             int r = 0;
@@ -464,16 +509,23 @@ bool TexturedRoomRenderer::ParseStaged(const uint8_t* staging, uint32_t file_siz
     // caller must have confirmed `dma_finished` for the ticket that filled
     // `staging`, and must not issue another DMA into the same buffer until
     // this returns (the streamer serializes one in-flight read at a time).
+    // memory-opt Inc 4: reset the shared parse scratch cursor (no file buf
+    // was bump-allocated on this path).
+    scratch_used_ = 0;
     return ParseFromBytes(staging, file_size, render_origin, catalog, pos_scale);
 }
 
 void TexturedRoomRenderer::Free() {
     if (verts_) { free_uncached(verts_); verts_ = nullptr; }
     if (matrix_fp_) { free_uncached(matrix_fp_); matrix_fp_ = nullptr; }
+    // memory-opt Inc 4: batches_/runs_/run_faces_/material_groups_ live in
+    // the pool slot buffer — FreeBatches/FreeRuns null them WITHOUT free (the
+    // pool reuses the block; the next occupant's AttachSlotBuffer resets the
+    // cursor).
     FreeBatches();
     FreeRuns();
+    material_groups_ = nullptr;
     FreeBlock();
-    if (material_groups_) { free(material_groups_); material_groups_ = nullptr; }
     material_group_count_ = 0;
     vert_count_ = 0;
     pair_count_ = 0;
@@ -494,13 +546,15 @@ void TexturedRoomRenderer::FreeBlock() {
 }
 
 void TexturedRoomRenderer::FreeBatches() {
-    if (batches_) { free(batches_); batches_ = nullptr; }
+    // memory-opt Inc 4: pool-slot buffer — null without free.
+    batches_ = nullptr;
     batch_count_ = 0;
 }
 
 void TexturedRoomRenderer::FreeRuns() {
-    if (runs_) { free(runs_); runs_ = nullptr; }
-    if (run_faces_) { free(run_faces_); run_faces_ = nullptr; }
+    // memory-opt Inc 4: pool-slot buffer — null without free.
+    runs_ = nullptr;
+    run_faces_ = nullptr;
     run_count_ = 0;
 }
 
@@ -627,6 +681,12 @@ void TexturedRoomRenderer::EmitRunState(uint16_t material_id,
         // primColor MUST be white here or the texture is tinted by whatever
         // primColor the distant pass (or a flat run) last left.
         rdpq_set_prim_color(RGBA32(0xFF, 0xFF, 0xFF, 0xFF));
+        // memory-opt Inc 3: rdpq_sprite_upload DMA's from sprite->data — the
+        // RSP DMA contract needs 8-byte alignment. sprite_load mallocs the
+        // struct (8-aligned) and `data` is a flexible array at offset 8, so
+        // it holds by construction; assert so a future sprite source cannot
+        // regress it.
+        assert((reinterpret_cast<uintptr_t>(sprite->data) & 0x7) == 0);
         rdpq_sprite_upload(TILE0, sprite, &kWrapTexparms);
         if (counters) ++counters->texture_uploads;  // Inc 1 / D7
     } else {
@@ -694,6 +754,9 @@ void TexturedRoomRenderer::EmitBatchCommands(int b, RenderCounters* counters) co
         rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
         // Same primColor-to-white requirement as the run path (see above).
         rdpq_set_prim_color(RGBA32(0xFF, 0xFF, 0xFF, 0xFF));
+        // memory-opt Inc 3: sprite upload source — 8-byte RSP DMA contract
+        // (see the run path assert above).
+        assert((reinterpret_cast<uintptr_t>(sprite->data) & 0x7) == 0);
         rdpq_sprite_upload(TILE0, sprite, &kWrapTexparms);
         if (counters) ++counters->texture_uploads;  // Inc 1 / D7
     } else {

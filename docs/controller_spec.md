@@ -335,22 +335,42 @@ Recommended:
 deadzone = 8/80 approximately
 ```
 
-The exact value should be configurable.
+The exact value should be configurable — the demake's default is NO deadzone
+(virtual-input Inc 1, see below): the N64 stick is coarse and the pre-feel-test
+target kept the raw mapping. `InputSystem::move_deadzone (default 0.0f)` holds
+it; OG's 0.35 circular deadzone is available behind that flag for a future
+A/B feel test (do NOT re-tune silently — the spec-freeze rule).
 
-Input structure:
+## Input layer (controls-physics-port Inc 1, implemented)
+
+`InputSystem` now owns the OG `VirtualStick`/`VirtualButton` device layer:
+
+- `move_/jump_/dash_/climb_/pause_` are `VirtualStickState`/`VirtualButtonState`
+  (deadzone + 0.10 s press buffer + consume-once on the DEVICE, OG
+  `Controls.cs` parity) — not raw joypad reads.
+- `Poll(delta_seconds)` decays the buffers once per render frame;
+  `ConsumeJumpPress()`/`ConsumeDashPress()` propagate the controller's consume
+  to the device edge (no re-fire across frames).
+- The controller's internal `jump_buffer_remaining`/`dash_buffer_remaining`
+  were DELETED — buffering lives in the device now.
+- Climb/pause are UNBUFFERED single-frame edges (0.0 s buffer); the
+  unbuffered branch was fixed so they don't go sticky.
+- `move_deadzone` is a plain config field (default 0.0, OG 0.35 behind it).
+- `virtual_input` is header-inline (Pattern A); `virtual_input.cpp` deleted.
+
+Input structure (implemented):
 
 ```c
 typedef struct {
     int8_t x;
     int8_t y;
 
-    bool jumpPressed;
+    bool jumpPressed;   // device-buffered edge, consumed on use
     bool jumpHeld;
 
-    bool dashPressed;
-    bool dashHeld;
+    bool dashPressed;   // device-buffered edge, consumed on use
 
-    bool climbHeld;
+    bool climbHeld;     // shoulders only (Z/L/R)
 } ControllerInput;
 ```
 

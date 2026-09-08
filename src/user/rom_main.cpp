@@ -7,11 +7,44 @@
 #include "gameplay/scene/gameplay_scene.hpp"
 #include "gameplay/scene/scene_manager.hpp"
 #include "gameplay/scene/title_scene.hpp"
+#include "gameplay/memory_budget.hpp"  // memory-opt Inc 5
 #include "n64/profiler.hpp"
 
 namespace {
 
 using namespace madeline_cube;
+
+// memory-opt Inc 1: capture-free bucket providers for the [memory] report.
+// The registry signature is a plain function pointer (`size_t (*)(void)`), so
+// the providers read the scene through this file-scope handle, set once in
+// main() before the first 3600-frame capture. All providers return 0 until
+// the handle is set (and the scene initializes), so early reports degrade
+// gracefully.
+GameplayScene* g_memory_bucket_scene = nullptr;
+
+size_t MemoryBucketFrameArena() {
+    return g_memory_bucket_scene ? g_memory_bucket_scene->FrameArenaUsed() : 0;
+}
+size_t MemoryBucketStaging() {
+    return g_memory_bucket_scene ? g_memory_bucket_scene->StreamingStagingBytes()
+                                 : 0;
+}
+size_t MemoryBucketResidentRenderers() {
+    return g_memory_bucket_scene ? g_memory_bucket_scene->StreamingResidentBytes()
+                                 : 0;
+}
+size_t MemoryBucketCollMesh() {
+    return g_memory_bucket_scene ? g_memory_bucket_scene->LiveCollMeshBytes() : 0;
+}
+size_t MemoryBucketMapPack() {
+    return g_memory_bucket_scene ? g_memory_bucket_scene->MapSpecBytes() : 0;
+}
+size_t MemoryBucketPoolHighWater() {
+    return g_memory_bucket_scene ? g_memory_bucket_scene->PoolHighWater() : 0;
+}
+size_t MemoryBucketFrameArenaPeak() {
+    return g_memory_bucket_scene ? g_memory_bucket_scene->FrameArenaPeak() : 0;
+}
 
 }  // namespace
 
@@ -66,6 +99,36 @@ int main() {
     // appears per 60 frames. The profiler still accumulates + refreshes
     // last_average_ms() at the interval; only the debugf self-print is gated.
     profiler.SetSilent(true);
+
+    // memory-opt Inc 1: register per-component memory buckets once, before the
+    // first 3600-frame [memory] capture. Providers are capture-free function
+    // pointers reading the scene through the file-scope handle; all return 0
+    // before the scene initializes. Registration is additive — the report can
+    // only gain buckets, never break the parse-compatible prefix.
+    g_memory_bucket_scene = &gameplay;
+    n64::MemorySnapshot::RegisterBucket("frame_arena", &MemoryBucketFrameArena);
+    n64::MemorySnapshot::RegisterBucket("staging", &MemoryBucketStaging);
+    n64::MemorySnapshot::RegisterBucket("res_render",
+                                        &MemoryBucketResidentRenderers);
+    n64::MemorySnapshot::RegisterBucket("coll_mesh", &MemoryBucketCollMesh);
+    n64::MemorySnapshot::RegisterBucket("mappack", &MemoryBucketMapPack);
+    n64::MemorySnapshot::RegisterBucket("pool_highwater",
+                                        &MemoryBucketPoolHighWater);
+    n64::MemorySnapshot::RegisterBucket("arena_peak",
+                                        &MemoryBucketFrameArenaPeak);
+
+    // memory-opt Inc 5: budget caps for the [memory] buckets (values from
+    // the Inc 4 device capture build/raw-baseline-inc4j-*.log; see
+    // docs/memory_budget.md). Debug-only warn — never a release hard-fail.
+    madeline_cube::BudgetTracker budget;
+    budget.RegisterCap({"frame_arena", 64 * 1024});
+    budget.RegisterCap({"staging", 128 * 1024});
+    budget.RegisterCap({"res_render", 4 * 1024});
+    budget.RegisterCap({"coll_mesh", 700 * 1024});
+    budget.RegisterCap({"mappack", 500 * 1024});
+    budget.RegisterCap({"pool_highwater", 26});
+    budget.RegisterCap({"arena_peak", 64 * 1024});
+
     uint32_t memory_report_counter = 0;
     uint32_t counter_report_counter = 0;
 
@@ -102,10 +165,14 @@ int main() {
         if (memory_report_counter >= 3600) {
             memory_report_counter = 0;
             const n64::MemorySnapshot mem = n64::MemorySnapshot::Capture();
-            debugf("[memory] total=%u used=%u free=%u\n",
-                   static_cast<unsigned int>(mem.total_bytes),
-                   static_cast<unsigned int>(mem.used_bytes),
-                   static_cast<unsigned int>(mem.free_bytes));
+            mem.PrintLine();
+            // memory-opt Inc 5: budget warn (debug-only). Emits a
+            // `[budget] WARN` line per over-cap bucket; healthy runs emit
+            // nothing.
+            char budget_line[256];
+            if (budget.Check(mem, budget_line, sizeof(budget_line)) > 0) {
+                debugf("%s", budget_line);
+            }
         }
 
         // Inc 1 / D6: print the per-frame render draw counters at the same

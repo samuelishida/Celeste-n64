@@ -66,6 +66,11 @@ run_cpp tile_visibility_contract tests/tile_visibility_contract.cpp
 run_cpp lod_math tests/lod_math.cpp
 run_cpp fog_math tests/fog_math.cpp
 run_cpp skybox_transform tests/skybox_transform.cpp
+
+# memory-opt Inc 1: [memory] bucket report shape + budget invariant.
+run_cpp memory_budget_contract tests/memory_budget_contract.cpp
+run_cpp alignment_audit_contract tests/alignment_audit_contract.cpp
+run_cpp renderer_pool_smoke tests/renderer_pool_smoke.cpp
 run_cpp render_budgets_contract tests/render_budgets_contract.cpp
 run_cpp debug_visualization_contract tests/debug_visualization_contract.cpp
 run_cpp debug_flags_contract tests/debug_flags_contract.cpp
@@ -76,6 +81,9 @@ run_cpp renderer_memory_contract tests/renderer_memory_contract.cpp
 run_cpp render_counters_contract tests/render_counters_contract.cpp
 run_cpp directional_lod_contract tests/directional_lod_contract.cpp
 run_cpp input_system_smoke tests/input_system_smoke.cpp
+# controls-physics-port Inc 1: virtual input device (deadzone + press buffer +
+# consume-once) — the layer the InputSystem now feeds.
+run_cpp input_compat_smoke tests/input_compat_smoke.cpp
 # Streaming & memory opt plan (Inc 1/3/4) — Pattern A, header-only.
 run_cpp tile_streamer_diff_smoke tests/tile_streamer_diff_smoke.cpp
 run_cpp near_global_sort_smoke tests/near_global_sort_smoke.cpp
@@ -187,6 +195,11 @@ run_cpp wall_slide_seam_smoke tests/wall_slide_seam_smoke.cpp \
 # dash must never leave residual penetration or tunnel through the wall.
 run_cpp climb_no_clip_smoke tests/climb_no_clip_smoke.cpp "${GAMEPLAY_LINK[@]}"
 
+# climb-bug probe (autoresearch): sloped/overhang/thin-wall climb regression
+# (wallUp movement, waist-only climb popout, entry snap without the 3-unit
+# cap, corner lateral gate + pre-normalization projection check).
+run_cpp climb_bug_probe tests/climb_bug_probe.cpp "${GAMEPLAY_LINK[@]}"
+
 # og-mover-overhaul Inc 4: Skidding state + dash steering + dash input buffer.
 run_cpp skid_smoke tests/skid_smoke.cpp "${GAMEPLAY_LINK[@]}"
 
@@ -229,6 +242,9 @@ if [ -f "$STAGING/forsyken-city.mappack" ]; then
         src/user/gameplay/world/mappack_loader.cpp -- "$STAGING" "$STAGING/forsyken-city.mappack"
     # streaming-experience Inc 3: autowalk distance guarantees a seam crossing.
     run_cpp autowalk_distance_contract tests/autowalk_distance_contract.cpp \
+        src/user/gameplay/world/mappack_loader.cpp -- "$STAGING/forsyken-city.mappack"
+    # memory-opt Inc 2: load-path plumbing (flag-off/fopen path parses staging).
+    run_cpp mappack_compression_contract tests/mappack_compression_contract.cpp \
         src/user/gameplay/world/mappack_loader.cpp -- "$STAGING/forsyken-city.mappack"
 else
     echo "SKIP: Pattern C tests (no baked fixture at $STAGING; run 'make bake-forsaken-city')"

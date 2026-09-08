@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 
 #include "n64/frame_arena.hpp"
 
@@ -74,16 +76,89 @@ private:
 
 // Captures heap statistics via mallinfo().
 struct MemorySnapshot {
+    // Named component buckets appended to the [memory] report line (memory-opt
+    // Inc 1). Buckets report live per-component byte estimates (staging pool,
+    // resident renderers, coll mesh, mappack structs, frame arena). They are
+    // informational subtotals: `BucketBytes() <= total_bytes` in practice and
+    // is enforced by the host contract test. Fixed capacity keeps the report
+    // bounded.
+    static constexpr int kMaxBuckets = 8;
+    struct Bucket {
+        const char* name = nullptr;
+        size_t bytes = 0;
+    };
+
     uint32_t total_bytes = 0;   // Total arena size
     uint32_t used_bytes = 0;    // Bytes in use
     uint32_t free_bytes = 0;    // Free bytes
     uint32_t largest_free = 0;  // Largest contiguous free block
+    int bucket_count = 0;       // # live buckets (<= kMaxBuckets)
+    Bucket buckets[kMaxBuckets] = {};
+
+    // Host-safe bucket append (clips at kMaxBuckets; null name skipped;
+    // never fails).
+    void AddBucket(const char* name, size_t bytes) {
+        if (name == nullptr || bucket_count >= kMaxBuckets) return;
+        buckets[bucket_count].name = name;
+        buckets[bucket_count].bytes = bytes;
+        ++bucket_count;
+    }
+
+    // Sum of all live bucket bytes. Host-safe.
+    size_t BucketBytes() const {
+        size_t sum = 0;
+        for (int i = 0; i < bucket_count; ++i) sum += buckets[i].bytes;
+        return sum;
+    }
+
+    // Render the full `[memory]` line, parse-compatible with the legacy
+    // `[memory] total=%u used=%u free=%u` prefix (buckets appended after, as
+    // ` name=bytes`). Host-safe (uses snprintf only). Returns the number of
+    // characters written (the would-be length when truncated to `cap`).
+    size_t FormatLine(char* out, size_t cap) const {
+        if (out == nullptr || cap == 0) return 0;
+        const int head = std::snprintf(out, cap, "[memory] total=%u used=%u free=%u",
+                                       static_cast<unsigned int>(total_bytes),
+                                       static_cast<unsigned int>(used_bytes),
+                                       static_cast<unsigned int>(free_bytes));
+        if (head < 0) return 0;
+        int n = head;
+        for (int i = 0; i < bucket_count && static_cast<size_t>(n) < cap; ++i) {
+            // NOTE: `%lu` + unsigned-long cast, NOT `%zu` — N64 newlib printf
+            // does not support the `z` length modifier (prints literal "zu").
+            // Values fit in 32 bits on N64; host printing is unaffected.
+            const int extra = std::snprintf(out + n, cap - static_cast<size_t>(n),
+                                            " %s=%lu", buckets[i].name,
+                                            static_cast<unsigned long>(buckets[i].bytes));
+            if (extra < 0) return static_cast<size_t>(n);
+            n += extra;
+        }
+        // Truncation marker: if the line overran `cap`, replace the tail with
+        // "..." (diagnostics line; the prefix is still parse-compatible).
+        if (static_cast<size_t>(n) >= cap && cap >= 4) {
+            out[cap - 4] = '.';
+            out[cap - 3] = '.';
+            out[cap - 2] = '.';
+            out[cap - 1] = '\0';
+        }
+        return static_cast<size_t>(n);
+    }
+
+    // N64: print the full [memory] line via debugf (used by rom_main's
+    // 3600-frame report).
+    void PrintLine() const;
 
     static MemorySnapshot Capture();
 
     // Extend the snapshot with the frame-arena usage (Inc 7). `arena_used`
     // is the frame arena's current Used() bytes; `arena_capacity` its total.
     static MemorySnapshot CaptureWithArena(const FrameArena& arena);
+
+    // Register a named bucket provider invoked at every Capture(). Providers
+    // are N64-side (they read live subsystem state); a null name/provider or
+    // a full registry is skipped. Call once before the first capture; the
+    // provider list is additive (never clears).
+    static void RegisterBucket(const char* name, size_t (*provider)(void));
 };
 
 }  // namespace n64

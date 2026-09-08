@@ -80,6 +80,16 @@ public:
     // cells) once at boot. `build_dir` is null on device.
     void LoadDistantTier(const MapSpecV2& spec, const char* build_dir);
 
+    // memory-opt Inc 1: streaming memory components for the [memory] report
+    // buckets (delegated to the tile streamer). 0 before the streamer exists.
+    size_t StreamingStagingBytes() const;
+    size_t StreamingResidentBytes() const;
+
+    // memory-opt Inc 4: renderer-pool high-water (live renderer objects) and
+    // frame-arena peak (high-water of Used() since boot).
+    size_t PoolHighWater() const;
+    size_t FrameArenaPeak() const;
+
 private:
     void RenderHighPriority(const CameraDesc& cam);
 

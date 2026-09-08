@@ -72,12 +72,32 @@ struct CollMesh {
     Vec3* world_verts = nullptr;
     // backing allocation — owned; freed by FreeCollMesh
     void* _buffer = nullptr;
+
+    // memory-opt Inc 1: live byte estimate (backing file buffer + dequantized
+    // world vertices). 0 for a null/partial mesh.
+    size_t UsedBytes() const {
+        size_t bytes = 0;
+        if (_buffer != nullptr && header != nullptr) {
+            bytes += header->surface_link_offset +
+                     static_cast<size_t>(header->surface_link_count) *
+                         sizeof(CollSurfaceLink);
+        }
+        if (world_verts != nullptr && header != nullptr) {
+            bytes += static_cast<size_t>(header->vertex_count) * sizeof(Vec3);
+        }
+        return bytes;
+    }
 };
 
 // Load a .colmesh from a filesystem path (host tests) or rom:/ path (N64).
 // Returns nullptr on bad magic/version or alloc failure.
 // Caller must pair with FreeCollMesh.
 CollMesh* LoadCollMesh(const char* path);
+// memory-opt Inc 2: load from an in-RAM buffer (the asset path). Copies the
+// data (the parse byte-swaps in place); the caller may free `data` after.
+// Returns nullptr on bad magic/version/alloc failure; caller pairs with
+// FreeCollMesh.
+CollMesh* LoadCollMeshFromBuffer(const uint8_t* data, size_t size);
 void      FreeCollMesh(CollMesh* mesh);
 
 // ---------------------------------------------------------------------------

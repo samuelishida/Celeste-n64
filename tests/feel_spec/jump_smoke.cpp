@@ -17,11 +17,12 @@ int main() {
     PlayerState buffered;
     buffered.grounded = false;
     controller.Step(buffered, {.jump_pressed = true, .jump_held = true}, {0,0,1}, dt);
-    assert(buffered.jump_buffer_remaining > 0.06f);
+    assert(buffered.velocity.y <= 0.0f);  // airborne, no coyote: buffered, not fired
     buffered.grounded = true;
-    controller.Step(buffered, {.jump_held = true}, {0,0,1}, dt);
-    assert(buffered.velocity.y > 0.0f);
-    assert(buffered.jump_buffer_remaining == 0.0f);
+    // Inc 1: the device keeps the pressed edge live for the 0.10 s buffer
+    // window, so the second tick replays the same buffered press.
+    controller.Step(buffered, {.jump_pressed = true, .jump_held = true}, {0,0,1}, dt);
+    assert(buffered.velocity.y > 0.0f);   // buffered edge consumed on landing
 
     PlayerState full;
     full.grounded = true;

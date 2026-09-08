@@ -204,6 +204,37 @@ void MoveService::SweepMove(PlayerState& state, const Room& room, const Vec3& am
     Popout(state, room, false);
 }
 
+void MoveService::SweepMoveClimb(PlayerState& state, const Room& room,
+                                  const Vec3& amount) const {
+    // Climb movement (climb-bug fix): OG climb uses SweepTestMove(move, false)
+    // — a collision-aware sweep along the wall plane. The full Popout is NOT
+    // used: its head wall query fires on sloped walls (the head is 10 above
+    // the center and sits at a different distance from a sloped plane, so the
+    // head popout fires every frame with a full-3D push including Y →
+    // down-push + wiggle + ejection), and its ceiling check fights the climb
+    // up into a ledge. Waist-only wall popout keeps the body out of the wall
+    // (the waist is at the anchor, pushout ≈ 0) without fighting the climb.
+    if (Length3(amount) <= 0.0001f) return;
+    const float remaining = Length3(amount);
+    const Vec3 step_normal = {amount.x / remaining, amount.y / remaining,
+                              amount.z / remaining};
+    float left = remaining;
+    while (left > 0.0f) {
+        const float step = std::min(left, config_.substep);
+        left -= step;
+        state.position.x += step_normal.x * step;
+        state.position.y += step_normal.y * step;
+        state.position.z += step_normal.z * step;
+        const WallHit waist = QueryWallPushout(room, SolidWaistTestPos(state),
+                                               config_.wall_radius);
+        if (waist.hit) {
+            state.position.x += waist.pushout * waist.plane_normal.x;
+            state.position.y += waist.pushout * waist.plane_normal.y;
+            state.position.z += waist.pushout * waist.plane_normal.z;
+        }
+    }
+}
+
 void MoveService::GroundSnap(PlayerState& state, const Room& room, float dt) const {
     if (state.contact.ground_snap_cooldown_remaining > 0.0f) return;
     if (!state.contact.was_grounded || state.grounded) return;

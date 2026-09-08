@@ -30,7 +30,7 @@ Milestone 1: Baked level pipeline + first playable room
 Completed:
 - ROM boots, runs, and loads baked levels (TrenchBroom → `.map` → `.lvl` + `.colmesh`)
 - Player moves/jumps/dashes on collision mesh
-- Multiple rooms supported (first-room stable; 1-1 WIP)
+- Multiple rooms supported (first-room + full Forsaken City map-pack)
 - Fall respawn to checkpoint
 - Strawberry collection
 - Material catalog with textured geometry
@@ -41,7 +41,7 @@ Completed:
 In progress:
 - Hardware traversal validation under Ares/Mupen64Plus (see
   `tests/rom_traversal_acceptance.md`)
-- Verifying collision mesh queries under 1-1 geometry
+- Verifying collision mesh queries under the Forsaken City map geometry
 
 See [`.agents/map-creation.md`](.agents/map-creation.md) for the full end-to-end pipeline (author → bake → load).
 
@@ -66,8 +66,7 @@ do not overflow the int16 fixed-point packing.
 
 ## Next build step
 
-1. Fix remaining crash on 1-1 (diagnostics added; awaiting ROM run to isolate root cause).
-2. Add more entity types (hazards, traffic blocks, moving platforms).
+1. Add more entity types (hazards, traffic blocks, moving platforms).
 3. Extend room graph / level transitions.
 4. Introduce scene scripting (Pyrite64 planned, hand-authored for now).
 

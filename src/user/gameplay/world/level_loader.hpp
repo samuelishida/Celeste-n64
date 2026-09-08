@@ -32,10 +32,15 @@ struct LevelGeometry {
 };
 
 // Load a baked .lvl file. Populates room (collision + spawns) and geometry
-// (faces + vertices for rendering). Path may be "rom:/lvl/1-1.lvl" on device
+// (faces + vertices for rendering). Path may be "rom:/lvl/..." on device
 // or a local filesystem path in host tests. Also loads the .colmesh sidecar
 // (same path with .lvl → .colmesh).
 bool LoadLevel(const char* path, Room& room, LevelGeometry& geometry);
+
+// memory-opt Inc 2: parse a whole LVL2 file from an in-RAM buffer (the asset
+// path). Shared by the compressed (asset_load) and plain (fopen) load paths.
+bool ParseLevelFromBuffer(const uint8_t* data, size_t size, Room& room,
+                          LevelGeometry& geometry);
 
 // Load only the .lvl sections (entities, atmosphere, faces, vertices) into
 // room + geometry, WITHOUT loading the .colmesh sidecar. Used by the Map

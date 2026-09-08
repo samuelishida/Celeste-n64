@@ -32,31 +32,5 @@ int main() {
 
         if (room.coll_mesh) physics::FreeCollMesh(room.coll_mesh);
     }
-
-    {
-        Room room;
-        LevelGeometry geometry;
-        const bool ok = LoadLevel("filesystem/lvl/1-1.lvl", room, geometry);
-        assert(ok && "LoadLevel should load the baked 1-1 shell");
-        assert(room.collider_count == 0);
-        assert(geometry.face_count > 102);
-        assert(geometry.vertex_count >= 400);
-        assert(room.spawn_count == 1 && "1-1 shell bake should currently spawn only Strawberry");
-        assert(std::strcmp(room.skybox, "bsides") == 0);
-        assert(std::strcmp(room.music, "mus_lvl1_bside") == 0);
-        assert(std::strcmp(room.ambience, "mountain") == 0);
-        assert(NearlyEq(room.snow_amount, 0.5f));
-        assert(NearlyEq(room.snow_dir.x, 0.0f));
-        assert(NearlyEq(room.snow_dir.y, 1.0f));
-        assert(NearlyEq(room.snow_dir.z, 0.0f));
-        assert(room.has_cassette);
-        // scale 0.15: quake (-184, -64, 504) → port (-27.6, 75.6, 9.6)
-        assert(NearlyEq(room.cassette.x, -27.6f));
-        assert(NearlyEq(room.cassette.y, 75.6f));
-        assert(NearlyEq(room.cassette.z, 9.6f));
-        assert(room.coll_mesh && "LoadLevel should attach the baked 1-1.colmesh sidecar");
-
-        if (room.coll_mesh) physics::FreeCollMesh(room.coll_mesh);
-    }
     return 0;
 }

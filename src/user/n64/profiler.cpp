@@ -6,6 +6,28 @@
 
 namespace n64 {
 
+namespace {
+// memory-opt Inc 1: registered per-component bucket providers, invoked at each
+// MemorySnapshot::Capture(). Providers read live subsystem state and are
+// registered once in rom_main before the first 3600-frame report. Fixed
+// capacity mirrors MemorySnapshot::kMaxBuckets; a full registry skips further
+// registrations.
+struct BucketProviderEntry {
+    const char* name;
+    size_t (*provider)(void);
+};
+BucketProviderEntry g_bucket_providers[MemorySnapshot::kMaxBuckets];
+int g_bucket_provider_count = 0;
+}  // namespace
+
+void MemorySnapshot::RegisterBucket(const char* name, size_t (*provider)(void)) {
+    if (name == nullptr || provider == nullptr) return;  // null -> skip
+    if (g_bucket_provider_count >= MemorySnapshot::kMaxBuckets) return;
+    g_bucket_providers[g_bucket_provider_count].name = name;
+    g_bucket_providers[g_bucket_provider_count].provider = provider;
+    ++g_bucket_provider_count;
+}
+
 FrameProfiler::FrameProfiler(uint32_t report_interval)
     : report_interval_(report_interval), silent_(false) {}
 
@@ -101,6 +123,15 @@ MemorySnapshot MemorySnapshot::Capture() {
     // mallinfo doesn't give largest free block directly; we approximate
     // by reporting free_bytes as an upper bound for largest contiguous.
     snap.largest_free = snap.free_bytes;
+
+    // memory-opt Inc 1: append the registered component buckets (live byte
+    // estimates for staging pool, resident renderers, coll mesh, mappack
+    // structs, frame arena). Buckets are informational subtotals, reported
+    // after the legacy parse-compatible prefix on the same [memory] line.
+    for (int i = 0; i < g_bucket_provider_count; ++i) {
+        snap.AddBucket(g_bucket_providers[i].name,
+                       g_bucket_providers[i].provider());
+    }
     return snap;
 }
 
@@ -114,6 +145,12 @@ MemorySnapshot MemorySnapshot::CaptureWithArena(const FrameArena& arena) {
     snap.used_bytes += static_cast<uint32_t>(arena.Used());
     snap.free_bytes += static_cast<uint32_t>(arena.Remaining());
     return snap;
+}
+
+void MemorySnapshot::PrintLine() const {
+    char buf[256];
+    FormatLine(buf, sizeof(buf));
+    debugf("%s\n", buf);
 }
 
 }  // namespace n64

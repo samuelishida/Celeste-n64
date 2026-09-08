@@ -1,6 +1,7 @@
 #include "gameplay/render/level_renderer.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <libdragon.h>
 #include <rdpq.h>
@@ -15,7 +16,7 @@ namespace {
 
 // Pack a position (game-units) into int16 by scaling to fixed-point.
 // T3D uses a coordinate space where vertices are in roughly [-32768, 32767].
-// OG 1-1 reaches about x=[-192, 76.8], y=[48, 115.2], z=[-908.8, 27.6] after
+// The OG maps reach about x=[-192, 76.8], y=[48, 115.2], z=[-908.8, 27.6] after
 // the Quake->game transform, so 32 gives a safe ceiling of roughly +/-1024.
 static constexpr float kPosFp = 32.0f;
 
@@ -37,6 +38,9 @@ bool LevelRenderer::Init(const LevelGeometry& geometry) {
     verts_ = static_cast<T3DVertPacked*>(
         malloc_uncached(sizeof(T3DVertPacked) * pair_count));
     if (!verts_) return false;
+    // memory-opt Inc 3: DMA-direct (RSP vertex DMA) — `malloc_uncached` is
+    // 16-byte aligned by contract; assert.
+    assert((reinterpret_cast<uintptr_t>(verts_) & 0xF) == 0);
 
     // Build T3DVertPacked from LevelVertex (pair-packed format)
     for (int pi = 0; pi < pair_count; ++pi) {
@@ -98,6 +102,9 @@ bool LevelRenderer::Init(const LevelGeometry& geometry) {
 
     // Identity matrix for the level geometry (already in world space)
     identity_fp_ = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
+    // memory-opt Inc 3: DMA-direct (RSP matrix DMA) — 16-byte aligned by
+    // contract; assert.
+    assert((reinterpret_cast<uintptr_t>(identity_fp_) & 0xF) == 0);
     T3DMat4 identity;
     const float s[3] = {1.0f / kPosFp, 1.0f / kPosFp, 1.0f / kPosFp};
     const float r[3] = {0.0f, 0.0f, 0.0f};

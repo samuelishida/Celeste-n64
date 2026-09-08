@@ -39,12 +39,24 @@ public:
     int PendingLoads() const;
     int ResidentLoads() const;
 
+    // memory-opt Inc 1: memory-component buckets for the [memory] report.
+    // Each returns 0 before the scene is initialized. Forwarded from the
+    // open-world renderer / map runtime (see register sites in rom_main).
+    size_t FrameArenaUsed() const;
+    size_t StreamingStagingBytes() const;
+    size_t StreamingResidentBytes() const;
+    size_t LiveCollMeshBytes() const;
+    size_t MapSpecBytes() const;
+    // memory-opt Inc 4: renderer-pool high-water + frame-arena peak buckets.
+    size_t PoolHighWater() const;
+    size_t FrameArenaPeak() const;
+
 private:
     struct Impl;
     Impl* impl_ = nullptr;
 
-    const char* lvl_path_  = "rom:/lvl/1-1.lvl";
-    const char* level_name_ = "1-1";
+    const char* lvl_path_  = "rom:/lvl/first-room.lvl";
+    const char* level_name_ = "first-room";
     const char* mappack_path_pending_ = nullptr;  // set by SetMapPack before Init
 };
 

@@ -60,21 +60,25 @@ int main() {
         assert(player.velocity.y > 0.0f);
     }
 
-    // --- Jump buffering ---
+    // --- Jump buffering (device-owned 0.10 s buffer) ---
     {
         PlayerState player;
         player.grounded = false;
         player.velocity.y = -1.0f;
 
+        // Inc 1: the input device keeps the pressed edge live for the 0.10 s
+        // buffer window (OG VirtualButton parity), so the same PlayerInput
+        // snapshot replays the buffered press across ticks until it is
+        // consumed on landing.
         PlayerInput jump_input;
         jump_input.jump_pressed = true;
         jump_input.jump_held = true;
         controller.Step(player, jump_input, camera_forward, 1.0f / 60.0f);
-        assert(player.jump_buffer_remaining > 0.0f);
+        assert(player.velocity.y <= 0.0f);  // airborne, no coyote: buffered, not fired
 
         player.grounded = true;
         controller.Step(player, jump_input, camera_forward, 1.0f / 60.0f);
-        assert(player.velocity.y > 0.0f);
+        assert(player.velocity.y > 0.0f);   // buffered edge consumed on landing
     }
 
     // --- Jump sustain release ---
@@ -288,6 +292,54 @@ int main() {
         SpringActor s;
         s.Init();
         assert(s.IsCollectible() == true);
+    }
+
+    // --- Spring launch (Inc 3, OG Player.cs:919-937 parity) ---
+    {
+        PlayerState player;
+        player.grounded = true;
+        player.air_dash_available = false;  // spent dash gets refilled
+        player.velocity = {20.0f, -5.0f, 20.0f};  // momentum to be killed
+        player.coyote_time_remaining = config.coyote_time;
+        player.auto_jump = false;
+        // Climbing exits to Normal (OG sets stateMachine.State = Normal first).
+        player.movement_state = PlayerMovementState::Climbing;
+        player.locomotion_state = LocomotionState::Climb;
+
+        const Vec3 spring_pos = {100.0f, 12.0f, 100.0f};
+        controller.Spring(player, spring_pos);
+
+        assert(player.movement_state == PlayerMovementState::Normal);
+        assert(player.locomotion_state == LocomotionState::Jump);
+        // Snaps toward the board: up = +2 toward spring.y + 3 (scalar
+        // Approach moves at most 2 per call), XY +4 along the direction toward
+        // the spring (distance 141 → moved exactly 4: (2.8284, 2.8284)).
+        assert(std::fabs(player.position.y - 2.0f) < 1e-4f);
+        assert(std::fabs(player.position.x - (4.0f * 0.70710678f)) < 1e-4f);
+        assert(std::fabs(player.position.z - (4.0f * 0.70710678f)) < 1e-4f);
+        assert(std::fabs(player.velocity.y - config.spring_jump_speed) < 1e-5f);
+        assert(player.hold_jump_speed == config.spring_jump_speed);
+        assert(std::fabs(player.hold_jump_time_remaining - config.spring_jump_hold_time) < 1e-5f);
+        assert(player.coyote_time_remaining == 0.0f);
+        assert(player.auto_jump == true);
+        assert(player.air_dash_available == true);
+        // Momentum killed: |vx|,|vz| approach 0 at 30 → <= 30 and reduced.
+        assert(std::fabs(player.velocity.x) <= 30.0f);
+        assert(std::fabs(player.velocity.z) <= 30.0f);
+        assert(std::fabs(player.velocity.x) < 20.0f);
+        assert(player.contact.ground_snap_cooldown_remaining == config.ground_snap_cooldown);
+    }
+
+    // --- SpringActor board cooldown (OG Spring.cs tCooldown = 1.0 s) ---
+    {
+        SpringActor s;
+        s.Init();
+        assert(s.cooldown_remaining == 0.0f);
+        s.cooldown_remaining = SpringActor::kCooldown;
+        s.Update(0.4f);
+        assert(s.cooldown_remaining > 0.35f && s.cooldown_remaining < 0.61f);
+        s.Update(0.7f);
+        assert(s.cooldown_remaining == 0.0f);
     }
 
     // --- RefillActor uses collected instead of used ---

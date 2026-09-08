@@ -13,11 +13,6 @@ except ImportError as e:
     sys.exit(1)
 
 # Test that the report can be generated for existing files
-if Path("filesystem/lvl/1-1.lvl").exists():
-    print("PASS: 1-1.lvl exists for report generation")
-else:
-    print("SKIP: 1-1.lvl not found (run 'make' first)")
-
 if Path("filesystem/lvl/first-room.lvl").exists():
     print("PASS: first-room.lvl exists for report generation")
 else:

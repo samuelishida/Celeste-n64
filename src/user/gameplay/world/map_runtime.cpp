@@ -5,6 +5,11 @@
 #include <cmath>
 #include <string>
 
+#ifdef __mips__
+#include <asset.h>
+#endif
+
+#include "gameplay/debug_flags.hpp"  // kEnableCompressedCells (memory-opt Inc 2)
 #include "gameplay/world/level_loader.hpp"  // LoadLevelInto
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/render/render_origin_math.hpp"  // ResolveCellIndex (canonical)
@@ -49,9 +54,28 @@ bool MapRuntime::Init(const char* mappack_path, const char* build_dir) {
         return false;
     }
 
-    // Load the one global CMSH from the manifest path.
+    // Load the one global CMSH from the manifest path. memory-opt Inc 2:
+    // when the bake shipped compressed cells, read through the asset layer
+    // (asset_load → LoadFromBuffer); fall back to the plain fopen path on
+    // failure or when compression is off.
     std::string gpath = LocalizePath(spec_.global_colmesh_path, build_dir);
-    if (!collision_.Load(gpath.c_str())) {
+    bool loaded = false;
+#ifdef __mips__
+    if (kEnableCompressedCells) {
+        int sz = 0;
+        void* data = asset_load(gpath.c_str(), &sz);
+        if (data) {
+            loaded = collision_.LoadFromBuffer(static_cast<const uint8_t*>(data),
+                                              static_cast<size_t>(sz));
+            free(data);
+        } else {
+            MR_LOG("[map_runtime] asset_load FAILED (falling back to fopen): %s\n",
+                   gpath.c_str());
+        }
+    }
+#endif
+    if (!loaded) loaded = collision_.Load(gpath.c_str());
+    if (!loaded) {
         MR_LOG("[map_runtime] global collision load FAILED: %s\n", gpath.c_str());
         return false;
     }

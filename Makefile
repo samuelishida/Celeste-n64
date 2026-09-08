@@ -68,10 +68,7 @@ DFS_FNT_FILES := filesystem/fnt/Renogare.font64
 DFS_LVL_FILES := \
 	filesystem/lvl/first-room.lvl \
 	filesystem/lvl/first-room.manifest \
-	filesystem/lvl/first-room.colmesh \
-	filesystem/lvl/1-1.lvl \
-	filesystem/lvl/1-1.manifest \
-	filesystem/lvl/1-1.colmesh
+	filesystem/lvl/first-room.colmesh
 
 # Map-pack chunks are added dynamically via wildcard
 DFS_MAP_PACK_FILES := $(wildcard filesystem/lvl/forsyken-city/*.lvl) \
@@ -177,6 +174,15 @@ filesystem/lvl/forsyken-city/%.lvl filesystem/lvl/forsyken-city/%.colmesh filesy
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.mappack filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.manifest filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.dlod filesystem/lvl/forsyken-city/ 2>/dev/null || true
+	@# memory-opt Inc 2: compress the SHIPPED pack copies (staging stays raw —
+	@# it is the smoke + rollback source). mkasset writes the level-1 (LZ4)
+	@# compressed form to the -o dir (same dir = in-place on the shipped copy);
+	@# the runtime reads them through the asset layer when kEnableCompressedCells
+	@# is on. Flag and bake MUST flip together (a mismatch fails loud via the
+	@# CMSH magic canary).
+	@for f in filesystem/lvl/forsyken-city/*.lvl filesystem/lvl/forsyken-city/*.colmesh filesystem/lvl/forsyken-city/*.mappack; do \
+		[ -f "$$f" ] && $(N64_INST)/bin/mkasset --compress 1 -o filesystem/lvl/forsyken-city "$$f" || true; \
+	done
 
 filesystem/lvl/forsyken-city:
 	mkdir -p $@
@@ -185,29 +191,6 @@ filesystem/lvl/forsyken-city:
 bake-forsaken-city: filesystem/lvl/forsyken-city/forsyken-city.mappack
 	@echo "Forsaken City map-pack baked successfully"
 
-# OG MAP PIPELINE (ogmap_lib → tools/bake.py)
-filesystem/lvl/1-1.lvl filesystem/lvl/1-1.manifest filesystem/lvl/1-1.colmesh: \
-	assets/og_converted/maps/1-1.map \
-	tools/bake.py \
-	tools/ogmap_lib/__init__.py \
-	tools/ogmap_lib/brush_geom.py \
-	tools/ogmap_lib/texture_mapping.py \
-	tools/writers/colmesh_writer.py \
-	tools/writers/lvl_writer.py \
-	tools/writers/t3dm_writer.py \
-	tools/writers/nav_writer.py \
-	tools/lvl_format.py \
-	tools/entity_ids.py \
-	tools/patch_t3dm_materials.py | filesystem/lvl
-	python3 tools/bake.py $< --out-dir build/bake-1-1 --scale 0.2 --fixture-manifest tests/fixtures/1-1.manifest
-	@# Rename output files to match expected names
-	mv build/bake-1-1/output.lvl filesystem/lvl/1-1.lvl
-	mv build/bake-1-1/output.manifest filesystem/lvl/1-1.manifest
-	mv build/bake-1-1/output.colmesh filesystem/lvl/1-1.colmesh
-	mv build/bake-1-1/output.t3dm filesystem/lvl/1-1.t3dm 2>/dev/null || true
-	mv build/bake-1-1/output.nav filesystem/lvl/1-1.nav 2>/dev/null || true
-	mv build/bake-1-1/output.report.json filesystem/lvl/1-1.report.json 2>/dev/null || true
-	rmdir build/bake-1-1 2>/dev/null || true
 # Copy font files
 filesystem/fnt/%.font64: assets/og_converted/fonts/%.font64 | filesystem/fnt
 	cp $< $@
@@ -294,10 +277,10 @@ filesystem/lvl/%.colmesh: filesystem/lvl/%.lvl tools/colmesh_bake.py tools/lvl_f
 	python3 tools/colmesh_bake.py $< $@
 
 # Bake collision mesh for a single level.
-# Usage: make bake-colmesh LEVEL=1-1
+# Usage: make bake-colmesh LEVEL=first-room
 #   Reads  filesystem/lvl/$(LEVEL).lvl
 #   Writes filesystem/lvl/$(LEVEL).colmesh
-LEVEL ?= 1-1
+LEVEL ?= first-room
 bake-colmesh: filesystem/lvl/$(LEVEL).lvl
 	python3 tools/colmesh_bake.py filesystem/lvl/$(LEVEL).lvl filesystem/lvl/$(LEVEL).colmesh
 	python3 tools/colmesh_dump.py filesystem/lvl/$(LEVEL).colmesh

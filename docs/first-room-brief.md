@@ -1,6 +1,6 @@
 # First Room Brief
 
-Room `first-room` is the project-owned replacement for imported `1-1`. It serves
+Room `first-room` is the project-owned replacement for the imported OG maps. It serves
 Milestone 2: one compact challenge space that teaches movement before more rooms
 exist.
 
