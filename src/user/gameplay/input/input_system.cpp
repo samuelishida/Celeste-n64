@@ -52,10 +52,10 @@ void InputSystem::Poll(float delta_seconds) {
     // avoid double-polling. Callers MUST joypad_poll() before Poll()).
 
     const joypad_inputs_t inputs = joypad_get_inputs(JOYPAD_PORT_1);
+    const joypad_buttons_t current = joypad_get_buttons(JOYPAD_PORT_1);
     const joypad_buttons_t held = joypad_get_buttons_held(JOYPAD_PORT_1);
 
-    // Move: raw stick -> circular deadzone (config; default 0 preserves the
-    // pre-overhaul feel; OG 0.35 available behind move_deadzone).
+    // Move: raw stick -> circular deadzone (configurable; OG default is 0.35).
     const Vec2 s = SampleStickAxis(inputs.stick_x, inputs.stick_y, kStickMax);
     move_ = ApplyCircularDeadzone(s, move_deadzone);
 
@@ -80,9 +80,14 @@ void InputSystem::Poll(float delta_seconds) {
     UpdateVirtualButton(climb_, climb_held, 0.0f, delta_seconds);
     UpdateVirtualButton(pause_, pause_held, 0.0f, delta_seconds);
 
+    last_raw_.style = static_cast<uint8_t>(joypad_get_style(JOYPAD_PORT_1));
+    last_raw_.buttons_current = current.raw;
+    last_raw_.buttons_held = held.raw;
     last_raw_.z = held.z;
     last_raw_.l = held.l;
     last_raw_.r = held.r;
+    last_raw_.stick_x = inputs.stick_x;
+    last_raw_.stick_y = inputs.stick_y;
     last_raw_.analog_l = inputs.analog_l;
     last_raw_.analog_r = inputs.analog_r;
     last_raw_.jump_down = jump_held;

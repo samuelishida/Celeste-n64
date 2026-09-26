@@ -42,8 +42,9 @@ int main() {
         dash_input.dash_pressed = true;
         controller.Step(player, dash_input, camera_forward, 1.0f / 60.0f);
         assert(!player.air_dash_available);
-        assert(player.velocity.x == 0.0f);
-        assert(player.velocity.y == 0.0f);
+        const float air_dash_speed = config.dash_speed / std::sqrt(1.16f);
+        assert(std::fabs(player.velocity.x - air_dash_speed) < 0.02f);
+        assert(std::fabs(player.velocity.y - air_dash_speed * 0.4f) < 0.02f);
     }
 
     // --- Coyote time ---

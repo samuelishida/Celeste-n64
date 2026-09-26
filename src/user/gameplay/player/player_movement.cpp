@@ -67,8 +67,69 @@ Vec3 MoveService::SolidFeetPos(const PlayerState& state) const {
     return {state.position.x, state.position.y - config_.half_height, state.position.z};
 }
 
+bool MoveService::TryStepUp(PlayerState& state, const Room& room,
+                            const Vec3& attempted_position,
+                            const Vec3& horizontal_dir) const {
+    if (!state.grounded || config_.step_up_height <= 0.0f) return false;
+
+    // Only step from a real support surface. This prevents wall contact while
+    // falling from being mistaken for a grounded stair/lip.
+    if (!GroundCheck(state, room, nullptr, nullptr)) return false;
+
+    const float dir_len = std::sqrt(horizontal_dir.x * horizontal_dir.x +
+                                    horizontal_dir.z * horizontal_dir.z);
+    if (dir_len <= 1e-5f) return false;
+    const float dir_x = horizontal_dir.x / dir_len;
+    const float dir_z = horizontal_dir.z / dir_len;
+    const float feet_y = state.position.y - config_.half_height;
+
+    // Probe under the leading edge of the body. A center-only floor ray can
+    // never see the top until the wall has already stopped the player at one
+    // wall radius away from it.
+    const float probe_distance = config_.wall_radius + 0.01f;
+    const Vec3 support = {
+        attempted_position.x + dir_x * probe_distance,
+        feet_y,
+        attempted_position.z + dir_z * probe_distance,
+    };
+    const Vec3 ray_origin = {
+        support.x,
+        feet_y + config_.step_up_height + config_.ground_ray_up,
+        support.z,
+    };
+    const GroundHit floor = QueryFloorSource(
+        room, ray_origin, config_.step_up_height + config_.ground_ray_up + 0.02f);
+    if (!floor.hit || !IsFloorNormalOG(floor.normal)) return false;
+
+    const float rise = floor.point.y - feet_y;
+    if (rise <= 0.01f || rise > config_.step_up_height + 0.01f) return false;
+    if (IsOneWay(room, floor.face_id) && feet_y < floor.point.y) return false;
+
+    PlayerState stepped = state;
+    stepped.position = {support.x, floor.point.y + config_.half_height, support.z};
+    Vec3 ceiling_point{};
+    if (CeilingCheck(stepped, room, &ceiling_point)) return false;
+
+    // Do not step through an overhang or a second wall while crossing the lip.
+    if (QueryWallPushout(room, SolidWaistTestPos(stepped), config_.wall_radius).hit ||
+        QueryWallPushout(room, SolidHeadTestPos(stepped), config_.wall_radius).hit) {
+        return false;
+    }
+
+    state.position = stepped.position;
+    state.grounded = true;
+    state.contact.ground_normal = floor.normal;
+    RecordSurfaceFlags(room, floor.face_id, state);
+    if (IsDeathFace(room, floor.face_id)) state.death_contact = true;
+    state.wall_contact = false;
+    state.wall_normal = {};
+    return true;
+}
+
 bool MoveService::GroundCheck(const PlayerState& state, const Room& room,
-                              Vec3* pushout, Vec3* normal) const {
+                              Vec3* pushout, Vec3* normal,
+                              GroundHit* hit_out) const {
+    if (hit_out) *hit_out = {};
     const Vec3 origin = SolidFeetPos(state);
     Vec3 ray_origin = {origin.x, origin.y + config_.ground_ray_up, origin.z};
     const GroundHit hit = QueryFloorSource(room, ray_origin, config_.ground_ray_len);
@@ -83,6 +144,7 @@ bool MoveService::GroundCheck(const PlayerState& state, const Room& room,
                              (hit.point.y + config_.half_height) - state.position.y,
                              hit.point.z - state.position.z};
     if (normal) *normal = hit.normal;
+    if (hit_out) *hit_out = hit;
     return true;
 }
 
@@ -101,15 +163,13 @@ bool MoveService::CeilingCheck(const PlayerState& state, const Room& room,
 }
 
 bool MoveService::Popout(PlayerState& state, const Room& room, bool resolve_impact) const {
-    // Death flag is per-contact: cleared here, set if ANY repaired contact face
-    // carries MAT_DEATH (the old motor's FaceIsDeath sites, now mover-owned).
-    state.death_contact = false;
+    // Ceiling/death flags are cleared once at the start of each move and then
+    // accumulate across its <=2-unit repair substeps. Clearing here loses an
+    // early spike/ceiling hit when a later substep ends on safe geometry.
     // ground test
     Vec3 pushout{};
     Vec3 normal{};
     Vec3 hit_point{};
-    int ground_face = -1;
-    int ceiling_face = -1;
     if (GroundCheck(state, room, &pushout, &normal)) {
         state.position.x += pushout.x;
         state.position.y += pushout.y;
@@ -132,7 +192,11 @@ bool MoveService::Popout(PlayerState& state, const Room& room, bool resolve_impa
 
     // ceiling test — independent of ground (OG else-if on ground only).
     else if (CeilingCheck(state, room, &hit_point)) {
-        state.position.y += (hit_point.y - config_.ceiling_height) - state.position.y;
+        // OG Position is feet-anchored (Player.cs:2300-2305); PlayerState is
+        // center-anchored. Convert OG's target feet height back to center
+        // instead of assigning the feet result directly to the center.
+        state.position.y = hit_point.y - config_.ceiling_height + config_.half_height;
+        state.ceiling_contact = true;
         if (resolve_impact && state.velocity.y > 0.0f)
             state.velocity.y = 0.0f;  // OG velocity.Z = Min(velocity.Z, 0)
     }
@@ -175,6 +239,12 @@ bool MoveService::Popout(PlayerState& state, const Room& room, bool resolve_impa
 
 void MoveService::SweepMove(PlayerState& state, const Room& room, const Vec3& amount,
                             bool resolve_impact) const {
+    // Contact is a per-move result. Popout only sets it when a wall is hit;
+    // clear the prior move's result before this tick's first query.
+    state.wall_contact = false;
+    state.wall_normal = {};
+    state.ceiling_contact = false;
+    state.death_contact = false;
     if (Length3(amount) <= 0.0001f) {
         // Zero movement: still run the unconditional idle popout (OG calls
         // SweepTestMove then a separate Popout(false) "for good measure" every
@@ -185,16 +255,30 @@ void MoveService::SweepMove(PlayerState& state, const Room& room, const Vec3& am
 
     const float remaining = Length3(amount);
     const Vec3 step_normal = {amount.x / remaining, amount.y / remaining, amount.z / remaining};
+    const float horizontal_len = std::sqrt(amount.x * amount.x + amount.z * amount.z);
+    const Vec3 horizontal_dir = horizontal_len > 1e-5f
+        ? Vec3{amount.x / horizontal_len, 0.0f, amount.z / horizontal_len}
+        : Vec3{};
     float left = remaining;
 
     while (left > 0.0f) {
         const float step = std::min(left, config_.substep);
         left -= step;
-        state.position.x += step_normal.x * step;
-        state.position.y += step_normal.y * step;
-        state.position.z += step_normal.z * step;
+        const Vec3 attempted_position = {
+            state.position.x + step_normal.x * step,
+            state.position.y + step_normal.y * step,
+            state.position.z + step_normal.z * step,
+        };
+        const Vec3 velocity_before_popout = state.velocity;
+        state.position = attempted_position;
 
         if (Popout(state, room, resolve_impact)) {
+            if (TryStepUp(state, room, attempted_position, horizontal_dir)) {
+                // The contact was a traversable lip, not a wall impact. Keep
+                // the intended movement velocity so the step does not stall.
+                state.velocity = velocity_before_popout;
+                continue;
+            }
             // Only the first wall impact per move resolves (OG resolveImpact=false).
             resolve_impact = false;
         }
@@ -214,7 +298,20 @@ void MoveService::SweepMoveClimb(PlayerState& state, const Room& room,
     // down-push + wiggle + ejection), and its ceiling check fights the climb
     // up into a ledge. Waist-only wall popout keeps the body out of the wall
     // (the waist is at the anchor, pushout ≈ 0) without fighting the climb.
-    if (Length3(amount) <= 0.0001f) return;
+    state.wall_contact = false;
+    state.wall_normal = {};
+    state.ceiling_contact = false;
+    state.death_contact = false;
+    if (Length3(amount) <= 0.0001f) {
+        const WallHit waist = QueryWallPushout(room, SolidWaistTestPos(state),
+                                               config_.climb_wall_radius);
+        if (waist.hit) {
+            state.wall_contact = true;
+            state.wall_normal = waist.plane_normal;
+            if (IsDeathFace(room, waist.face_id)) state.death_contact = true;
+        }
+        return;
+    }
     const float remaining = Length3(amount);
     const Vec3 step_normal = {amount.x / remaining, amount.y / remaining,
                               amount.z / remaining};
@@ -226,11 +323,14 @@ void MoveService::SweepMoveClimb(PlayerState& state, const Room& room,
         state.position.y += step_normal.y * step;
         state.position.z += step_normal.z * step;
         const WallHit waist = QueryWallPushout(room, SolidWaistTestPos(state),
-                                               config_.wall_radius);
+                                               config_.climb_wall_radius);
         if (waist.hit) {
             state.position.x += waist.pushout * waist.plane_normal.x;
             state.position.y += waist.pushout * waist.plane_normal.y;
             state.position.z += waist.pushout * waist.plane_normal.z;
+            state.wall_contact = true;
+            state.wall_normal = waist.plane_normal;
+            if (IsDeathFace(room, waist.face_id)) state.death_contact = true;
         }
     }
 }
@@ -245,9 +345,11 @@ void MoveService::GroundSnap(PlayerState& state, const Room& room, float dt) con
         state.position.y = hit.point.y + config_.half_height;
         // Surface flags from the snapped face (S6).
         RecordSurfaceFlags(room, hit.face_id, state);
+        if (IsDeathFace(room, hit.face_id)) state.death_contact = true;
         // Refresh grounded state via a GroundCheck so normal/coyote follow.
         Vec3 normal{};
         if (GroundCheck(state, room, nullptr, &normal)) {
+            state.grounded = true;
             state.contact.ground_normal = normal;
         }
     }

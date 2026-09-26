@@ -12,6 +12,14 @@ export N64_INST
 include $(N64_INST)/include/n64.mk
 include $(N64_INST)/include/t3d.mk
 
+# The boot log's [build] marker uses __DATE__/__TIME__ in rom_main.cpp.
+# Re-linking after another translation unit changes must not leave that marker
+# frozen at the last time rom_main.o happened to compile. Refresh this one TU
+# for every ROM build; gameplay/art objects still use ordinary timestamps.
+.PHONY: refresh_rom_build_marker
+refresh_rom_build_marker:
+$(BUILD_DIR)/src/user/rom_main.o: refresh_rom_build_marker
+
 N64_CFLAGS += -std=gnu2x -Os
 N64_CXXFLAGS += -std=gnu++17 -Os -Isrc/user
 
@@ -264,6 +272,56 @@ all: madeline_cube_rom.z64
 
 $(BUILD_DIR)/madeline_cube_rom.elf: $(src:%.cpp=$(BUILD_DIR)/%.o) madeline_cube_rom.dfs
 
+# Separate Ares-only movement diagnostics build. Its objects and ROM output
+# use a distinct stem/path, so it cannot contaminate the normal ROM build.
+physics-autoplay-rom:
+	$(MAKE) BUILD_DIR=build/physics-autoplay PHYSICS_AUTOPLAY=1 physics_autoplay.z64
+
+# Separate climb-to-mantle route. Wall-jump route remains independently gated.
+physics-mantle-autoplay-rom:
+	$(MAKE) BUILD_DIR=build/physics-mantle-autoplay PHYSICS_AUTOPLAY=1 PHYSICS_AUTOPLAY_MANTLE=1 physics_mantle_autoplay.z64
+
+# No-teleport route from Start through a real map climb corner.
+physics-corner-autoplay-rom:
+	$(MAKE) BUILD_DIR=build/physics-corner-autoplay PHYSICS_AUTOPLAY=1 PHYSICS_AUTOPLAY_CORNER=1 physics_corner_autoplay.z64
+
+# Separate live-controller trace build. Unlike physics-autoplay, it leaves
+# input live and enables sampled input/state/contact telemetry.
+physics-input-trace-rom:
+	$(MAKE) BUILD_DIR=build/physics-input-trace INPUT_TRACE=1 physics_input_trace.z64
+
+ifeq ($(PHYSICS_AUTOPLAY),1)
+$(BUILD_DIR)/src/user/gameplay/scene/gameplay_scene.o: CXXFLAGS += -DMC_DEBUG_PHYSICS_AUTOPLAY
+endif
+
+ifeq ($(PHYSICS_AUTOPLAY_MANTLE),1)
+$(BUILD_DIR)/src/user/gameplay/scene/gameplay_scene.o: CXXFLAGS += -DMC_DEBUG_PHYSICS_AUTOPLAY_MANTLE
+endif
+
+ifeq ($(PHYSICS_AUTOPLAY_CORNER),1)
+$(BUILD_DIR)/src/user/gameplay/scene/gameplay_scene.o: CXXFLAGS += -DMC_DEBUG_PHYSICS_AUTOPLAY_CORNER
+endif
+
+ifeq ($(INPUT_TRACE),1)
+$(BUILD_DIR)/src/user/gameplay/scene/gameplay_scene.o: CXXFLAGS += -DMC_DEBUG_INPUT_RECORDING
+endif
+
+physics_autoplay.z64: N64_ROM_TITLE = "Physics Autoplay"
+physics_autoplay.z64: $(BUILD_DIR)/physics_autoplay.elf madeline_cube_rom.dfs
+$(BUILD_DIR)/physics_autoplay.elf: $(src:%.cpp=$(BUILD_DIR)/%.o)
+
+physics_mantle_autoplay.z64: N64_ROM_TITLE = "Physics Mantle Autoplay"
+physics_mantle_autoplay.z64: $(BUILD_DIR)/physics_mantle_autoplay.elf madeline_cube_rom.dfs
+$(BUILD_DIR)/physics_mantle_autoplay.elf: $(src:%.cpp=$(BUILD_DIR)/%.o)
+
+physics_corner_autoplay.z64: N64_ROM_TITLE = "Phys Corner Autoplay"
+physics_corner_autoplay.z64: $(BUILD_DIR)/physics_corner_autoplay.elf madeline_cube_rom.dfs
+$(BUILD_DIR)/physics_corner_autoplay.elf: $(src:%.cpp=$(BUILD_DIR)/%.o)
+
+physics_input_trace.z64: N64_ROM_TITLE = "Physics Input Trace"
+physics_input_trace.z64: $(BUILD_DIR)/physics_input_trace.elf madeline_cube_rom.dfs
+$(BUILD_DIR)/physics_input_trace.elf: $(src:%.cpp=$(BUILD_DIR)/%.o)
+
 # The .dfs must be a prerequisite of the .z64 target so that n64tool
 # includes it in the ROM image via $(filter %.dfs,$^).
 madeline_cube_rom.z64: madeline_cube_rom.dfs
@@ -271,7 +329,7 @@ madeline_cube_rom.z64: madeline_cube_rom.dfs
 N64_ROM_TITLE ?= "Madeline Cube ROM"
 
 clean:
-	rm -rf $(BUILD_DIR) madeline_cube_rom.z64 madeline_cube_rom.dfs
+	rm -rf $(BUILD_DIR) madeline_cube_rom.z64 madeline_cube_rom.dfs physics_autoplay.z64 physics_mantle_autoplay.z64 physics_input_trace.z64
 
 filesystem/lvl/%.colmesh: filesystem/lvl/%.lvl tools/colmesh_bake.py tools/lvl_format.py
 	python3 tools/colmesh_bake.py $< $@
@@ -309,4 +367,4 @@ bake-forsaken-city: filesystem/lvl/forsyken-city/forsyken-city.mappack
 test:
 	./tests/run_host_tests.sh
 
-.PHONY: all clean bake-colmesh bake-colmesh-all bake-forsaken-city test
+.PHONY: all clean bake-colmesh bake-colmesh-all bake-forsaken-city test physics-autoplay-rom physics-mantle-autoplay-rom physics-corner-autoplay-rom physics-input-trace-rom

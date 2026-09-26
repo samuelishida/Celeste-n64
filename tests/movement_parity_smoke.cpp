@@ -33,7 +33,9 @@ int main() {
     air_dash.dash_pressed = true;
     controller.Step(dash, air_dash, camera_forward, kDt);
     assert(dash.movement_state == PlayerMovementState::Dashing);
-    assert(dash.velocity.x == 0.0f);
+    const float air_dash_speed = config.dash_speed / std::sqrt(1.16f);
+    assert(Near(dash.velocity.x, air_dash_speed));
+    assert(Near(dash.velocity.y, air_dash_speed * 0.4f));
 
     PlayerState skid;
     skid.grounded = true;

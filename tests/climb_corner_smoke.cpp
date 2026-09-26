@@ -249,7 +249,8 @@ int main() {
         Harness hh;
         hh.room.coll_mesh = &mb.mesh;
         hh.room.collider_count = 0;
-        hh.state.position = {16.0f, 60.0f, 0.0f};
+        // Keep initial waist-to-plane distance within OG ClimbCheckDist (4).
+        hh.state.position = {17.0f, 60.0f, 0.0f};
         hh.state.grounded = false;
         hh.state.target_facing = {1.0f, 0.0f, 0.0f};
         hh.state.last_facing = {1.0f, 0.0f, 0.0f};

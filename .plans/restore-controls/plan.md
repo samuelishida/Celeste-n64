@@ -306,7 +306,174 @@ movement values for the user to pick.
 
 ## Out of scope
 - Re-reverting the already-restored movement code (it is byte-equal to good era).
-- Renderer/perf work (frame rate is already 59.9 fps).
+- Standalone renderer/perf tuning; latest captures are ~30 FPS, so if controls
+  still feel delayed after the multi-tick input fix, measure that separately
+  before attributing it to movement constants.
 - The `ab6a6607` README commit.
 - Applying raw pre-scale May-era values to the 10×-scaled world (would break
   movement; the May-era *feel* is expressed as ×10 values instead).
+
+## Follow-up: fixed-tick press replay (2026-09-25)
+
+The earlier 59.9 FPS reading is stale for the current world: the latest Ares
+captures report about 30 FPS, and the shared frame input snapshot is replayed
+for every 60 Hz physics tick. A copied `PlayerInput` reset its local consume
+flag, while `ConsumeJumpPress` ignored failure from the shared device edge.
+SkidJump also retained coyote time, unlike OG `SkidJump()`; a repeated edge on
+the following fixed tick could replace the 120-speed skid jump with a normal
+90-speed jump.
+
+Reproductions failed before the fix:
+
+- `input_system_smoke`: two sibling tick snapshots both claimed one device
+  jump edge;
+- `skid_smoke`: skid jump left coyote time active.
+
+Fix now consults shared device-edge availability, requires successful
+consumption before action transitions, and clears coyote time/restores its
+recorded height on skid jump. The opt-in input trace now prints each tick with
+render-frame/substep grouping and edge availability/consumption. Validation:
+67/67 host tests and normal ROM build pass. Still open: reload current ROM in
+Ares, verify actual controller feel, and compare `good_era_8ea095c.z64` against
+current on the concrete checklist above; this follow-up does not close Inc 1 or
+the manual acceptance gate.
+
+## Follow-up: OG move deadzone restored for slop (2026-09-25)
+
+The active physics-fix request reopened the earlier no-deadzone choice. Source
+inspection found OG `ControlsConfig::Defaults.Move.Deadzone=0.35`, while the
+demake accepted every nonzero stick value. Because `RelativeMoveInput`
+normalizes direction and `AnalogMagnitude` maps any active input below 0.4 to
+at least 30% speed, tiny raw deflection/noise could target 19.2 units/s.
+`InputSystem::move_deadzone` now defaults to OG's 0.35 circular threshold;
+explicit A/B can still set it to 0. Added a host regression that failed before
+the change at the default-value assertion and now verifies tiny input is
+zeroed while raw values remain observable. Full suite: 79/79; normal and
+isolated autoplay ROMs build. Fresh Ares autoplay capture
+`build/baseline-og-deadzone-20260925-100813.txt` qualifies against SHA-256
+`c4fa94ea8d936730da83fd6223fa3c65d9f57d7846555eccb261a29c54244a54`, with
+map/material/render health and movement, air, jump/dash, guided climb,
+wall-jump, and clearance gates passing. Autoplay bypasses live stick polling;
+physical low-stick feel remains unmeasured. Live trace was throttled to 6-tick
+samples plus bucketed stick/trigger/button/state/contact transitions to keep
+Ares serial output bounded.
+
+## Follow-up: current-ROM requalification + support telemetry (2026-09-25)
+
+The live trace now emits quantized ground/climb normals, support-surface and
+grip-face IDs, previous-grounded state, and ground-snap cooldown. Contact/normal
+changes trigger immediate samples; unchanged movement stays at 10 Hz. Host
+regression verifies normal bucketing. Current trace ROM SHA-256
+`325b7251d434ed581ddaa8a12c3b737cf5bab47ebf62e03c4ef619f34a0465d3` was
+captured in Ares at
+`build/baseline-physics-trace-support-fields-20260925-123950.txt`: 45/45 samples
+include the new fields, raw input remains neutral, and player stays grounded
+and stationary.
+
+Current normal ROM SHA-256
+`f0110431ff4d69f396a55cb91c2e481316f98295108e0f63fd8b4d68bb56114b` boots
+cleanly at `build/baseline-physics-resume-normal-boot-20260925-124138.txt`.
+Fresh isolated Ares route gates pass against exact artifact identities:
+wall-jump `328fb3c89043592f5bf110dd7eb277b1c6afd4cf9bd13795474fa318e7579279`
+and mantle `b10a91668a141b1a3975a8b3207d855905ba25e0b1656b90e2cc1c6176247ff7`.
+Full host suite passes 79/79. User's supplied manual log has `z=1` through idle
+samples and climb start, so it is not neutral-input evidence; unattended Ares
+trace reads all-zero shoulders. These results close runtime/build regressions,
+not subjective live-controller feel or the pending good-era A/B verdict.
+
+Read-only Ares `VirtualPad1` inspection found `R-Trigger` mapped to gamepad
+axis 2 low (`0x12dc83106/0/2/Lo`); supplied idle log pairs `z=1` with
+`ar=200`. `InputSystem` consumes digital `z/l/r` and ignores analog triggers,
+but this correlation alone does not prove that the axis binding caused raw Z.
+Inspect the live Ares mapping that feeds N64 Z and capture deliberate
+press/release transitions before changing input code or controller mappings.
+
+## Follow-up: fixed-step hitch preservation (2026-09-25)
+
+The supplied Ares trace reports a `121.662 ms` streaming peak. Previous
+`FixedStepAccumulator` discarded time above its five-tick (`83.3 ms`) per-frame
+work cap, losing about `38 ms` per hitch of that size. It now preserves up to
+ten ticks of bounded backlog, keeps the five-tick execution cap, and includes
+pending/dropped time in input-trace scheduling telemetry. Regression tests
+cover a 120 ms hitch/catch-up, a 1 s stall/drop bound, and invalid deltas.
+Normal ROM SHA-256 `2a745f8e821feb124407859922d432362afb620ef9bfd29656827748628aa86c`;
+trace ROM SHA-256 `78beb872bd6a9574a6ffe00185da2f65fba9feb214e0eed814d7ba2034d7ca65`.
+The currently open Ares still runs the prior trace ROM; manual live-input
+acceptance remains pending on the rebuilt trace artifact.
+
+## Follow-up: disambiguate controller style and raw shoulder bits
+
+The supplied trace paired `z=1`, `r=0`, and `ar=200`; Ares settings also show
+an axis mapped to `R-Trigger`, but logs did not identify the active libdragon
+joypad style or distinguish current from stable-held digital masks. The input
+trace now records `joypad_get_style()`, `joypad_get_buttons()`, and
+`joypad_get_buttons_held()` at periodic samples and exact climb start. Use the
+new fields to attribute Z/R/L before changing game controls or asking the user
+to remap anything. Ares exposes distinct Z and R inputs; libdragon's N64 style
+derives analog R from digital R, while GameCube style reports an independent
+analog trigger. No input behavior changed.
+
+## Follow-up: fresh trace + route requalification (2026-09-25)
+
+Host suite passes 79/79. Capture regression now proves `[input-trace]` records
+survive `tools/capture_baseline.sh`. Normal ROM
+`5588babc1194eccd979105fc693d91b1a0288ed8b074eb79a3c158d1c6149b66` boots all
+45 map cells, 10,618 collision triangles, 32 materials and texture rooms;
+stationary counters show 56 near batches / 13 resident cells. Current
+interactive trace ROM is `physics_input_trace.z64`, SHA-256
+`c125799c4a2f9e1f7ddcacf452ca24418c7b223865925ecc2356211853781605`.
+Unattended Ares capture contains 131 neutral N64 samples with current and held
+button masks; this proves clean idle only.
+
+Current isolated wall-jump and mantle autoplay captures pass movement,
+air-control, real-map wall approach, grounded climb, and zero model-clearance
+violations. Autoplay bypasses live pad input, so neither closes Inc 1's
+controller-feel gate. Trace capture also caught one 283.3 ms startup hitch; 5
+ticks ran, 5 remained pending, and 116.7 ms was reported dropped past the
+scheduler's bounded accumulator. Keep this separate from physics feel;
+investigate if it recurs during normal play.
+
+Supplied 10:29 ROM log loads map textures but has `z=1` at idle and climb
+start, so it cannot prove neutral-input behavior. Older 03:01 log is stale and
+fails room/material loading. Next decisive check is live input on current
+trace SHA: verify N64 `style1`, `current0000`, `held0000`, and `z=l=r=0` at
+rest, then run/release/reverse, tap/hold A, dash, approach wall, and
+hold/release Z. Capture `[input-trace]`, `[climb] START`, `[move]`. Do not
+change controller mapping or physics based only on `ar=200`; latest raw masks
+will locate whether Z is physically asserted. Until live input is observed,
+manual feel, neutral Z attribution, and user's good-era A/B verdict remain open.
+
+## Follow-up: real-map corner handoff regression (2026-09-25)
+
+The real baked edge near Start exposed a failure missed by the synthetic
+corner fixtures: during the 0.2 s corner ease, reacquiring the old face and
+running normal grip/facing gates could snap back, pop out, or exit climbing;
+full-reach rays could also nominate an unreachable anchor. The handoff now
+keeps its adopted destination face/grip, allows explicit climb release, bounds
+anchor reach, and restores the pre-adoption position as the ease origin.
+`tests/real_map_corner_traverse_smoke.cpp` now exercises normal entry and
+side-walk into that edge. Latest run: one corner event, destination normal
+adopted, zero exits, max step 1.866, waist pushout 0.296, model gap 0.500,
+13 model samples. Full host suite: 80 passed, 0 failed. This closes the
+deterministic real-map handoff regression; live controller feel remains open.
+
+## Follow-up: live no-Z capture locates Ares mapping path (2026-09-25)
+
+Current trace ROM SHA-256
+`eaa6925011db361d15b9d6c231deca32577b09b67f0a662df2e7e0e5f46f8bd8` was
+captured in Ares at
+`build/interactive-physics-input-trace-followup-20260925.log`. Boot reports
+`current0000`, `held0000`, `z=0`. On live stick movement, current raw mask
+becomes `0x2000`; next sample has `held=0x2000`, `z=1`. User confirms no Z
+press. `InputSystem` consumes this `held.z` bit directly, so unintended climb
+is input-originated, not proof of a physics latch bug. In the same capture,
+climb enters at face 5178 and reaches mantle; visual clearance remains unproven.
+
+Exact Ares route is now verified: N64 `Z` maps from virtual `R-Trigger` in
+[Ares N64 input wiring](https://raw.githubusercontent.com/ares-emulator/ares/master/desktop-ui/emulator/nintendo-64.cpp#L34-L37).
+Active `settings.bml` binds `VirtualPad1` `R-Trigger` to physical axis 5 high
+and button 4. This resolves the emulator-to-game path; telemetry cannot say
+which physical binding fired. Next: isolate/rebind those Ares inputs and
+require zero Z/L/R while idle and moving the stick/A. Keep game input behavior
+unchanged; masking Z would break intended climbing. Shared Ares settings have
+not been modified.

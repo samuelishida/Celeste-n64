@@ -1,4 +1,5 @@
 #include "gameplay/runtime/timing.hpp"
+#include <algorithm>
 #include <cmath>
 namespace madeline_cube {
 
@@ -10,9 +11,11 @@ bool OnInterval(float elapsed, float delta, float interval, float offset) {
 }
 
 int FixedStepAccumulator::BeginFrame(float dt) {
-    constexpr float kMaxDt = kMaxTicksPerFrame * kTickDt;
-    if (dt > kMaxDt) dt = kMaxDt;
-    accumulator += dt;
+    constexpr float kMaxAccumulator = kMaxAccumulatedTicks * kTickDt;
+    if (!std::isfinite(dt) || dt < 0.0f) dt = 0.0f;
+    const float available = accumulator + dt;
+    last_discarded_seconds = std::max(0.0f, available - kMaxAccumulator);
+    accumulator = std::min(available, kMaxAccumulator);
     int ticks = 0;
     while (accumulator >= kTickDt && ticks < kMaxTicksPerFrame) {
         accumulator -= kTickDt;

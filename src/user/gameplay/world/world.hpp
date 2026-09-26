@@ -56,7 +56,7 @@ struct MovingSurface {
     Vec3 last_position;        // position at the previous tick
     Vec3 displacement;         // position - last_position, written by World::AdvanceSurfaces
     Vec3 rider_velocity;       // velocity exposed to riders for stored-platform-velocity
-    float carry_storage_time = 0.0f;  // expiry window for rider stored velocity
+    float carry_storage_time = 0.10f; // OG tPlatformVelocityStorage
 };
 
 // Source-shaped query outputs consumed by player, camera, climb, and platform logic.

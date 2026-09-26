@@ -213,13 +213,13 @@ The N64 demake's movement is already a direct translation of OG Celeste64: `move
 
 **Depends on:** 3, 4
 **Unblocks:** none
-**Status: DONE** (2026-09-07) — Spec freeze pass: no constants were re-tuned. Docs updated: `docs/movement_spec.md` ledger gains items 10 (spring, OG-exact) and 11 (winding-independent climb grab gate); `docs/controller_spec.md` §10 gains the implemented input-layer section (device-owned virtual buttons/sticks, 0.10 s buffer + consume-once, no-deadzone default behind `move_deadzone`, unbuffered single-frame edges); `docs/og_port_gap_matrix.md` marks buffered virtual buttons / deadzoned virtual sticks / state machine / climb snap-up+cornering+ledge-assist DONE (out-of-scope rows stay open); `docs/physics_feel_acceptance.md` gains the 2026-09-07 validation record (environment Ares/libdragon, elf 440408, make test 58/58, probe 20/20) — the machine-verifiable subset recorded from device captures ([climb] START at real walls with Z, 0 without Z; climb item reworded: the demake is OG-parity UNLIMITED grip, no exhaustion), with the subjective feel items marked as pending human controller playtest and the freeze rule stated (any wrong-feeling value becomes a NEW increment). Final device validation `build/raw-baseline-inc5-final-20260907-192629.log`: BootMapPack SUCCEEDED, steady-state counters baseline-identical (near_batches=56/resident=13, no walking burst), [memory] total=5858072 used=5822064 free=36008 flat with all budget buckets under cap (pool_highwater=13, arena_peak=0), 0 [climb] START (no auto-latch), no exceptions.
+**Status: IMPLEMENTATION COMPLETE; human feel acceptance pending** (2026-09-07) — Spec freeze pass: no constants were re-tuned. Docs updated: `docs/movement_spec.md` ledger gains items 10 (spring, OG-exact) and 11 (winding-independent climb grab gate); `docs/controller_spec.md` §10 gains the implemented input-layer section (device-owned virtual buttons/sticks, 0.10 s buffer + consume-once, no-deadzone default behind `move_deadzone`, unbuffered single-frame edges); `docs/og_port_gap_matrix.md` marks buffered virtual buttons / deadzoned virtual sticks / state machine / climb snap-up+cornering+ledge-assist DONE (out-of-scope rows stay open); `docs/physics_feel_acceptance.md` gains the 2026-09-07 validation record (environment Ares/libdragon, elf 440408, make test 58/58, probe 20/20) — the machine-verifiable subset recorded from device captures ([climb] START at real walls with Z, 0 without Z; climb item reworded: the demake is OG-parity UNLIMITED grip, no exhaustion), with the subjective feel items marked as pending human controller playtest and the freeze rule stated (any wrong-feeling value becomes a NEW increment). Final device validation `build/raw-baseline-inc5-final-20260907-192629.log`: BootMapPack SUCCEEDED, steady-state counters baseline-identical (near_batches=56/resident=13, no walking burst), [memory] total=5858072 used=5822064 free=36008 flat with all budget buckets under cap (pool_highwater=13, arena_peak=0), 0 [climb] START (no auto-latch), no exceptions. The Inc 5 device checklist remains OPEN until human controller results are recorded.
 **Done criteria:** `make test` + `climb_bug_probe` + device `capture_baseline` all green; the manual feel checklist (`docs/physics_feel_acceptance.md`) recorded on device; `docs/og_port_gap_matrix.md` shows the movement-critical rows done; constants frozen.
 
 #### Files to touch
 
 ##### docs/movement_spec.md
-- What changes: record the spring constants + handler parity; note the winding-independent grab gate; confirm the deviation ledger (zoom, facing gate M2, mantle 2-tick, entry radius 5, waist-only climb popout, neutral walljump split) is current.
+- What changes: record the spring constants + handler parity; note the winding-independent grab gate; confirm the deviation ledger (zoom, facing gate M2, mantle 2-tick, entry radius 5, waist-only climb popout, then-current neutral walljump split) is current. The neutral walljump split was later removed for OG parity in `.plans/og-mover-overhaul/plan.md`'s 2026-09-25 follow-up.
 
 ##### docs/controller_spec.md
 - What changes: update the input-layer section (virtual device owns deadzone + buffer + consume-once; no-deadzone default behind a flag).
@@ -270,9 +270,30 @@ The N64 demake's movement is already a direct translation of OG Celeste64: `move
 - StrawbGet, Respawn/Dead, Bubble, Cassette, cutscene states — deferred (the research brief's Inc 4).
 - NPC interaction, breakable blocks, spike/DeathBlock overlap checks — deferred (the research brief's Inc 5 world-substrate half).
 - Moving-solid rider propagation (`AddPlatformVelocity` parity, clamps Z [0,180] / XY 300) — deferred (the research brief's Inc 5).
-- The ledge-avoid sweep (d=4) in `StNormalUpdate` — deferred (the research brief's Inc 5).
+- Resolved 2026-09-25 follow-up: grounded OG ledge-avoid sweep (d=4) now runs
+  in `StNormalUpdate`; `tests/feel_spec/ledge_smoke.cpp` asserts supported-side
+  steering, unchanged clear-path and wall-ahead movement, no-input stability,
+  and roomless fallback. This was previously deferred to the research brief's Inc 5.
 - Consolidating the controller's private `Approach`/`RotateToward` helper clones into shared math helpers — deferred unless Inc 2's diff stays small (the gap-matrix "angle/approach helpers: partial" row).
 - Presentation layer (dust, footstep audio, dash trails, hair color) — deferred (the research brief's Inc 6).
 - Camera `Lerp3(30,60,110,110,distance)` distance curve — deferred to a feel test; the current fixed offset stays.
-- The OG 0.35 move deadzone — not adopted by default; available behind the Inc 1 config flag for A/B.
+- The OG 0.35 move deadzone was initially deferred; see the current physics
+  follow-up below (it is now the default, with 0.0 retained for A/B).
 - Re-tuning any OG-exact constant — explicitly out of scope (the constants are frozen).
+
+## Follow-up: OG move deadzone restored for physics slop (2026-09-25)
+
+The later active goal explicitly asked to fix movement/control slop, reopening
+Inc 1's earlier default-0 choice. OG `ControlsConfig::Defaults.Move` sets a
+0.35 circular deadzone. With the demake's 0.0 default, tiny noise remained a
+nonzero move; `RelativeMoveInput` normalized it, and grounded `AnalogMagnitude`
+gave it at least a 30% run-speed target. `InputSystem::move_deadzone` now
+defaults to 0.35 while remaining configurable. A regression failed before the
+change at the default assertion; `locomotion_smoke` also passes raw 5/80 through
+the actual deadzone/controller-step composition and asserts zero velocity.
+Host suite passes 79/79; normal and isolated autoplay ROMs build. Fresh Ares
+autoplay capture `build/baseline-og-deadzone-20260925-100813.txt` passes runtime
+health and existing physics gates at ROM SHA-256
+`c4fa94ea8d936730da83fd6223fa3c65d9f57d7846555eccb261a29c54244a54`. That
+scripted path injects after physical input filtering, so low-stick hardware
+feel still requires live-controller confirmation.

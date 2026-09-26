@@ -68,7 +68,7 @@ inline Vec2 SampleStickAxis(int16_t stick_x, int16_t stick_y, float stick_max) {
 //
 // Each call to Poll() samples the joypad once and feeds the virtual states
 // (controls-physics-port Inc 1): the move stick gets a circular deadzone
-// (config, default 0) and the buttons get the OG VirtualButton press buffer
+// (OG default 0.35, configurable) and the buttons get the OG VirtualButton press buffer
 // (0.10 s for jump/dash, unbuffered for climb/pause) with consume-once edges.
 // Gameplay reads the results via the exposed virtual states; the scene builds
 // the PlayerInput snapshot from them each frame.
@@ -91,9 +91,9 @@ public:
     // consumer ReadCameraInput reads camera.Value().
     InputActionVec2 camera;
 
-    // Move deadzone (config; default 0 preserves the pre-overhaul feel; the
-    // OG 0.35 is available for A/B behind this field).
-    float move_deadzone = 0.0f;
+    // OG ControlsConfig::Move uses a 0.35 circular deadzone. Keep configurable
+    // for controller A/B, but default to OG so idle stick noise stays neutral.
+    float move_deadzone = 0.35f;
 
     // Deadzone applied to the c-stick for camera input. Pre-overhaul had no
     // deadzone on camera (pure digital C-buttons). Kept at 0 to match.
@@ -114,9 +114,14 @@ public:
     // Raw controller snapshot from the most recent Poll() — diagnostics only
     // (telemetry prints it so a stuck button bit is visible in Ares captures).
     struct RawSnapshot {
+        uint8_t style = 0;
+        uint16_t buttons_current = 0;
+        uint16_t buttons_held = 0;
         uint8_t z = 0;
         uint8_t l = 0;
         uint8_t r = 0;
+        int16_t stick_x = 0;
+        int16_t stick_y = 0;
         int16_t analog_l = 0;
         int16_t analog_r = 0;
         bool jump_down = false;

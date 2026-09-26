@@ -49,6 +49,38 @@ int main() {
         assert(jump.velocity.y > 9.0f);
     }
 
+    // --- Moving-platform rider: grounded surface ownership must be recorded,
+    //     then platform displacement carries rider and stored velocity feeds
+    //     the next jump. ---
+    {
+        Room room = BuildMovingPlatformFixtureRoom();
+        PlayerController controller;
+        PlayerState rider;
+        rider.position = {0.0f, 31.25f, 0.0f};
+        rider.grounded = true;
+        rider.contact.was_grounded = true;
+        const Vec3 camera_forward = {0.0f, 0.0f, 1.0f};
+        const PlayerInput idle{};
+
+        controller.Step(rider, idle, camera_forward, kDt, &room);
+        assert(rider.contact.ground_surface_id == 200);
+
+        room.moving_surfaces[1].position.x += 1.0f;
+        AdvanceMovingSurfaces(room, kDt);
+        controller.Step(rider, idle, camera_forward, kDt, &room);
+        assert(ApproxEq(rider.position.x, 1.0f));
+        assert(ApproxEq(rider.platform_carry.stored_velocity.x, 60.0f));
+        assert(rider.platform_carry.time_remaining > 0.0f);
+
+        AdvanceMovingSurfaces(room, kDt);
+        PlayerInput jump;
+        jump.jump_pressed = true;
+        jump.jump_held = true;
+        controller.Step(rider, jump, camera_forward, kDt, &room);
+        assert(ApproxEq(rider.velocity.x, 60.0f));
+        assert(rider.platform_carry.time_remaining == 0.0f);
+    }
+
     // --- Slope normal: QueryFloorSource returns the actual slope plane normal,
     //     not the default (+Y). ---
     {

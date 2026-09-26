@@ -14,6 +14,9 @@ public:
         Vec3 move_input;
         bool has_move_input = false;
         Vec3 dash_momentum = {};
+        // Dash enter applies OG's launch vector immediately. The transition
+        // cascade must not run the active dash/hitstop update on that frame.
+        bool dash_started_this_tick = false;
         // Set by StatePhase when a ledge-hop mantle fired this tick.
         bool mantle_triggered = false;
         // Set by StatePhase when a corner ease started this tick (Inc 5
@@ -30,6 +33,10 @@ public:
         float delta_seconds,
         const Room* room = nullptr
     ) const;
+
+    // Apply one already-advanced moving surface's rider displacement before
+    // this tick's input/state update, matching OG Solid.MoveTo ordering.
+    void MovingSurfacePhase(PlayerState& state, const Room& room) const;
 
     StepContext TimerInputPhase(
         PlayerState& state,

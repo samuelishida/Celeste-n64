@@ -15,12 +15,14 @@ int main() {
     input.dash_pressed = true;
     controller.Step(dash, input, {0.0f, 0.0f, 1.0f}, dt);
     assert(dash.locomotion_state == LocomotionState::Dash);
-    assert(dash.velocity.x == 0.0f && dash.velocity.y == 0.0f);
+    const float air_dash_speed = 140.0f / std::sqrt(1.16f);
+    assert(std::fabs(dash.velocity.x - air_dash_speed) < 0.02f);
+    assert(std::fabs(dash.velocity.y - air_dash_speed * 0.4f) < 0.02f);
     controller.Step(dash, {}, {0.0f, 0.0f, 1.0f}, dt);
     controller.Step(dash, {}, {0.0f, 0.0f, 1.0f}, dt);
     controller.Step(dash, {}, {0.0f, 0.0f, 1.0f}, dt);
     assert(dash.velocity.x > 0.0f);
-    assert(std::fabs(dash.velocity.y) < 0.001f);
+    assert(dash.velocity.y > 0.0f);
 
     PlayerState long_jump;
     long_jump.grounded = true;

@@ -12,6 +12,7 @@ struct CameraState {
     Vec3 target_forward = {0.0f, 0.0f, 1.0f};
     float target_distance = 0.5f;
     float fov_multiplier = 1.0f;
+    float render_near_plane = 5.0f;
     bool initialized = false;
 };
 
@@ -38,7 +39,8 @@ struct CameraConfig {
     float fov_speed_min = 76.8f;    // max_speed * 1.2
     float fov_speed_max = 120.0f;
     float fov_max_multiplier = 1.2f;
-    float near_plane = 5.0f;        // used for wall collision offset
+    float near_plane = 5.0f;        // normal render near plane
+    float obstructed_near_plane = 0.5f;  // retain player mesh when boom is shortened
 };
 
 class CameraController {

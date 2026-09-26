@@ -43,6 +43,9 @@ run_cpp() {
         return 1
     fi
     echo "PASS: $name"
+    if [ "$name" = "real_map_slope_smoke" ]; then
+        sed -n '/^\[real-map-slope\]/p' "$TMP/$name.run.log"
+    fi
     PASSES=$((PASSES+1))
 }
 
@@ -81,6 +84,7 @@ run_cpp renderer_memory_contract tests/renderer_memory_contract.cpp
 run_cpp render_counters_contract tests/render_counters_contract.cpp
 run_cpp directional_lod_contract tests/directional_lod_contract.cpp
 run_cpp input_system_smoke tests/input_system_smoke.cpp
+run_cpp input_trace_policy_smoke tests/input_trace_policy_smoke.cpp
 # controls-physics-port Inc 1: virtual input device (deadzone + press buffer +
 # consume-once) — the layer the InputSystem now feeds.
 run_cpp input_compat_smoke tests/input_compat_smoke.cpp
@@ -150,6 +154,7 @@ run_cpp motor_wall_rest_smoke tests/motor_wall_rest_smoke.cpp \
 #  wall-rest equilibrium). Inc 2 wired it into gameplay; Inc 3 relies on it.
 MOVE_LINK=(
     src/user/gameplay/player/player_movement.cpp
+    src/user/gameplay/player/player_controller.cpp
     src/user/gameplay/runtime/math.cpp
     src/user/gameplay/world/world.cpp
     src/user/gameplay/physics/coll_mesh.cpp
@@ -202,6 +207,11 @@ run_cpp climb_bug_probe tests/climb_bug_probe.cpp "${GAMEPLAY_LINK[@]}"
 
 # og-mover-overhaul Inc 4: Skidding state + dash steering + dash input buffer.
 run_cpp skid_smoke tests/skid_smoke.cpp "${GAMEPLAY_LINK[@]}"
+run_cpp dash_jump_smoke tests/feel_spec/dash_jump_smoke.cpp "${GAMEPLAY_LINK[@]}"
+run_cpp dash_smoke tests/feel_spec/dash_smoke.cpp "${GAMEPLAY_LINK[@]}"
+run_cpp coyote_edge_smoke tests/feel_spec/coyote_edge_smoke.cpp "${GAMEPLAY_LINK[@]}"
+run_cpp locomotion_smoke tests/feel_spec/locomotion_smoke.cpp "${GAMEPLAY_LINK[@]}"
+run_cpp slope_smoke tests/feel_spec/slope_smoke.cpp "${GAMEPLAY_LINK[@]}"
 
 # review C5: previously unwired contracts + feel_spec tests — now in the
 # runner so their constants assertions are enforced on every suite run.
@@ -246,6 +256,52 @@ if [ -f "$STAGING/forsyken-city.mappack" ]; then
     # memory-opt Inc 2: load-path plumbing (flag-off/fopen path parses staging).
     run_cpp mappack_compression_contract tests/mappack_compression_contract.cpp \
         src/user/gameplay/world/mappack_loader.cpp -- "$STAGING/forsyken-city.mappack"
+    # Current movement stack against real geometry: no-teleport Start-to-wall
+    # approach, climb, mantle, and per-tick waist/head collision clearance.
+    run_cpp real_map_guided_climb_smoke tests/real_map_guided_climb_smoke.cpp \
+        src/user/gameplay/player/player_movement.cpp \
+        src/user/gameplay/player/player_controller.cpp \
+        src/user/gameplay/runtime/math.cpp \
+        src/user/gameplay/world/world.cpp \
+        src/user/gameplay/world/mappack_loader.cpp \
+        src/user/gameplay/physics/coll_mesh.cpp \
+        src/user/gameplay/physics/geom.cpp -- \
+        "$STAGING/forsyken-city.mappack" "$STAGING/forsyken-city.colmesh"
+    # Current slope-speed implementation on stable walkable geometry selected
+    # from the baked map, in both travel directions and against flat baseline.
+    run_cpp real_map_slope_smoke tests/real_map_slope_smoke.cpp \
+        src/user/gameplay/player/player_movement.cpp \
+        src/user/gameplay/player/player_controller.cpp \
+        src/user/gameplay/runtime/math.cpp \
+        src/user/gameplay/world/world.cpp \
+        src/user/gameplay/world/mappack_loader.cpp \
+        src/user/gameplay/physics/coll_mesh.cpp \
+        src/user/gameplay/physics/geom.cpp -- \
+        "$STAGING/forsyken-city.mappack" "$STAGING/forsyken-city.colmesh"
+    # Finite-edge corner route: reject a back-side anchor; keep each climb step
+    # bounded and release cleanly when adjoining front-side wall is unreachable.
+    run_cpp real_map_inner_corner_clearance_smoke \
+        tests/real_map_inner_corner_clearance_smoke.cpp \
+        src/user/gameplay/player/player_movement.cpp \
+        src/user/gameplay/player/player_controller.cpp \
+        src/user/gameplay/runtime/math.cpp \
+        src/user/gameplay/world/world.cpp \
+        src/user/gameplay/world/mappack_loader.cpp \
+        src/user/gameplay/physics/coll_mesh.cpp \
+        src/user/gameplay/physics/geom.cpp -- \
+        "$STAGING/forsyken-city.mappack" "$STAGING/forsyken-city.colmesh"
+    # Real-map corner traversal: approach on the old wall, ease onto the
+    # adopted wall, and gate anchor continuity, grip retention and model gap.
+    run_cpp real_map_corner_traverse_smoke \
+        tests/real_map_corner_traverse_smoke.cpp \
+        src/user/gameplay/player/player_movement.cpp \
+        src/user/gameplay/player/player_controller.cpp \
+        src/user/gameplay/runtime/math.cpp \
+        src/user/gameplay/world/world.cpp \
+        src/user/gameplay/world/mappack_loader.cpp \
+        src/user/gameplay/physics/coll_mesh.cpp \
+        src/user/gameplay/physics/geom.cpp -- \
+        "$STAGING/forsyken-city.mappack" "$STAGING/forsyken-city.colmesh"
 else
     echo "SKIP: Pattern C tests (no baked fixture at $STAGING; run 'make bake-forsaken-city')"
 fi
@@ -257,6 +313,7 @@ run_py render_pipeline_contract tests/render_pipeline_contract.py
 run_py distant_lod_contract tests/distant_lod_contract.py
 run_py distant_decimation_contract tests/distant_decimation_contract.py
 run_py dlod_format_contract tests/dlod_format_contract.py
+run_py physics_capture_verifier_smoke tests/physics_capture_verifier_smoke.py
 
 echo
 echo "=== $PASSES passed, $FAILURES failed ==="

@@ -101,10 +101,12 @@ int main() {
     // ── Part 1: corner adopt must never leave residual penetration. ──
     PlayerInput in;
     in.climb_held = true;
-    in.move = {0.0f, 1.0f};  // climb up + a little sideways toward the corner
-    // Climb up-and-toward-corner for enough ticks to traverse toward z=20.
+    in.move = {};  // establish grip at rest; then climb input may be tangential
+    // Climb up after entry; tangent movement must not be mistaken for entry
+    // input directed into the wall plane.
     bool entered = false, clipped = false;
     for (int i = 0; i < 120; ++i) {
+        if (entered) in.move = {0.0f, 1.0f};
         PlayerController::StepContext ctx =
             controller.TimerInputPhase(state, in, {0.0f, 0.0f, -1.0f}, kDt);
         controller.StatePhase(state, in, ctx, kDt, &room);
@@ -182,11 +184,14 @@ int main() {
                    dash_state.position.z);
             return 1;
         }
-        // Rest must be at radius 3 from wall B's plane (z=20) on the -z side
-        // the player came from: center z ~ 17.
-        if (dash_state.position.z < 15.0f || dash_state.position.z > 19.0f) {
-            printf("climb_no_clip: FAIL dash rest z=%.2f not at radius 3 of wall B\n",
-                   dash_state.position.z);
+        // Normal-state body uses rendered-player clearance; climb-only sweep
+        // retains the OG 3-unit anchor. Dash exits climb, so it must rest at
+        // the gameplay wall radius on the -z side of wall B.
+        const float rest_distance = 20.0f - dash_state.position.z;
+        const float expected_radius = controller.Mover().Config().wall_radius;
+        if (std::fabs(rest_distance - expected_radius) > 0.5f) {
+            printf("climb_no_clip: FAIL dash rest distance %.2f, expect %.2f\n",
+                   rest_distance, expected_radius);
             return 1;
         }
     }

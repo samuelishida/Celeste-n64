@@ -17,6 +17,18 @@ int main() {
         std::fprintf(stderr, "FAIL: kVerboseFrameLogging must default to false\n");
         return 1;
     }
+    if (kDebugPhysicsAutoplay) {
+        std::fprintf(stderr, "FAIL: kDebugPhysicsAutoplay must default to false\n");
+        return 1;
+    }
+    if (kDebugAutoWalk) {
+        std::fprintf(stderr, "FAIL: kDebugAutoWalk must default to false\n");
+        return 1;
+    }
+    if (kDebugInputRecording) {
+        std::fprintf(stderr, "FAIL: kDebugInputRecording must default to false\n");
+        return 1;
+    }
     // Backface culling must stay OFF by default: the og-baked Forsaken City
     // map loses floor textures with culling enabled (device-verified fix,
     // 2026-08-24 backcull baselines). Flip this contract + the flag together

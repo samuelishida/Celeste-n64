@@ -38,25 +38,36 @@ struct PlayerInput {
     VirtualButtonState* jump_device = nullptr;
     VirtualButtonState* dash_device = nullptr;
 
+    bool JumpPressAvailable() const {
+        if (!jump_pressed || jump_press_consumed) return false;
+        // Render-frame snapshots are copied into each fixed physics tick.
+        // Their local consumed flags diverge, so shared device state is
+        // authoritative across sibling tick snapshots.
+        return jump_device == nullptr ||
+               (jump_device->pressed && !jump_device->consumed);
+    }
+
+    bool DashPressAvailable() const {
+        if (!dash_pressed || dash_press_consumed) return false;
+        return dash_device == nullptr ||
+               (dash_device->pressed && !dash_device->consumed);
+    }
+
     // Claim the jump press edge. Returns true if a press was available and
     // not already claimed; afterwards jump_pressed() reads false.
     bool ConsumeJumpPress() const {
-        if (jump_pressed && !jump_press_consumed) {
-            jump_press_consumed = true;
-            if (jump_device != nullptr) ConsumePress(*jump_device);
-            return true;
-        }
-        return false;
+        if (!JumpPressAvailable()) return false;
+        if (jump_device != nullptr && !ConsumePress(*jump_device)) return false;
+        jump_press_consumed = true;
+        return true;
     }
     // Claim the dash press edge. Returns true if a press was available and
     // not already claimed; afterwards dash_pressed() reads false.
     bool ConsumeDashPress() const {
-        if (dash_pressed && !dash_press_consumed) {
-            dash_press_consumed = true;
-            if (dash_device != nullptr) ConsumePress(*dash_device);
-            return true;
-        }
-        return false;
+        if (!DashPressAvailable()) return false;
+        if (dash_device != nullptr && !ConsumePress(*dash_device)) return false;
+        dash_press_consumed = true;
+        return true;
     }
 };
 
@@ -79,6 +90,7 @@ enum class LocomotionState : uint8_t {
 struct ContactState {
     Vec3 ground_normal = {0.0f, 1.0f, 0.0f};
     float coyote_height = 0.0f;
+    int ground_surface_id = -1;
     Vec3 previous_velocity;
     float ground_snap_cooldown_remaining = 0.0f;
     bool was_grounded = false;
@@ -116,6 +128,8 @@ struct ClimbState {
     // while > 0 the ease branch REPLACES normal wall movement (OG structure).
     Vec3 corner_from{};
     Vec3 corner_to{};
+    Vec3 corner_normal_from{};
+    Vec3 corner_normal_to{};
     Vec3 corner_facing_from{};
     Vec3 corner_facing_to{};
     // Travel origin for OG's "> 2 units traveled → force a corner ease"
@@ -177,6 +191,9 @@ struct PlayerState {
 
     // Collision probes (set by caller before Step)
     bool wall_contact = false;
+    // Last MoveService tick resolved against an overhead solid. Retained for
+    // physics telemetry and cleared by the next non-climb Popout pass.
+    bool ceiling_contact = false;
     // Wall normal from the most recent wall contact (set by motor or test fixture).
     Vec3 wall_normal = {0.0f, 0.0f, 0.0f};
 

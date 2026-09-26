@@ -329,17 +329,16 @@ Normalize it into:
 
 with a dead zone.
 
-Recommended:
+Light N64-specific A/B candidate:
 
 ```text
 deadzone = 8/80 approximately
 ```
 
-The exact value should be configurable — the demake's default is NO deadzone
-(virtual-input Inc 1, see below): the N64 stick is coarse and the pre-feel-test
-target kept the raw mapping. `InputSystem::move_deadzone (default 0.0f)` holds
-it; OG's 0.35 circular deadzone is available behind that flag for a future
-A/B feel test (do NOT re-tune silently — the spec-freeze rule).
+The value is configurable. Production `InputSystem::move_deadzone` defaults to
+`0.35`, matching OG `ControlsConfig::Defaults.Move` and suppressing the tiny
+nonzero input that previously became a 30% run target. Use `0.10` for a lighter
+N64-specific A/B profile or `0.0` only for an explicit raw-input comparison.
 
 ## Input layer (controls-physics-port Inc 1, implemented)
 
@@ -355,7 +354,8 @@ A/B feel test (do NOT re-tune silently — the spec-freeze rule).
   were DELETED — buffering lives in the device now.
 - Climb/pause are UNBUFFERED single-frame edges (0.0 s buffer); the
   unbuffered branch was fixed so they don't go sticky.
-- `move_deadzone` is a plain config field (default 0.0, OG 0.35 behind it).
+- `move_deadzone` is a plain config field (default 0.35, matching OG; 0.0 is
+  available for explicit A/B tests).
 - `virtual_input` is header-inline (Pattern A); `virtual_input.cpp` deleted.
 
 Input structure (implemented):
@@ -609,6 +609,17 @@ Air control is weaker than ground movement.
 
 When airborne:
 
+- With directional input, target speed remains full `MAX_SPEED`; the OG
+  analog-magnitude remap applies to grounded movement only.
+- Air acceleration scales from `Dot(normalizedInput, targetFacing)`: `0.5x`
+  when opposite, `1.0x` when aligned. Do not rotate or overwrite `targetFacing`
+  in this branch.
+- Use `PAST_MAX_DECEL` only when speed is at least `MAX_SPEED` and normalized
+  input points along velocity with dot product `>= 0.7`. In that branch, reverse
+  the facing map (`1.0x` opposite → `0.5x` aligned) to preserve excess speed.
+- With no movement input (or during `tNoMove`), horizontal velocity approaches
+  zero using `FRICTION * AIR_FRICTION_MULT` (`0.1 × 800 = 80`).
+
 ```text
 acceleration = ACCELERATION
 ```
@@ -644,6 +655,8 @@ Air friction:
 
 ```text
 AIR_FRICTION_MULT = 0.1
+AIR_ACCEL_MULT_MIN = 0.5
+AIR_ACCEL_MULT_MAX = 1.0
 ```
 
 The original implementation deliberately makes air friction much weaker than ground friction.
@@ -1621,23 +1634,18 @@ void Player_AirMovement(
 
     Vec2Fx velocity = p->velocity.xy;
 
-    Fixed accel = ACCELERATION;
+    bool pastMax =
+        LengthSquared(velocity) >= MAX_SPEED * MAX_SPEED &&
+        Dot(Normalize(input), Normalize(velocity)) >= 0.7;
 
-    Fixed facingDot =
-        Dot(
-            Normalize(input),
-            p->targetFacing
-        );
+    Fixed facingDot = Clamp(
+        Dot(Normalize(input), p->targetFacing), -1, 1);
 
-    Fixed airMultiplier =
-        Map(
-            facingDot,
-            -1,
-            1,
-            AIR_ACCEL_MULT_MIN,
-            AIR_ACCEL_MULT_MAX
-        );
+    Fixed airMultiplier = pastMax
+        ? Map(facingDot, -1, 1, AIR_ACCEL_MULT_MAX, AIR_ACCEL_MULT_MIN)
+        : Map(facingDot, -1, 1, AIR_ACCEL_MULT_MIN, AIR_ACCEL_MULT_MAX);
 
+    Fixed accel = pastMax ? PAST_MAX_DECEL : ACCELERATION;
     accel *= airMultiplier;
 
     ApproachVector(

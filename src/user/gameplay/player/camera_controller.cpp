@@ -119,6 +119,7 @@ void CameraController::Reset(CameraState& camera, const Vec3& player_position) {
     camera.target = DesiredLookAt(camera, config_);
     camera.position = DesiredPosition(camera, config_);
     camera.fov_multiplier = 1.0f;
+    camera.render_near_plane = config_.near_plane;
     camera.initialized = true;
 }
 
@@ -217,65 +218,16 @@ void CameraController::Step(
     const Vec3 desired_look_at = DesiredLookAt(camera, config_);
     Vec3 desired_position = DesiredPosition(camera, config_);
 
-    // --- Wall collision (OG: SolidRayCast from lookAt toward camera pos) ---
+    bool camera_obstructed = false;
     if (room != nullptr) {
-        constexpr float kCameraSkin = 0.5f;
         constexpr float kCeilingProbe = 5.0f;
-        const Vec3 diff = {
-            desired_position.x - desired_look_at.x,
-            desired_position.y - desired_look_at.y,
-            desired_position.z - desired_look_at.z,
-        };
-        float distance = std::sqrt(
-            (diff.x * diff.x) + (diff.y * diff.y) + (diff.z * diff.z));
-
-        if (distance > 0.0001f && std::isfinite(distance)) {
-            const Vec3 direction = {diff.x / distance, diff.y / distance, diff.z / distance};
-
-            // OG: reduce distance by near plane to account for near-plane cutoff.
-            if (distance > config_.near_plane + 1.0f) {
-                distance -= config_.near_plane;
-            }
-
-            const GroundHit obstruction = RaycastRoomSource(
-                *room, desired_look_at, direction, distance, BackfacePolicy::Ignore);
-            if (obstruction.hit) {
-                desired_position = {
-                    obstruction.point.x + (obstruction.normal.x * kCameraSkin),
-                    obstruction.point.y + (obstruction.normal.y * kCameraSkin),
-                    obstruction.point.z + (obstruction.normal.z * kCameraSkin),
-                };
-            }
-        }
-
-        // Push down from ceilings (OG: SolidRayCast upward from camera pos).
+        // Keep the unconstrained boom target; collision is applied after the
+        // smooth follow below so an interpolated camera point cannot pass
+        // through a wall that the endpoint ray would miss.
         const CeilingHit ceiling = QueryCeilingSource(*room, desired_position, kCeilingProbe);
         if (ceiling.hit) {
             desired_position.y = ceiling.point.y - kCeilingProbe;
-        }
-    }
-
-    // Inc 6: clamp the camera's minimum distance from the player so the cube
-    // (centered on the player, corner half-diagonal ~12.25) can never enter the
-    // near plane (5.0) even when wall/ceiling collision pushes the camera into
-    // the cube's extent. Without this, the wall-push case keeps clipping
-    // regardless of the near plane value. If the clamp moves the camera back
-    // into a wall (tight room), the camera sits inside geometry — accepted
-    // (same artifact class as today); tune the constant on device.
-    {
-        constexpr float kCameraMinDistance = 18.0f;
-        const Vec3 to_cam = {
-            desired_position.x - player_position.x,
-            desired_position.y - player_position.y,
-            desired_position.z - player_position.z,
-        };
-        const float cam_dist = std::sqrt(
-            to_cam.x * to_cam.x + to_cam.y * to_cam.y + to_cam.z * to_cam.z);
-        if (cam_dist > 0.0001f && cam_dist < kCameraMinDistance) {
-            const float scale = kCameraMinDistance / cam_dist;
-            desired_position.x = player_position.x + to_cam.x * scale;
-            desired_position.y = player_position.y + to_cam.y * scale;
-            desired_position.z = player_position.z + to_cam.z * scale;
+            camera_obstructed = true;
         }
     }
 
@@ -290,10 +242,57 @@ void CameraController::Step(
     const float follow_decay =
         input.zoom != 0.0f ? 0.0001f : config_.camera_follow_decay;
     const float alpha = FollowAlpha(follow_decay, delta_seconds);
+    Vec3 resolved_position = {
+        camera.position.x + (desired_position.x - camera.position.x) * alpha,
+        camera.position.y + (desired_position.y - camera.position.y) * alpha,
+        camera.position.z + (desired_position.z - camera.position.z) * alpha,
+    };
 
-    camera.position.x += (desired_position.x - camera.position.x) * alpha;
-    camera.position.y += (desired_position.y - camera.position.y) * alpha;
-    camera.position.z += (desired_position.z - camera.position.z) * alpha;
+    if (room != nullptr) {
+        constexpr float kCameraSkin = 0.5f;
+        constexpr float kCeilingProbe = 5.0f;
+
+        // Apply ceiling correction to the actual smoothed point, not only the
+        // target. Moving the camera vertically after the wall test could put
+        // it through a second nearby face.
+        const CeilingHit ceiling = QueryCeilingSource(
+            *room, resolved_position, kCeilingProbe);
+        if (ceiling.hit) {
+            resolved_position.y = ceiling.point.y - kCeilingProbe;
+            camera_obstructed = true;
+        }
+
+        const Vec3 diff = {
+            resolved_position.x - desired_look_at.x,
+            resolved_position.y - desired_look_at.y,
+            resolved_position.z - desired_look_at.z,
+        };
+        const float distance = std::sqrt(
+            diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
+        if (distance > 0.0001f && std::isfinite(distance)) {
+            const Vec3 direction = {
+                diff.x / distance, diff.y / distance, diff.z / distance};
+            const GroundHit obstruction = RaycastRoomSource(
+                *room, desired_look_at, direction, distance,
+                BackfacePolicy::Ignore);
+            if (obstruction.hit) {
+                // Offset back toward the ray origin, not along raw triangle
+                // winding. This guarantees the camera stays on the player's
+                // side of the obstructing face.
+                resolved_position = {
+                    obstruction.point.x - direction.x * kCameraSkin,
+                    obstruction.point.y - direction.y * kCameraSkin,
+                    obstruction.point.z - direction.z * kCameraSkin,
+                };
+                camera_obstructed = true;
+            }
+        }
+    }
+
+    camera.position = resolved_position;
+    camera.render_near_plane = camera_obstructed
+        ? config_.obstructed_near_plane
+        : config_.near_plane;
     camera.target = desired_look_at;
 
     // --- Dynamic FOV (OG: ClampedMap + Approach) ---

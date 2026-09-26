@@ -12,6 +12,7 @@
 #include <t3d/t3dmodel.h>
 
 #include "gameplay/runtime/timing.hpp"
+#include "gameplay/runtime/math.hpp"
 #include "gameplay/debug_flags.hpp"
 #include "gameplay/player/camera_controller.hpp"
 #include "gameplay/world/collectible.hpp"
@@ -20,11 +21,13 @@
 #include "gameplay/player/player_controller.hpp"
 #include "gameplay/player/player_movement.hpp"
 #include "gameplay/input/input_system.hpp"
+#include "gameplay/input/input_trace_policy.hpp"
 #include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/open_world_renderer.hpp"
 #include "gameplay/render/lod_math.hpp"
 #include "gameplay/render/material_catalog.hpp"
 #include "gameplay/render/model.hpp"
+#include "gameplay/render/player_model_clearance.hpp"
 #include "gameplay/render/texture.hpp"
 #include "gameplay/world/actor_world.hpp"
 #include "gameplay/world/entity_dispatch.hpp"
@@ -241,6 +244,78 @@ struct GameplayScene::Impl {
     // Debug auto-walk bookkeeping: fixed-distance walk then stop.
     Vec3 autowalk_start_ = {0.0f, 0.0f, 0.0f};
     bool autowalk_recording_ = false;
+    uint32_t physics_autoplay_tick_ = 0;
+    uint32_t input_record_frame_ = 0;
+    uint32_t input_record_tick_ = 0;
+    int input_record_last_stick_x_bucket_ = 0;
+    int input_record_last_stick_y_bucket_ = 0;
+    int input_record_last_analog_l_bucket_ = 0;
+    int input_record_last_analog_r_bucket_ = 0;
+    int input_record_last_ground_nx_bucket_ = 0;
+    int input_record_last_ground_ny_bucket_ = 0;
+    int input_record_last_ground_nz_bucket_ = 0;
+    int input_record_last_climb_nx_bucket_ = 0;
+    int input_record_last_climb_ny_bucket_ = 0;
+    int input_record_last_climb_nz_bucket_ = 0;
+    int input_record_last_ground_surface_id_ = -1;
+    int input_record_last_grip_face_id_ = -1;
+    uint16_t input_record_last_buttons_ = 0;
+    uint8_t input_record_last_state_ = 0;
+    bool input_record_last_grounded_ = false;
+    bool input_record_last_was_grounded_ = false;
+    bool input_record_last_wall_ = false;
+    bool input_record_last_ceiling_ = false;
+    bool input_record_last_snap_active_ = false;
+    bool input_record_has_previous_ = false;
+    bool physics_autoplay_target_found_ = false;
+    bool physics_autoplay_climb_started_ = false;
+    bool physics_autoplay_climb_entry_recorded_ = false;
+    bool physics_autoplay_climb_entry_grounded_ = false;
+    bool physics_autoplay_climb_first_step_sampled_ = false;
+    bool physics_autoplay_entry_attempted_ = false;
+    bool physics_autoplay_walljump_attempted_ = false;
+    bool physics_autoplay_walljumped_ = false;
+    float physics_autoplay_walljump_speed_xy_ = 0.0f;
+    float physics_autoplay_walljump_speed_y_ = 0.0f;
+    float physics_autoplay_walljump_outward_speed_ = 0.0f;
+    bool physics_autoplay_mantled_ = false;
+    bool physics_autoplay_corner_seen_ = false;
+    bool physics_autoplay_corner_arrived_ = false;
+    Vec3 physics_autoplay_corner_target_normal_{};
+    uint32_t physics_autoplay_corner_events_ = 0;
+    uint32_t physics_autoplay_corner_stable_ticks_ = 0;
+    float physics_autoplay_corner_max_step_ = 0.0f;
+    bool physics_autoplay_result_emitted_ = false;
+    uint32_t physics_autoplay_approach_ticks_ = 0;
+    uint32_t physics_autoplay_climb_ticks_ = 0;
+    uint32_t physics_autoplay_clearance_samples_ = 0;
+    uint32_t physics_autoplay_clearance_violations_ = 0;
+    float physics_autoplay_min_model_gap_ = 1.0e9f;
+    Vec3 physics_autoplay_run_direction_{};
+    Vec3 physics_autoplay_dash_start_{};
+    bool physics_autoplay_dash_launch_recorded_ = false;
+    bool physics_autoplay_dash_airborne_ = false;
+    float physics_autoplay_dash_launch_speed_ = 0.0f;
+    float physics_autoplay_dash_launch_vy_ = 0.0f;
+    float physics_autoplay_run_peak_speed_ = 0.0f;
+    float physics_autoplay_brake_min_speed_ = 1.0e9f;
+    float physics_autoplay_reverse_speed_ = 0.0f;
+    float physics_autoplay_jump_start_y_ = 0.0f;
+    float physics_autoplay_jump_peak_y_ = -1.0e9f;
+    float physics_autoplay_dash_distance_ = 0.0f;
+    float physics_autoplay_air_steer_start_axis_speed_ = 0.0f;
+    float physics_autoplay_air_steer_end_axis_speed_ = 0.0f;
+    float physics_autoplay_air_release_start_speed_ = 0.0f;
+    float physics_autoplay_air_release_min_speed_ = 1.0e9f;
+    bool physics_autoplay_air_window_grounded_ = false;
+    float physics_autoplay_target_start_gap_ = 0.0f;
+    float physics_autoplay_entry_gap_ = 1.0e9f;
+    float physics_autoplay_climb_entry_y_ = 0.0f;
+    float physics_autoplay_climb_first_step_dy_ = 0.0f;
+    float physics_autoplay_climb_first_step_snap_cooldown_ = 0.0f;
+    Vec3 physics_autoplay_climb_target_point_{};
+    Vec3 physics_autoplay_climb_target_normal_{};
+    Vec3 physics_autoplay_approach_direction_{};
     // Material catalog for the textured near pass (Inc 5). Loaded from the
     // map-pack's `.manifest`; owned by this Impl.
     MaterialCatalog material_catalog_;
@@ -943,6 +1018,7 @@ void GameplayScene::Update(float delta_seconds) {
 
     // Fixed-step physics loop.
     const int n_ticks = impl_->fixed_step.BeginFrame(delta_seconds);
+    const uint32_t input_record_frame = impl_->input_record_frame_++;
     // Inc 1 / D5: per-frame serial debugf is gated behind kVerboseFrameLogging
     // (default false) — USB output blocks the RSP and is a hidden per-frame
     // cost. Boot/init logs and the profiler report stay ungated.
@@ -971,27 +1047,865 @@ void GameplayScene::Update(float delta_seconds) {
     bool did_respawn = false;
 
     for (int tick = 0; tick < n_ticks; ++tick) {
+        PlayerInput tick_input = input;
+        const char* physics_phase = "live";
+        uint32_t physics_tick = 0;
+        if (kDebugPhysicsAutoplay) {
+            physics_tick = impl_->physics_autoplay_tick_++;
+            tick_input = {};
+            const auto WorldToCameraMove = [&](const Vec3& direction) {
+                const Vec3 forward = NormalizeXZ(camera_forward, direction);
+                const Vec3 right = {forward.z, 0.0f, -forward.x};
+                return Vec2{
+                    direction.x * right.x + direction.z * right.z,
+                    direction.x * forward.x + direction.z * forward.z,
+                };
+            };
+            if (physics_tick < 60) {
+                physics_phase = "idle";
+            } else if (physics_tick < 84) {
+                physics_phase = "run";
+                tick_input.move = {0.0f, 1.0f};
+            } else if (physics_tick < 100) {
+                physics_phase = "brake";
+            } else if (physics_tick < 124) {
+                physics_phase = "reverse";
+                tick_input.move = {0.0f, -1.0f};
+            } else if (physics_tick < 150) {
+                physics_phase = "brake";
+            } else if (physics_tick == 150) {
+                physics_phase = "jump-press";
+                tick_input.move = {0.0f, 1.0f};
+                tick_input.jump_pressed = true;
+                tick_input.jump_held = true;
+                impl_->physics_autoplay_jump_start_y_ = impl_->player.position.y;
+                impl_->physics_autoplay_jump_peak_y_ = impl_->player.position.y;
+            } else if (physics_tick < 170) {
+                physics_phase = "jump-hold";
+                tick_input.move = {0.0f, 1.0f};
+                tick_input.jump_held = true;
+            } else if (physics_tick < 176) {
+                physics_phase = "air-steer";
+                tick_input.move = {1.0f, 0.0f};
+            } else if (physics_tick < 180) {
+                physics_phase = "air-release";
+            } else if (physics_tick == 180) {
+                physics_phase = "dash-press";
+                tick_input.move = {1.0f, 0.0f};
+                tick_input.dash_pressed = true;
+                impl_->physics_autoplay_dash_start_ = impl_->player.position;
+            } else if (physics_tick < 200) {
+                physics_phase = "dash-steer";
+                tick_input.move = {1.0f, 0.0f};
+            } else if (physics_tick < 300) {
+                physics_phase = "recover";
+            } else if (physics_tick == 300) {
+                physics_phase = "climb-entry";
+                const Vec3 waist = {
+                    impl_->player.position.x,
+                    impl_->player.position.y - impl_->movement_config.player_half_height +
+                        impl_->movement_config.climb_waist_offset,
+                    impl_->player.position.z,
+                };
+                WallHit wall{};
+                Vec3 wall_direction{};
+                float wall_search_distance = 0.0f;
+                float wall_supported_height = 0.0f;
+                int wall_height_band = 0;
+                int short_wall_rejections = 0;
+                float maximum_supported_height = 0.0f;
+                float maximum_supported_by_band[5] = {};
+                if (kDebugPhysicsAutoplayCorner) {
+                    // Match the no-teleport host route: approach the real
+                    // vertical face at (x=10,z=38.4), then traverse toward its
+                    // shared edge. Query the baked collision mesh at the
+                    // intended waist; never assign player.position here.
+                    constexpr float kCornerApproachX = 10.0f;
+                    constexpr float kCornerFaceZ = 38.4f;
+                    const Vec3 probe = {
+                        kCornerApproachX, waist.y,
+                        kCornerFaceZ + impl_->movement_config.climb_check_dist,
+                    };
+                    wall = QueryClimbWall(
+                        impl_->room, probe,
+                        impl_->movement_config.climb_check_dist,
+                        {0.0f, 0.0f, 1.0f});
+                    if (wall.hit && wall.plane_normal.z > 0.8f) {
+                        wall_direction = NormalizeXZ(
+                            {probe.x - waist.x, 0.0f, probe.z - waist.z});
+                        const float dx = probe.x - waist.x;
+                        const float dz = probe.z - waist.z;
+                        wall_search_distance = std::sqrt(dx * dx + dz * dz);
+                        for (float height = 3.0f; height <= 48.0f;
+                             height += 3.0f) {
+                            const WallHit above = QueryClimbWall(
+                                impl_->room,
+                                {wall.point.x, wall.point.y + height,
+                                 wall.point.z},
+                                impl_->movement_config.climb_check_dist,
+                                {0.0f, 0.0f, 1.0f});
+                            const float alignment = DotXZ(
+                                above.plane_normal, wall.plane_normal);
+                            if (!above.hit || alignment < 0.8f) break;
+                            wall_supported_height = height;
+                        }
+                        wall_height_band = 0;
+                    } else {
+                        wall = {};
+                    }
+                } else {
+                    constexpr float kTau = 6.28318530717958647692f;
+                    constexpr int kDirectionSamples = 16;
+                    constexpr float kHeightOffsets[] = {0.0f, 4.0f, -4.0f, 8.0f, -8.0f};
+                    for (float distance = 2.0f; distance <= 120.0f && !wall.hit;
+                         distance += 4.0f) {
+                        for (int band = 0; band < 5 && !wall.hit; ++band) {
+                            for (int sample = 0; sample < kDirectionSamples && !wall.hit;
+                                 ++sample) {
+                                const float angle = kTau * static_cast<float>(sample) /
+                                                    static_cast<float>(kDirectionSamples);
+                                const Vec3 direction = {std::cos(angle), 0.0f, std::sin(angle)};
+                                const Vec3 probe = {
+                                    waist.x + direction.x * distance,
+                                    waist.y + kHeightOffsets[band],
+                                    waist.z + direction.z * distance,
+                                };
+                                const WallHit candidate = QueryClimbWall(
+                                    impl_->room, probe,
+                                    impl_->movement_config.climb_check_dist,
+                                    {-direction.x, 0.0f, -direction.z});
+                                if (candidate.hit &&
+                                    DotXZ(candidate.plane_normal, direction) < -0.5f) {
+                                    float supported_height = 0.0f;
+                                    for (float height = 3.0f; height <= 48.0f;
+                                         height += 3.0f) {
+                                        const WallHit above = QueryClimbWall(
+                                            impl_->room,
+                                            {candidate.point.x,
+                                             candidate.point.y + height,
+                                             candidate.point.z},
+                                            impl_->movement_config.climb_check_dist,
+                                            {-direction.x, 0.0f, -direction.z});
+                                        const float normal_alignment =
+                                            above.plane_normal.x * candidate.plane_normal.x +
+                                            above.plane_normal.z * candidate.plane_normal.z;
+                                        if (!above.hit || normal_alignment < 0.8f) {
+                                            break;
+                                        }
+                                        supported_height = height;
+                                    }
+                                    maximum_supported_height = std::max(
+                                        maximum_supported_height, supported_height);
+                                    maximum_supported_by_band[band] = std::max(
+                                        maximum_supported_by_band[band], supported_height);
+                                    const bool supports_climb_height = supported_height >= 9.0f;
+                                    if (!supports_climb_height) {
+                                        ++short_wall_rejections;
+                                        continue;
+                                    }
+                                    wall = candidate;
+                                    wall_direction = direction;
+                                    wall_search_distance = distance;
+                                    wall_supported_height = supported_height;
+                                    wall_height_band = band;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (wall.hit) {
+                    impl_->physics_autoplay_climb_target_point_ = wall.point;
+                    impl_->physics_autoplay_climb_target_normal_ = wall.plane_normal;
+                    impl_->physics_autoplay_approach_direction_ =
+                        kDebugPhysicsAutoplayCorner
+                            ? wall_direction
+                            : NormalizeXZ({-wall.plane_normal.x, 0.0f,
+                                           -wall.plane_normal.z}, wall_direction);
+                    impl_->physics_autoplay_target_start_gap_ = physics::Dot(
+                        wall.plane_normal, physics::Sub(waist, wall.point));
+                    impl_->physics_autoplay_target_found_ = true;
+                    debugf("[phys-test] climb-target hit=1 height=%.0f max_height=%.0f face=%d range=%.1f band=%d "
+                           "start_gap=%.1f approach=(%.2f,%.2f) point=(%.1f,%.1f,%.1f) n=(%.2f,%.2f,%.2f)\n",
+                           static_cast<double>(wall_supported_height),
+                           static_cast<double>(maximum_supported_height),
+                           wall.face_id,
+                           static_cast<double>(wall_search_distance), wall_height_band,
+                           static_cast<double>(impl_->physics_autoplay_target_start_gap_),
+                           static_cast<double>(impl_->physics_autoplay_approach_direction_.x),
+                           static_cast<double>(impl_->physics_autoplay_approach_direction_.z),
+                           static_cast<double>(wall.point.x),
+                           static_cast<double>(wall.point.y),
+                           static_cast<double>(wall.point.z),
+                           static_cast<double>(wall.plane_normal.x),
+                           static_cast<double>(wall.plane_normal.y),
+                           static_cast<double>(wall.plane_normal.z));
+                } else {
+                    debugf("[phys-test] climb-target hit=0 max_height=%.0f bands=(%.0f,%.0f,%.0f,%.0f,%.0f) short=%d "
+                           "pos=(%.1f,%.1f,%.1f) waist=(%.1f,%.1f,%.1f)\n",
+                           static_cast<double>(maximum_supported_height),
+                           static_cast<double>(maximum_supported_by_band[0]),
+                           static_cast<double>(maximum_supported_by_band[1]),
+                           static_cast<double>(maximum_supported_by_band[2]),
+                           static_cast<double>(maximum_supported_by_band[3]),
+                           static_cast<double>(maximum_supported_by_band[4]),
+                           short_wall_rejections,
+                           static_cast<double>(impl_->player.position.x),
+                           static_cast<double>(impl_->player.position.y),
+                           static_cast<double>(impl_->player.position.z),
+                           static_cast<double>(waist.x),
+                           static_cast<double>(waist.y),
+                           static_cast<double>(waist.z));
+                }
+                if (wall.hit) {
+                    physics_phase = "climb-approach";
+                    tick_input.move = WorldToCameraMove(
+                        impl_->physics_autoplay_approach_direction_);
+                }
+            } else if (physics_tick <= 480) {
+                if (!impl_->physics_autoplay_target_found_) {
+                    physics_phase = "climb-no-target";
+                } else if (impl_->player.movement_state == PlayerMovementState::Climbing) {
+                    if (kDebugPhysicsAutoplayCorner) {
+                        tick_input.climb_held = true;
+                        if (impl_->physics_autoplay_corner_seen_) {
+                            physics_phase = impl_->player.climb.corner_ease > 0.0f
+                                ? "corner-ease" : "corner-stable";
+                            tick_input.move = impl_->player.climb.corner_ease > 0.0f
+                                ? WorldToCameraMove({-1.0f, 0.0f, 0.0f})
+                                : Vec2{};
+                        } else if (impl_->physics_autoplay_climb_ticks_ <= 1) {
+                            physics_phase = "corner-first-step";
+                            tick_input.move = {0.0f, 1.0f};
+                        } else {
+                            physics_phase = "corner-traverse";
+                            tick_input.move = WorldToCameraMove(
+                                {-1.0f, 0.0f, 0.0f});
+                        }
+                    } else if (!kDebugPhysicsAutoplayMantle &&
+                        !impl_->physics_autoplay_walljump_attempted_ &&
+                        impl_->physics_autoplay_climb_ticks_ >= 10) {
+                        // Exercise climb-walljump on the real-map route before
+                        // the selected wall's short upper lip can trigger a
+                        // mantle. Ten completed climb ticks still satisfy the
+                        // sustained-climb and clearance gates.
+                        physics_phase = "wall-jump";
+                        tick_input.jump_pressed = true;
+                        tick_input.climb_held = true;
+                        impl_->physics_autoplay_walljump_attempted_ = true;
+                    } else {
+                        physics_phase = "climb-up";
+                        tick_input.move = {0.0f, 1.0f};
+                        tick_input.climb_held = true;
+                    }
+                } else if (!impl_->physics_autoplay_climb_started_) {
+                    const Vec3 waist = {
+                        impl_->player.position.x,
+                        impl_->player.position.y - impl_->movement_config.player_half_height +
+                            impl_->movement_config.climb_waist_offset,
+                        impl_->player.position.z,
+                    };
+                    const float target_gap = physics::Dot(
+                        impl_->physics_autoplay_climb_target_normal_,
+                        physics::Sub(waist, impl_->physics_autoplay_climb_target_point_));
+                    tick_input.move = WorldToCameraMove(
+                        impl_->physics_autoplay_approach_direction_);
+                    if (target_gap <= impl_->movement_config.climb_check_dist) {
+                        physics_phase = "climb-entry";
+                        if (kDebugPhysicsAutoplayCorner) tick_input.move = {};
+                        tick_input.climb_held = true;
+                        ++impl_->physics_autoplay_approach_ticks_;
+                        if (!impl_->physics_autoplay_entry_attempted_) {
+                            impl_->physics_autoplay_entry_attempted_ = true;
+                            impl_->physics_autoplay_entry_gap_ = target_gap;
+                            debugf("[phys-test] climb-entry gap=%.2f ticks=%u pos=(%.1f,%.1f,%.1f)\n",
+                                   static_cast<double>(target_gap),
+                                   static_cast<unsigned int>(impl_->physics_autoplay_approach_ticks_),
+                                   static_cast<double>(impl_->player.position.x),
+                                   static_cast<double>(impl_->player.position.y),
+                                   static_cast<double>(impl_->player.position.z));
+                        }
+                    } else {
+                        physics_phase = "climb-approach";
+                        ++impl_->physics_autoplay_approach_ticks_;
+                    }
+                } else {
+                    physics_phase = "climb-exit";
+                }
+            } else {
+                physics_phase = "done";
+            }
+
+            const Vec3 camera_right = NormalizeXZ(
+                {camera_forward.z, 0.0f, -camera_forward.x},
+                {1.0f, 0.0f, 0.0f});
+            if (physics_tick == 170) {
+                impl_->physics_autoplay_air_steer_start_axis_speed_ = DotXZ(
+                    impl_->player.velocity, camera_right);
+                impl_->physics_autoplay_air_window_grounded_ =
+                    impl_->player.grounded;
+            } else if (physics_tick == 176) {
+                impl_->physics_autoplay_air_steer_end_axis_speed_ = DotXZ(
+                    impl_->player.velocity, camera_right);
+                impl_->physics_autoplay_air_release_start_speed_ = LengthXZ(
+                    impl_->player.velocity);
+            }
+        }
         // og-mover-overhaul Inc 2: PlayerMotor is deleted. The tick pipeline is
         // now OG's shape: moving-surface carry -> TimerInput/State (velocity
         // edits only) -> MovePhase (SweepMove + Popout + ground check + snap).
-        AdvanceMovingSurfaces(impl_->room, FixedStepAccumulator::kTickDt);
         impl_->player.prev_position = impl_->player.position;
+        AdvanceMovingSurfaces(impl_->room, FixedStepAccumulator::kTickDt);
+        impl_->player_controller.MovingSurfacePhase(impl_->player, impl_->room);
         // Per-tick snapshot (review S5): the old code re-captured before the
         // motor step each tick, so the telemetry arg means "grounded at the
         // start of THIS tick", not at frame start.
         const bool was_grounded_pre_tick = impl_->player.contact.was_grounded;
         was_grounded_pre_last_tick = was_grounded_pre_tick;
-
+        const Vec3 physics_tick_start_position = impl_->player.position;
         // Controller: timers/input + state handler edit velocity only.
         PlayerController::StepContext player_step = impl_->player_controller.TimerInputPhase(
-            impl_->player, input, camera_forward, FixedStepAccumulator::kTickDt);
+            impl_->player, tick_input, camera_forward, FixedStepAccumulator::kTickDt);
         const bool was_climbing_pre =
             impl_->player.movement_state == PlayerMovementState::Climbing;
-        impl_->player_controller.StatePhase(impl_->player, input, player_step, FixedStepAccumulator::kTickDt, &impl_->room);
+        const bool was_dashing_pre =
+            impl_->player.movement_state == PlayerMovementState::Dashing;
+        impl_->player_controller.StatePhase(impl_->player, tick_input, player_step, FixedStepAccumulator::kTickDt, &impl_->room);
+        const float ground_snap_after_state =
+            impl_->player.contact.ground_snap_cooldown_remaining;
+        if (kDebugPhysicsAutoplay && physics_tick == 180 && tick_input.dash_pressed) {
+            const PlayerState& p = impl_->player;
+            impl_->physics_autoplay_dash_launch_recorded_ =
+                p.movement_state == PlayerMovementState::Dashing && !was_dashing_pre;
+            impl_->physics_autoplay_dash_airborne_ =
+                impl_->physics_autoplay_dash_launch_recorded_ && !p.grounded;
+            impl_->physics_autoplay_dash_launch_vy_ = p.velocity.y;
+            impl_->physics_autoplay_dash_launch_speed_ = std::sqrt(
+                p.velocity.x * p.velocity.x + p.velocity.y * p.velocity.y +
+                p.velocity.z * p.velocity.z);
+        }
+
 
         // MovePhase applies velocity*dt through the single mover and resolves
         // contact. `grounded` reflects the post-move ground state.
         impl_->player_controller.MovePhase(impl_->player, FixedStepAccumulator::kTickDt, &impl_->room);
+
+        if (kDebugPhysicsAutoplayCorner) {
+            if (player_step.corner_triggered) {
+                ++impl_->physics_autoplay_corner_events_;
+                impl_->physics_autoplay_corner_seen_ = true;
+                impl_->physics_autoplay_corner_target_normal_ =
+                    impl_->player.climb.corner_normal_to;
+                debugf("[phys-test] corner event=%u from=(%.2f,%.2f,%.2f) "
+                       "to=(%.2f,%.2f,%.2f) ease=%.3f pos=(%.1f,%.1f,%.1f)\n",
+                       static_cast<unsigned int>(impl_->physics_autoplay_corner_events_),
+                       static_cast<double>(impl_->player.climb.corner_normal_from.x),
+                       static_cast<double>(impl_->player.climb.corner_normal_from.y),
+                       static_cast<double>(impl_->player.climb.corner_normal_from.z),
+                       static_cast<double>(impl_->player.climb.corner_normal_to.x),
+                       static_cast<double>(impl_->player.climb.corner_normal_to.y),
+                       static_cast<double>(impl_->player.climb.corner_normal_to.z),
+                       static_cast<double>(impl_->player.climb.corner_ease),
+                       static_cast<double>(impl_->player.position.x),
+                       static_cast<double>(impl_->player.position.y),
+                       static_cast<double>(impl_->player.position.z));
+            }
+            if (impl_->physics_autoplay_corner_seen_) {
+                const Vec3 delta = physics::Sub(
+                    impl_->player.position, physics_tick_start_position);
+                const float step = std::sqrt(
+                    delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+                impl_->physics_autoplay_corner_max_step_ = std::max(
+                    impl_->physics_autoplay_corner_max_step_, step);
+                const bool on_target_wall =
+                    impl_->player.movement_state == PlayerMovementState::Climbing &&
+                    impl_->player.climb.corner_ease <= 0.001f &&
+                    DotXZ(impl_->player.climb.wall_normal,
+                          impl_->physics_autoplay_corner_target_normal_) > 0.8f;
+                impl_->physics_autoplay_corner_arrived_ |= on_target_wall;
+                if (on_target_wall) {
+                    ++impl_->physics_autoplay_corner_stable_ticks_;
+                } else {
+                    impl_->physics_autoplay_corner_stable_ticks_ = 0;
+                }
+            }
+        }
+
+        if (kDebugPhysicsAutoplay && physics_tick >= 170 && physics_tick < 180) {
+            if (impl_->player.grounded) {
+                impl_->physics_autoplay_air_window_grounded_ = true;
+            }
+            if (physics_tick >= 176) {
+                impl_->physics_autoplay_air_release_min_speed_ = std::min(
+                    impl_->physics_autoplay_air_release_min_speed_,
+                    LengthXZ(impl_->player.velocity));
+            }
+        }
+
+        // The aggregate 10-tick climb gate hid a canceled first step. Capture
+        // grounded entry and the first sustained climb tick separately so
+        // the Ares self-check fails on the same regression as the host test.
+        if (kDebugPhysicsAutoplay && !was_climbing_pre &&
+            impl_->player.movement_state == PlayerMovementState::Climbing &&
+            !impl_->physics_autoplay_climb_entry_recorded_) {
+            impl_->physics_autoplay_climb_entry_recorded_ = true;
+            impl_->physics_autoplay_climb_entry_grounded_ = was_grounded_pre_tick;
+            impl_->physics_autoplay_climb_entry_y_ = impl_->player.position.y;
+        } else if (kDebugPhysicsAutoplay && was_climbing_pre &&
+                   impl_->player.movement_state == PlayerMovementState::Climbing &&
+                   impl_->physics_autoplay_climb_entry_recorded_ &&
+                   !impl_->physics_autoplay_climb_first_step_sampled_) {
+            impl_->physics_autoplay_climb_first_step_sampled_ = true;
+            impl_->physics_autoplay_climb_first_step_dy_ =
+                impl_->player.position.y - impl_->physics_autoplay_climb_entry_y_;
+            impl_->physics_autoplay_climb_first_step_snap_cooldown_ =
+                ground_snap_after_state;
+        }
+
+        if (kDebugPhysicsAutoplay && impl_->physics_autoplay_walljump_attempted_ &&
+            was_climbing_pre &&
+            impl_->player.movement_state != PlayerMovementState::Climbing &&
+            impl_->player.velocity.y > 0.0f) {
+            impl_->physics_autoplay_walljumped_ = true;
+            impl_->physics_autoplay_walljump_speed_xy_ = LengthXZ(impl_->player.velocity);
+            impl_->physics_autoplay_walljump_speed_y_ = impl_->player.velocity.y;
+            impl_->physics_autoplay_walljump_outward_speed_ = DotXZ(
+                impl_->player.velocity,
+                NormalizeXZ(impl_->physics_autoplay_climb_target_normal_));
+        }
+
+        if (kDebugPhysicsAutoplay) {
+            const PlayerState& p = impl_->player;
+            const float speed_xz = std::sqrt(p.velocity.x * p.velocity.x +
+                                             p.velocity.z * p.velocity.z);
+            if (physics_tick >= 60 && physics_tick < 84) {
+                impl_->physics_autoplay_run_peak_speed_ = std::max(
+                    impl_->physics_autoplay_run_peak_speed_, speed_xz);
+                if (speed_xz > 1.0f) {
+                    impl_->physics_autoplay_run_direction_ = {
+                        p.velocity.x / speed_xz, 0.0f, p.velocity.z / speed_xz};
+                }
+            } else if (physics_tick >= 90 && physics_tick < 100) {
+                impl_->physics_autoplay_brake_min_speed_ = std::min(
+                    impl_->physics_autoplay_brake_min_speed_, speed_xz);
+            } else if (physics_tick >= 108 && physics_tick < 124) {
+                const float along_run = p.velocity.x * impl_->physics_autoplay_run_direction_.x +
+                                        p.velocity.z * impl_->physics_autoplay_run_direction_.z;
+                impl_->physics_autoplay_reverse_speed_ = std::max(
+                    impl_->physics_autoplay_reverse_speed_, -along_run);
+            }
+            if (physics_tick >= 150 && physics_tick < 180) {
+                impl_->physics_autoplay_jump_peak_y_ = std::max(
+                    impl_->physics_autoplay_jump_peak_y_, p.position.y);
+            }
+            if (physics_tick >= 180 && physics_tick < 200) {
+                const float dx = p.position.x - impl_->physics_autoplay_dash_start_.x;
+                const float dy = p.position.y - impl_->physics_autoplay_dash_start_.y;
+                const float dz = p.position.z - impl_->physics_autoplay_dash_start_.z;
+                impl_->physics_autoplay_dash_distance_ = std::max(
+                    impl_->physics_autoplay_dash_distance_,
+                    std::sqrt(dx * dx + dy * dy + dz * dz));
+            }
+        }
+
+        if (kDebugPhysicsAutoplay &&
+            impl_->player.movement_state == PlayerMovementState::Climbing) {
+            impl_->physics_autoplay_climb_started_ = true;
+            ++impl_->physics_autoplay_climb_ticks_;
+
+            const Vec3 feet = {
+                impl_->player.position.x,
+                impl_->player.position.y - impl_->movement_config.player_half_height,
+                impl_->player.position.z,
+            };
+            const float required_gap = kMadelineModelWallGap;
+            const auto record_model_gap = [&](float model_gap) {
+                ++impl_->physics_autoplay_clearance_samples_;
+                impl_->physics_autoplay_min_model_gap_ = std::min(
+                    impl_->physics_autoplay_min_model_gap_, model_gap);
+                if (model_gap < required_gap - 0.01f) {
+                    ++impl_->physics_autoplay_clearance_violations_;
+                }
+            };
+            if (impl_->player.climb.corner_ease > 0.0f) {
+                const Vec3 normal_a = impl_->player.climb.corner_normal_from;
+                const Vec3 normal_b = impl_->player.climb.corner_normal_to;
+                const float anchor_y = impl_->movement_config.player_half_height -
+                                       impl_->movement_config.climb_waist_offset;
+                const Vec3 plane_a = {
+                    impl_->player.climb.corner_from.x -
+                        normal_a.x * impl_->movement_config.climb_pushout_dist,
+                    impl_->player.climb.corner_from.y -
+                        normal_a.y * impl_->movement_config.climb_pushout_dist - anchor_y,
+                    impl_->player.climb.corner_from.z -
+                        normal_a.z * impl_->movement_config.climb_pushout_dist,
+                };
+                const Vec3 plane_b = {
+                    impl_->player.climb.corner_to.x -
+                        normal_b.x * impl_->movement_config.climb_pushout_dist,
+                    impl_->player.climb.corner_to.y -
+                        normal_b.y * impl_->movement_config.climb_pushout_dist - anchor_y,
+                    impl_->player.climb.corner_to.z -
+                        normal_b.z * impl_->movement_config.climb_pushout_dist,
+                };
+                const float gap_a = physics::Dot(
+                    normal_a, physics::Sub(feet, plane_a));
+                const float gap_b = physics::Dot(
+                    normal_b, physics::Sub(feet, plane_b));
+                const Vec3 render_offset = PlayerModelCornerHorizontalOffset(
+                    normal_a, gap_a, normal_b, gap_b, kMadelineModelRadius,
+                    kMadelineModelHeight, required_gap);
+                record_model_gap(PlayerModelMinimumPlaneGapAfterTranslation(
+                    normal_a, gap_a, kMadelineModelRadius,
+                    kMadelineModelHeight, render_offset));
+                record_model_gap(PlayerModelMinimumPlaneGapAfterTranslation(
+                    normal_b, gap_b, kMadelineModelRadius,
+                    kMadelineModelHeight, render_offset));
+            } else {
+                const Vec3 normal = impl_->player.climb.wall_normal;
+                const Vec3 waist = {
+                    feet.x,
+                    feet.y + impl_->movement_config.climb_waist_offset,
+                    feet.z,
+                };
+                const WallHit wall = QueryClimbWall(
+                    impl_->ActiveRoom(), waist,
+                    impl_->movement_config.climb_check_dist, normal);
+                Vec3 clearance_normal = normal;
+                float feet_wall_gap = impl_->movement_config.climb_pushout_dist -
+                    impl_->movement_config.climb_waist_offset * normal.y;
+                if (wall.hit) {
+                    clearance_normal = wall.plane_normal;
+                    feet_wall_gap = physics::Dot(
+                        clearance_normal, physics::Sub(feet, wall.point));
+                }
+                const float render_offset = PlayerModelHorizontalOffset(
+                    clearance_normal, feet_wall_gap, kMadelineModelRadius,
+                    kMadelineModelHeight, required_gap);
+                record_model_gap(PlayerModelMinimumPlaneGap(
+                    clearance_normal, feet_wall_gap, kMadelineModelRadius,
+                    kMadelineModelHeight, render_offset));
+            }
+        }
+
+        if (kDebugPhysicsAutoplay && player_step.mantle_triggered) {
+            impl_->physics_autoplay_mantled_ = true;
+        }
+
+        if (kDebugPhysicsAutoplay && !impl_->physics_autoplay_result_emitted_ &&
+            (impl_->physics_autoplay_walljumped_ || impl_->physics_autoplay_mantled_ ||
+             (kDebugPhysicsAutoplayCorner &&
+              impl_->physics_autoplay_corner_stable_ticks_ >= 10) ||
+             physics_tick >= 480)) {
+            const PlayerState& p = impl_->player;
+            impl_->physics_autoplay_result_emitted_ = true;
+            const float required_gap = kMadelineModelWallGap;
+            const bool climb_ok = impl_->physics_autoplay_climb_started_ &&
+                                  impl_->physics_autoplay_climb_ticks_ >= 10;
+            const bool grounded_climb_entry_ok =
+                impl_->physics_autoplay_climb_entry_recorded_ &&
+                impl_->physics_autoplay_climb_entry_grounded_;
+            const bool climb_first_step_ok =
+                impl_->physics_autoplay_climb_first_step_sampled_ &&
+                impl_->physics_autoplay_climb_first_step_dy_ >= 0.5f &&
+                impl_->physics_autoplay_climb_first_step_snap_cooldown_ > 0.0f;
+            const bool approach_ok = impl_->physics_autoplay_entry_attempted_ &&
+                impl_->physics_autoplay_approach_ticks_ > 0 &&
+                impl_->physics_autoplay_entry_gap_ <=
+                    impl_->movement_config.climb_check_dist + 0.01f &&
+                impl_->physics_autoplay_target_start_gap_ -
+                    impl_->physics_autoplay_entry_gap_ >= 4.0f;
+            const bool clearance_ok = impl_->physics_autoplay_clearance_samples_ >= 10 &&
+                impl_->physics_autoplay_clearance_violations_ == 0 &&
+                impl_->physics_autoplay_min_model_gap_ >= required_gap - 0.01f;
+            const bool walljump_ok = impl_->physics_autoplay_walljumped_ &&
+                std::fabs(impl_->physics_autoplay_walljump_speed_xy_ -
+                          impl_->movement_config.wall_jump_speed_x) <= 1.0f &&
+                std::fabs(impl_->physics_autoplay_walljump_speed_y_ -
+                          impl_->movement_config.wall_jump_speed_y) <= 1.0f &&
+                impl_->physics_autoplay_walljump_outward_speed_ >=
+                    impl_->movement_config.wall_jump_speed_x - 1.0f;
+            const bool mantle_ok = impl_->physics_autoplay_mantled_;
+            const bool corner_ok = impl_->physics_autoplay_corner_seen_ &&
+                impl_->physics_autoplay_corner_arrived_ &&
+                impl_->physics_autoplay_corner_events_ == 1 &&
+                impl_->physics_autoplay_corner_stable_ticks_ >= 10 &&
+                impl_->physics_autoplay_corner_max_step_ <= 6.0f &&
+                p.movement_state == PlayerMovementState::Climbing;
+            const float jump_rise = impl_->physics_autoplay_jump_peak_y_ -
+                                    impl_->physics_autoplay_jump_start_y_;
+            const float air_steer_delta =
+                impl_->physics_autoplay_air_steer_end_axis_speed_ -
+                impl_->physics_autoplay_air_steer_start_axis_speed_;
+            const float air_release_speed_drop =
+                impl_->physics_autoplay_air_release_start_speed_ -
+                impl_->physics_autoplay_air_release_min_speed_;
+            const bool air_control_ok =
+                !impl_->physics_autoplay_air_window_grounded_ &&
+                air_steer_delta >= 8.0f && air_release_speed_drop >= 4.0f;
+            const bool movement_ok = impl_->physics_autoplay_run_peak_speed_ >= 60.0f &&
+                impl_->physics_autoplay_brake_min_speed_ <= 1.0f &&
+                impl_->physics_autoplay_reverse_speed_ >= 50.0f &&
+                jump_rise >= 15.0f && impl_->physics_autoplay_dash_distance_ >= 20.0f;
+            const float expected_air_dash_vy =
+                impl_->movement_config.dash_speed * 0.4f / std::sqrt(1.16f);
+            const bool dash_launch_ok = impl_->physics_autoplay_dash_launch_recorded_ &&
+                impl_->physics_autoplay_dash_airborne_ &&
+                std::fabs(impl_->physics_autoplay_dash_launch_vy_ -
+                          expected_air_dash_vy) <= 1.0f &&
+                std::fabs(impl_->physics_autoplay_dash_launch_speed_ -
+                          impl_->movement_config.dash_speed) <= 1.0f;
+            const bool selected_exit_ok = kDebugPhysicsAutoplayCorner
+                ? corner_ok
+                : (kDebugPhysicsAutoplayMantle ? mantle_ok : walljump_ok);
+            const bool passed = movement_ok && dash_launch_ok && air_control_ok &&
+                                impl_->physics_autoplay_target_found_ &&
+                                approach_ok && grounded_climb_entry_ok &&
+                                climb_first_step_ok && climb_ok &&
+                                selected_exit_ok && clearance_ok;
+            debugf("[phys-test] result=%s profile=%s movement=%u air_control=%u "
+                   "air_steer_delta=%.1f air_release_drop=%.1f air_grounded=%u "
+                   "run_peak=%.1f brake_min=%.1f reverse_speed=%.1f "
+                   "jump_rise=%.1f dash_distance=%.1f dash_launch=%u "
+                   "dash_airborne=%u dash_launch_y=%.1f dash_launch_speed=%.1f "
+                   "target=%u approach=%u approach_ticks=%u start_gap=%.1f entry_gap=%.1f "
+                   "climb=%u climb_ticks=%u climb_entry_grounded=%u "
+                   "climb_first_step_dy=%.2f climb_first_step_snap=%.3f "
+                   "climb_first_step_ok=%u "
+                   "walljump=%u walljump_ok=%u walljump_xy=%.1f walljump_y=%.1f "
+                   "walljump_out=%.1f mantle=%u mantle_ok=%u "
+                   "corner_seen=%u corner_arrived=%u corner_events=%u "
+                   "corner_stable_ticks=%u corner_max_step=%.2f "
+                   "clearance_samples=%u clearance_violations=%u "
+                   "model_gap=%.2f required_gap=%.2f end=(%.1f,%.1f,%.1f) v_y=%.1f\n",
+                   passed ? "PASS" : "FAIL",
+                   kDebugPhysicsAutoplayCorner ? "corner" :
+                       (kDebugPhysicsAutoplayMantle ? "mantle" : "walljump"),
+                   movement_ok ? 1u : 0u,
+                   air_control_ok ? 1u : 0u,
+                   static_cast<double>(air_steer_delta),
+                   static_cast<double>(air_release_speed_drop),
+                   impl_->physics_autoplay_air_window_grounded_ ? 1u : 0u,
+                   static_cast<double>(impl_->physics_autoplay_run_peak_speed_),
+                   static_cast<double>(impl_->physics_autoplay_brake_min_speed_),
+                   static_cast<double>(impl_->physics_autoplay_reverse_speed_),
+                   static_cast<double>(jump_rise),
+                   static_cast<double>(impl_->physics_autoplay_dash_distance_),
+                   dash_launch_ok ? 1u : 0u,
+                   impl_->physics_autoplay_dash_airborne_ ? 1u : 0u,
+                   static_cast<double>(impl_->physics_autoplay_dash_launch_vy_),
+                   static_cast<double>(impl_->physics_autoplay_dash_launch_speed_),
+                   impl_->physics_autoplay_target_found_ ? 1u : 0u,
+                   approach_ok ? 1u : 0u,
+                   static_cast<unsigned int>(impl_->physics_autoplay_approach_ticks_),
+                   static_cast<double>(impl_->physics_autoplay_target_start_gap_),
+                   static_cast<double>(impl_->physics_autoplay_entry_gap_),
+                   impl_->physics_autoplay_climb_started_ ? 1u : 0u,
+                   static_cast<unsigned int>(impl_->physics_autoplay_climb_ticks_),
+                   impl_->physics_autoplay_climb_entry_grounded_ ? 1u : 0u,
+                   static_cast<double>(impl_->physics_autoplay_climb_first_step_dy_),
+                   static_cast<double>(impl_->physics_autoplay_climb_first_step_snap_cooldown_),
+                   climb_first_step_ok ? 1u : 0u,
+                   impl_->physics_autoplay_walljumped_ ? 1u : 0u,
+                   walljump_ok ? 1u : 0u,
+                   static_cast<double>(impl_->physics_autoplay_walljump_speed_xy_),
+                   static_cast<double>(impl_->physics_autoplay_walljump_speed_y_),
+                   static_cast<double>(impl_->physics_autoplay_walljump_outward_speed_),
+                   impl_->physics_autoplay_mantled_ ? 1u : 0u,
+                   mantle_ok ? 1u : 0u,
+                   impl_->physics_autoplay_corner_seen_ ? 1u : 0u,
+                   impl_->physics_autoplay_corner_arrived_ ? 1u : 0u,
+                   static_cast<unsigned int>(impl_->physics_autoplay_corner_events_),
+                   static_cast<unsigned int>(impl_->physics_autoplay_corner_stable_ticks_),
+                   static_cast<double>(impl_->physics_autoplay_corner_max_step_),
+                   static_cast<unsigned int>(impl_->physics_autoplay_clearance_samples_),
+                   static_cast<unsigned int>(impl_->physics_autoplay_clearance_violations_),
+                   static_cast<double>(impl_->physics_autoplay_min_model_gap_),
+                   static_cast<double>(required_gap),
+                   static_cast<double>(p.position.x),
+                   static_cast<double>(p.position.y),
+                   static_cast<double>(p.position.z),
+                   static_cast<double>(p.velocity.y));
+        }
+
+        if (kDebugInputRecording) {
+            const InputSystem::RawSnapshot& raw = impl_->input_system.LastRaw();
+            const PlayerState& p = impl_->player;
+            const uint16_t raw_buttons =
+                (raw.z ? 1u << 0 : 0u) | (raw.l ? 1u << 1 : 0u) |
+                (raw.r ? 1u << 2 : 0u) | (raw.jump_down ? 1u << 3 : 0u) |
+                (raw.dash_down ? 1u << 4 : 0u) | (raw.climb_down ? 1u << 5 : 0u) |
+                (raw.pause_down ? 1u << 6 : 0u);
+            const int stick_x_bucket = InputTraceStickBucket(raw.stick_x);
+            const int stick_y_bucket = InputTraceStickBucket(raw.stick_y);
+            const int analog_l_bucket = InputTraceStickBucket(raw.analog_l);
+            const int analog_r_bucket = InputTraceStickBucket(raw.analog_r);
+            const Vec3& ground_normal = p.contact.ground_normal;
+            const int ground_nx_bucket = InputTraceNormalBucket(ground_normal.x);
+            const int ground_ny_bucket = InputTraceNormalBucket(ground_normal.y);
+            const int ground_nz_bucket = InputTraceNormalBucket(ground_normal.z);
+            const Vec3& climb_normal = p.climb.wall_normal;
+            const int climb_nx_bucket = InputTraceNormalBucket(climb_normal.x);
+            const int climb_ny_bucket = InputTraceNormalBucket(climb_normal.y);
+            const int climb_nz_bucket = InputTraceNormalBucket(climb_normal.z);
+            const bool snap_active = p.contact.ground_snap_cooldown_remaining > 0.0f;
+            const uint8_t state = static_cast<uint8_t>(p.movement_state);
+            const bool input_changed = !impl_->input_record_has_previous_ ||
+                stick_x_bucket != impl_->input_record_last_stick_x_bucket_ ||
+                stick_y_bucket != impl_->input_record_last_stick_y_bucket_ ||
+                analog_l_bucket != impl_->input_record_last_analog_l_bucket_ ||
+                analog_r_bucket != impl_->input_record_last_analog_r_bucket_ ||
+                raw_buttons != impl_->input_record_last_buttons_;
+            const bool state_changed = !impl_->input_record_has_previous_ ||
+                state != impl_->input_record_last_state_;
+            const bool contact_changed = !impl_->input_record_has_previous_ ||
+                p.grounded != impl_->input_record_last_grounded_ ||
+                p.contact.was_grounded != impl_->input_record_last_was_grounded_ ||
+                p.contact.ground_surface_id != impl_->input_record_last_ground_surface_id_ ||
+                (p.grounded &&
+                 (ground_nx_bucket != impl_->input_record_last_ground_nx_bucket_ ||
+                  ground_ny_bucket != impl_->input_record_last_ground_ny_bucket_ ||
+                  ground_nz_bucket != impl_->input_record_last_ground_nz_bucket_)) ||
+                p.wall_contact != impl_->input_record_last_wall_ ||
+                p.ceiling_contact != impl_->input_record_last_ceiling_ ||
+                p.climb.grip_face_id != impl_->input_record_last_grip_face_id_ ||
+                (state == static_cast<uint8_t>(PlayerMovementState::Climbing) &&
+                 (climb_nx_bucket != impl_->input_record_last_climb_nx_bucket_ ||
+                  climb_ny_bucket != impl_->input_record_last_climb_ny_bucket_ ||
+                  climb_nz_bucket != impl_->input_record_last_climb_nz_bucket_)) ||
+                snap_active != impl_->input_record_last_snap_active_;
+            const uint32_t seq = impl_->input_record_tick_++;
+            const bool timing_anomaly = tick == 0 &&
+                (delta_seconds >= kInputTraceSlowFrameSeconds ||
+                 impl_->fixed_step.PendingTicks() > 0 ||
+                 impl_->fixed_step.last_discarded_seconds > 0.0f);
+            if (ShouldEmitInputTrace(seq, input_changed, state_changed,
+                                     contact_changed, timing_anomaly)) {
+                debugf("[input-trace] frame=%u sub=%d/%d seq=%u "
+                       "sched=(frame_ms=%.1f,steps=%d,pending=%d,dropped_ms=%.1f) "
+                       "pad=(style%u,current%04x,held%04x) "
+                       "stick=(%d,%d) move=(%.2f,%.2f) "
+                       "cam=(%.2f,%.2f) cf=(%.2f,%.2f) face=(%.2f,%.2f) target=(%.2f,%.2f) "
+                       "raw=(z%u,l%u,r%u,al%d,ar%d,j%u,d%u,c%u,p%u) act=(j%u,jh%u,d%u,c%u) "
+                       "edge=(j%u,d%u) used=(j%u,d%u) "
+                       "pos=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f) "
+                       "g=%u wall=%u ceil=%u st=%u "
+                       "support=(was%u,surface%d,n=(%.2f,%.2f,%.2f),snap=%.2f) "
+                       "walln=(%.2f,%.2f,%.2f) climbn=(%.2f,%.2f,%.2f,face%d) "
+                       "timers=(d%.2f,c%.2f,j%.2f,a%u)\n",
+                       static_cast<unsigned int>(input_record_frame), tick + 1, n_ticks,
+                       static_cast<unsigned int>(seq),
+                       static_cast<double>(delta_seconds * 1000.0f), n_ticks,
+                       impl_->fixed_step.PendingTicks(),
+                       static_cast<double>(impl_->fixed_step.last_discarded_seconds * 1000.0f),
+                       static_cast<unsigned int>(raw.style),
+                       static_cast<unsigned int>(raw.buttons_current),
+                       static_cast<unsigned int>(raw.buttons_held),
+                       static_cast<int>(raw.stick_x), static_cast<int>(raw.stick_y),
+                       static_cast<double>(tick_input.move.x),
+                       static_cast<double>(tick_input.move.y),
+                       static_cast<double>(camera_input.orbit),
+                       static_cast<double>(camera_input.zoom),
+                       static_cast<double>(camera_forward.x),
+                       static_cast<double>(camera_forward.z),
+                       static_cast<double>(p.facing.x),
+                       static_cast<double>(p.facing.z),
+                       static_cast<double>(p.target_facing.x),
+                       static_cast<double>(p.target_facing.z),
+                       static_cast<unsigned int>(raw.z),
+                       static_cast<unsigned int>(raw.l),
+                       static_cast<unsigned int>(raw.r),
+                       static_cast<int>(raw.analog_l),
+                       static_cast<int>(raw.analog_r),
+                       raw.jump_down ? 1u : 0u,
+                       raw.dash_down ? 1u : 0u,
+                       raw.climb_down ? 1u : 0u,
+                       raw.pause_down ? 1u : 0u,
+                       tick_input.jump_pressed ? 1u : 0u,
+                       tick_input.jump_held ? 1u : 0u,
+                       tick_input.dash_pressed ? 1u : 0u,
+                       tick_input.climb_held ? 1u : 0u,
+                       tick_input.JumpPressAvailable() ? 1u : 0u,
+                       tick_input.DashPressAvailable() ? 1u : 0u,
+                       tick_input.jump_press_consumed ? 1u : 0u,
+                       tick_input.dash_press_consumed ? 1u : 0u,
+                       static_cast<double>(p.position.x),
+                       static_cast<double>(p.position.y),
+                       static_cast<double>(p.position.z),
+                       static_cast<double>(p.velocity.x),
+                       static_cast<double>(p.velocity.y),
+                       static_cast<double>(p.velocity.z),
+                       p.grounded ? 1u : 0u, p.wall_contact ? 1u : 0u,
+                       p.ceiling_contact ? 1u : 0u,
+                       static_cast<unsigned int>(p.movement_state),
+                       p.contact.was_grounded ? 1u : 0u,
+                       p.contact.ground_surface_id,
+                       static_cast<double>(ground_normal.x),
+                       static_cast<double>(ground_normal.y),
+                       static_cast<double>(ground_normal.z),
+                       static_cast<double>(p.contact.ground_snap_cooldown_remaining),
+                       static_cast<double>(p.wall_normal.x),
+                       static_cast<double>(p.wall_normal.y),
+                       static_cast<double>(p.wall_normal.z),
+                       static_cast<double>(climb_normal.x),
+                       static_cast<double>(climb_normal.y),
+                       static_cast<double>(climb_normal.z),
+                       static_cast<int>(p.climb.grip_face_id),
+                       static_cast<double>(p.dash_time_remaining),
+                       static_cast<double>(p.coyote_time_remaining),
+                       static_cast<double>(p.hold_jump_time_remaining),
+                       p.air_dash_available ? 1u : 0u);
+            }
+            impl_->input_record_last_stick_x_bucket_ = stick_x_bucket;
+            impl_->input_record_last_stick_y_bucket_ = stick_y_bucket;
+            impl_->input_record_last_analog_l_bucket_ = analog_l_bucket;
+            impl_->input_record_last_analog_r_bucket_ = analog_r_bucket;
+            impl_->input_record_last_ground_nx_bucket_ = ground_nx_bucket;
+            impl_->input_record_last_ground_ny_bucket_ = ground_ny_bucket;
+            impl_->input_record_last_ground_nz_bucket_ = ground_nz_bucket;
+            impl_->input_record_last_climb_nx_bucket_ = climb_nx_bucket;
+            impl_->input_record_last_climb_ny_bucket_ = climb_ny_bucket;
+            impl_->input_record_last_climb_nz_bucket_ = climb_nz_bucket;
+            impl_->input_record_last_ground_surface_id_ = p.contact.ground_surface_id;
+            impl_->input_record_last_grip_face_id_ = p.climb.grip_face_id;
+            impl_->input_record_last_buttons_ = raw_buttons;
+            impl_->input_record_last_state_ = state;
+            impl_->input_record_last_grounded_ = p.grounded;
+            impl_->input_record_last_was_grounded_ = p.contact.was_grounded;
+            impl_->input_record_last_wall_ = p.wall_contact;
+            impl_->input_record_last_ceiling_ = p.ceiling_contact;
+            impl_->input_record_last_snap_active_ = snap_active;
+            impl_->input_record_has_previous_ = true;
+        }
+
+        if (kDebugPhysicsAutoplay && physics_tick % 6 == 0) {
+            const PlayerState& p = impl_->player;
+            debugf("[phys] t=%u phase=%s in=(%.2f,%.2f) j=%u jh=%u d=%u c=%u pos=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f) g=%u gn=(%.2f,%.2f,%.2f) wall=%u ceil=%u wn=(%.2f,%.2f,%.2f) st=%u coy=%.2f snap=%.2f\n",
+                   static_cast<unsigned int>(physics_tick), physics_phase,
+                   static_cast<double>(tick_input.move.x),
+                   static_cast<double>(tick_input.move.y),
+                   tick_input.jump_pressed ? 1u : 0u,
+                   tick_input.jump_held ? 1u : 0u,
+                   tick_input.dash_pressed ? 1u : 0u,
+                   tick_input.climb_held ? 1u : 0u,
+                   static_cast<double>(p.position.x),
+                   static_cast<double>(p.position.y),
+                   static_cast<double>(p.position.z),
+                   static_cast<double>(p.velocity.x),
+                   static_cast<double>(p.velocity.y),
+                   static_cast<double>(p.velocity.z),
+                   p.grounded ? 1u : 0u,
+                   static_cast<double>(p.contact.ground_normal.x),
+                   static_cast<double>(p.contact.ground_normal.y),
+                   static_cast<double>(p.contact.ground_normal.z),
+                   p.wall_contact ? 1u : 0u,
+                   p.ceiling_contact ? 1u : 0u,
+                   static_cast<double>(p.wall_normal.x),
+                   static_cast<double>(p.wall_normal.y),
+                   static_cast<double>(p.wall_normal.z),
+                   static_cast<unsigned int>(p.movement_state),
+                   static_cast<double>(p.coyote_time_remaining),
+                   static_cast<double>(p.contact.ground_snap_cooldown_remaining));
+        }
 
         // Spring board (OG Spring.cs Pickup/pickupRadius + Player.Spring):
         // when the player overlaps an active, non-cooling-down board, launch
@@ -1036,13 +1950,19 @@ void GameplayScene::Update(float delta_seconds) {
             // UNGATED: a bogus auto-grab must name its raw button bits at the
             // exact grab frame — counter deltas alone cannot attribute it.
             const InputSystem::RawSnapshot& raw = impl_->input_system.LastRaw();
-            debugf("[climb] START z=%u l=%u r=%u al=%d ar=%d "
+            debugf("[climb] START pad=(style%u,current%04x,held%04x) "
+                   "z=%u l=%u r=%u al=%d ar=%d source=%s scripted_c=%u "
                    "wn=(%.2f,%.2f) pos=(%.1f,%.1f,%.1f)\n",
+                   static_cast<unsigned int>(raw.style),
+                   static_cast<unsigned int>(raw.buttons_current),
+                   static_cast<unsigned int>(raw.buttons_held),
                    static_cast<unsigned int>(raw.z),
                    static_cast<unsigned int>(raw.l),
                    static_cast<unsigned int>(raw.r),
                    static_cast<int>(raw.analog_l),
                    static_cast<int>(raw.analog_r),
+                   kDebugPhysicsAutoplay ? "autoplay" : "live",
+                   tick_input.climb_held ? 1u : 0u,
                    static_cast<double>(impl_->player.climb.wall_normal.x),
                    static_cast<double>(impl_->player.climb.wall_normal.z),
                    static_cast<double>(impl_->player.position.x),
@@ -1091,6 +2011,7 @@ void GameplayScene::Update(float delta_seconds) {
                 }
             }
         }
+
     }
 
     impl_->render_alpha = impl_->fixed_step.Alpha();
@@ -1231,7 +2152,7 @@ void GameplayScene::Update(float delta_seconds) {
             case PlayerMovementState::Skidding: st = "K"; break;  // review C9
             default: st = "N"; break;
         }
-        debugf("[move] pos=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f) g=%u st=%s\n",
+        debugf("[move] pos=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f) g=%u wall=%u ceil=%u st=%s\n",
                static_cast<double>(impl_->player.position.x),
                static_cast<double>(impl_->player.position.y),
                static_cast<double>(impl_->player.position.z),
@@ -1239,6 +2160,8 @@ void GameplayScene::Update(float delta_seconds) {
                static_cast<double>(impl_->player.velocity.y),
                static_cast<double>(impl_->player.velocity.z),
                impl_->player.grounded ? 1u : 0u,
+               impl_->player.wall_contact ? 1u : 0u,
+               impl_->player.ceiling_contact ? 1u : 0u,
                st);
     }
 }
@@ -1261,16 +2184,17 @@ void GameplayScene::Render() {
     // Dynamic FOV: base 45 degrees scaled by fov_multiplier (1.0 at rest,
     // up to 1.2 at high horizontal speed).
     const float fov_deg = 45.0f * impl_->camera.fov_multiplier;
+    const float near_plane = impl_->camera.render_near_plane;
 
     // Single near-pass camera. The far plane is 800u for the 9-cell ring; when
     // the distant tier is enabled (render-distance Inc 5), widen it to cover
     // the whole-map horizon (.dlod cells up to ~2400u).
     const CameraDesc cams = MakeNearCamera(
-        fov_deg, 5.0f, kEnableDistantTier ? 2000.0f : 800.0f,
+        fov_deg, near_plane, kEnableDistantTier ? 2000.0f : 800.0f,
         impl_->camera.position, impl_->camera.target,
         Vec3{0.0f, 1.0f, 0.0f});
 
-    t3d_viewport_set_projection(&impl_->viewport, T3D_DEG_TO_RAD(fov_deg), 5.0f,
+    t3d_viewport_set_projection(&impl_->viewport, T3D_DEG_TO_RAD(fov_deg), near_plane,
                                 cams.far);
     // CRITICAL camera-at-origin coupling: model matrices are camera-relative
     // (LvlRoomRenderer::SetCameraPosition translates by render_origin -

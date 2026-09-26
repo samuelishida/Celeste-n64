@@ -51,6 +51,58 @@ float Length(float x, float y) {
     return std::sqrt((x * x) + (y * y));
 }
 
+MoveServiceConfig MakePlayerMoveConfig(const MovementConfig& config) {
+    MoveServiceConfig mover{};
+    mover.wall_radius = config.player_wall_radius;
+    mover.climb_wall_radius = config.climb_pushout_dist;
+    mover.half_height = config.player_half_height;
+    mover.ground_snap_cooldown = config.ground_snap_cooldown;
+    return mover;
+}
+
+void AddStoredPlatformVelocity(PlayerState& state) {
+    if (state.platform_carry.time_remaining <= 0.0f) {
+        return;
+    }
+
+    // OG AddPlatformVelocity: cap upward carry at 180, discard downward carry,
+    // and cap horizontal carry magnitude at 300 before adding it to launch.
+    Vec3 carry = state.platform_carry.stored_velocity;
+    carry.y = Clamp(carry.y, 0.0f, 180.0f);
+    const float horizontal_speed = LengthXZ(carry);
+    if (horizontal_speed > 300.0f) {
+        const float scale = 300.0f / horizontal_speed;
+        carry.x *= scale;
+        carry.z *= scale;
+    }
+
+    state.velocity.x += carry.x;
+    state.velocity.y += carry.y;
+    state.velocity.z += carry.z;
+    state.platform_carry = {};
+}
+
+void SetDashVelocity(PlayerState& state, const MovementConfig& config) {
+    const Vec3 direction = NormalizeXZ(state.target_facing, state.last_facing);
+    if (state.dashed_on_ground) {
+        state.velocity = {
+            direction.x * config.dash_speed,
+            0.0f,
+            direction.z * config.dash_speed,
+        };
+        return;
+    }
+
+    // OG Player.SetDashSpeed: airborne dash aims slightly upward, then
+    // normalizes the full (horizontal direction, 0.4) vector to DashSpeed.
+    const float scale = config.dash_speed / std::sqrt(1.16f);
+    state.velocity = {
+        direction.x * scale,
+        0.4f * scale,
+        direction.z * scale,
+    };
+}
+
 // ── OG climb probe helpers (climb-parity-3 Inc 1) ────────────────────
 //
 // OG Z-up → demake +Y-up: position is the body CENTER; feet = center.y -
@@ -163,11 +215,53 @@ inline void AdoptCornerWall(PlayerState& state, const MovementConfig& config,
     state.climb.grip_face_id = hit.face_id;
     state.position = {
         hit.point.x + n.x * config.climb_pushout_dist,
-        hit.point.y + (config.player_half_height - config.climb_waist_offset),
+        hit.point.y + n.y * config.climb_pushout_dist +
+            (config.player_half_height - config.climb_waist_offset),
         hit.point.z + n.z * config.climb_pushout_dist,
     };
     state.target_facing = NormalizeXZ({-n.x, 0.0f, -n.z}, state.target_facing);
     state.last_facing = state.target_facing;
+}
+
+// Reject corner rays that found a wall from its far side. QueryWallRay orients
+// normals toward the ray origin, so a ray starting behind a finite wall edge
+// can otherwise make an impossible corner look valid and snap the player
+// through the adjoining face.
+bool CornerAnchorIsBehindOldWall(const Room* room, const MovementConfig& config,
+                                 const Vec3& old_normal, const WallHit& next) {
+    if (room == nullptr || !next.hit) return false;
+    const Vec3 next_waist = {
+        next.point.x + next.plane_normal.x * config.climb_pushout_dist,
+        next.point.y + next.plane_normal.y * config.climb_pushout_dist,
+        next.point.z + next.plane_normal.z * config.climb_pushout_dist,
+    };
+    const WallHit old_backside = QueryWallClosestToFace(
+        *room, next_waist, config.climb_pushout_dist + 0.25f,
+        {-old_normal.x, -old_normal.y, -old_normal.z});
+    return old_backside.hit &&
+           DotXZ(old_backside.plane_normal, old_normal) < -0.5f;
+}
+
+bool CornerAnchorWithinEaseReach(const PlayerState& state,
+                                 const MovementConfig& config,
+                                 const WallHit& next) {
+    const Vec3 next_center = {
+        next.point.x + next.plane_normal.x * config.climb_pushout_dist,
+        next.point.y + next.plane_normal.y * config.climb_pushout_dist +
+            (config.player_half_height - config.climb_waist_offset),
+        next.point.z + next.plane_normal.z * config.climb_pushout_dist,
+    };
+    const Vec3 delta = {
+        next_center.x - state.position.x,
+        next_center.y - state.position.y,
+        next_center.z - state.position.z,
+    };
+    // A ray may see a disconnected face at its full reach (8 units). Starting
+    // a 0.2 s ease from that anchor cuts through the old wall and lets waist
+    // popout fight the transition. Wait until destination anchor is nearer.
+    const float max_anchor_delta = config.climb_check_dist * 1.5f;
+    return std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z) <=
+           max_anchor_delta;
 }
 
 // 1. Inner corner (OG :1567-1574): pressing sideways into a joining wall —
@@ -195,25 +289,16 @@ bool InnerCornerSideRay(PlayerState& state, const MovementConfig& config,
     QueryWallRay(*room, ClimbWaistPoint(state, config),
                  {tangent.x, 0.0f, tangent.z}, config.climb_check_dist, &out);
     if (!out.hit) return false;
+    // The corner face must oppose the direction of travel. QueryWallRay
+    // orients the returned normal toward its ray origin; a malformed/backside
+    // hit can otherwise place the new anchor on the far side of the wall.
+    if (DotXZ(out.plane_normal, tangent) > -0.5f) return false;
     // Only adopt when the ray found a DIFFERENT wall than the gripped one
     // (a side ray along her own wall hits the same wall — that's movement,
     // not a corner).
     if (DotXZ(out.plane_normal, state.climb.wall_normal) > 0.5f) return false;
-    AdoptCornerWall(state, config, out);
-    return true;
-}
-
-// 2. Slope-away snap (OG :1576-1583): raycast back into the wall along
-// -climb_normal keeps the grip glued to walls that lean away. Skipped when
-// the grip probe already reports the same face this tick (CONSIDER adopted).
-bool SlopeSnapRay(PlayerState& state, const MovementConfig& config,
-                  const Room* room, const Vec3& climb_normal) {
-    if (room == nullptr) return false;
-    WallHit out{};
-    QueryWallRay(*room, ClimbWaistPoint(state, config),
-                 {-climb_normal.x, 0.0f, -climb_normal.z},
-                 config.climb_check_dist + 2.0f, &out);
-    if (!out.hit) return false;
+    if (CornerAnchorIsBehindOldWall(room, config, state.climb.wall_normal, out))
+        return false;
     AdoptCornerWall(state, config, out);
     return true;
 }
@@ -224,7 +309,6 @@ bool OuterCornerRay(PlayerState& state, const MovementConfig& config,
                     const Room* room, const Vec3& climb_normal,
                     const Vec3& move_xz, const WallHit& gripped) {
     if (room == nullptr) return false;
-    (void)gripped;
     const Vec3 fwd = NormalizeXZ({-climb_normal.x, 0.0f, -climb_normal.z});
     // Body-relative side (same tangent projection as InnerCornerSideRay).
     const float into = move_xz.x * climb_normal.x + move_xz.z * climb_normal.z;
@@ -236,17 +320,87 @@ bool OuterCornerRay(PlayerState& state, const MovementConfig& config,
     if (proj_len < 0.1f) return false;
     const Vec3 side = {proj_x / proj_len, 0.0f, proj_z / proj_len};
     const Vec3 waist = ClimbWaistPoint(state, config);
+    // Probe from the player's side of the adjoining face. Starting at +side
+    // and casting -side crosses behind the finite wall edge first; QueryWallRay
+    // then correctly orients the face toward that WRONG-side origin, causing
+    // AdoptCornerWall to snap through the wall (real Forsaken City seam at
+    // x=-19.2,z=51.2). Cast along the player's lateral intent instead.
     const Vec3 origin = {
-        waist.x + fwd.x * (config.climb_check_dist + 1.0f) + side.x,
+        waist.x + fwd.x * (config.climb_check_dist + 1.0f) - side.x,
         waist.y,
-        waist.z + fwd.z * (config.climb_check_dist + 1.0f) + side.z,
+        waist.z + fwd.z * (config.climb_check_dist + 1.0f) - side.z,
     };
     WallHit out{};
-    QueryWallRay(*room, origin, {-side.x, 0.0f, -side.z}, config.climb_check_dist * 2.0f, &out);
+    QueryWallRay(*room, origin, side, config.climb_check_dist * 2.0f, &out);
     if (!out.hit) return false;
+    if (DotXZ(out.plane_normal, side) > -0.5f) return false;
     if (DotXZ(out.plane_normal, state.climb.wall_normal) > 0.5f) return false;
+    if (!CornerAnchorWithinEaseReach(state, config, out)) return false;
+    const Vec3& old_normal = gripped.hit &&
+            DotXZ(gripped.plane_normal, climb_normal) > 0.5f
+        ? gripped.plane_normal
+        : climb_normal;
+    if (CornerAnchorIsBehindOldWall(room, config, old_normal, out))
+        return false;
     AdoptCornerWall(state, config, out);
     return true;
+}
+
+Vec3 AvoidGroundLedge(const PlayerState& state, const MovementConfig& config,
+                      const Room* room, const Vec3& move_input) {
+    if (room == nullptr || config.ledge_sweep_dist <= 0.0f ||
+        LengthXZ(move_input) <= kEpsilon) {
+        return move_input;
+    }
+
+    // OG Player.cs:1032-1082 probes from the feet anchor. Demake stores body
+    // center, so translate to feet before applying the source offsets.
+    const float distance = config.ledge_sweep_dist;
+    const float feet_y = state.position.y - config.player_half_height;
+    const Vec3 feet_origin = {state.position.x, feet_y, state.position.z};
+    const auto floor_ahead = [&](const Vec3& direction) {
+        const Vec3 origin = {
+            feet_origin.x + direction.x * distance,
+            feet_origin.y + distance,
+            feet_origin.z + direction.z * distance,
+        };
+        return RaycastRoomSource(*room, origin, {0.0f, -1.0f, 0.0f},
+                                 distance * 2.0f, BackfacePolicy::Ignore).hit;
+    };
+
+    // A real floor ahead or a solid wall directly ahead makes this ordinary
+    // movement, not a ledge corner. Keep the shared input snapshot unchanged.
+    if (floor_ahead(move_input) ||
+        RaycastRoomSource(*room,
+                          {feet_origin.x, feet_y + distance, feet_origin.z},
+                          move_input, distance, BackfacePolicy::Ignore).hit) {
+        return move_input;
+    }
+
+    constexpr float kInitialAngle = 0.3f;
+    constexpr float kAngleStep = 0.1f;
+    constexpr int kMaxSweepSteps = 10;
+    const float input_angle = AngleXZ(move_input);
+    const auto direction_at = [](float angle) {
+        return Vec3{std::cos(angle), 0.0f, std::sin(angle)};
+    };
+
+    Vec3 left = direction_at(input_angle + kInitialAngle);
+    Vec3 right = direction_at(input_angle - kInitialAngle);
+    int count = 0;
+    if (floor_ahead(left)) {
+        while (floor_ahead(left) && count++ < kMaxSweepSteps) {
+            left = direction_at(AngleXZ(left) - kAngleStep);
+        }
+        return direction_at(AngleXZ(left) + kAngleStep);
+    }
+    if (floor_ahead(right)) {
+        while (floor_ahead(right) && count++ < kMaxSweepSteps) {
+            right = direction_at(AngleXZ(right) + kAngleStep);
+        }
+        return direction_at(AngleXZ(right) - kAngleStep);
+    }
+    return move_input;
 }
 
 void StartJump(PlayerState& state, const MovementConfig& config, const Vec3& move_input) {
@@ -264,12 +418,7 @@ void StartJump(PlayerState& state, const MovementConfig& config, const Vec3& mov
     // OG CancelGroundSnap parity (Player.cs:742): a takeoff must never be
     // eaten by the 5-unit ground snap on the next ticks.
     state.contact.ground_snap_cooldown_remaining = config.ground_snap_cooldown;
-    if (state.platform_carry.time_remaining > 0.0f) {
-        state.velocity.x += state.platform_carry.stored_velocity.x;
-        state.velocity.y += state.platform_carry.stored_velocity.y;
-        state.velocity.z += state.platform_carry.stored_velocity.z;
-        state.platform_carry = {};
-    }
+    AddStoredPlatformVelocity(state);
 
     if (LengthXZ(move_input) > kEpsilon) {
         state.target_facing = NormalizeXZ(move_input, state.target_facing);
@@ -280,6 +429,9 @@ void StartJump(PlayerState& state, const MovementConfig& config, const Vec3& mov
 }
 
 void StartDashJump(PlayerState& state, const MovementConfig& config, const Vec3& move_input, const PlayerController::StepContext& context) {
+    // OG DashJump restores coyoteZ before applying its launch; this matters
+    // when the ground dash has carried Madeline just beyond a ledge.
+    state.position.y = state.contact.coyote_height;
     state.velocity.y = config.dash_jump_speed;
     state.hold_jump_speed = config.dash_jump_hold_speed;
     state.hold_jump_time_remaining = config.dash_jump_hold_time;
@@ -298,6 +450,7 @@ void StartDashJump(PlayerState& state, const MovementConfig& config, const Vec3&
         state.velocity.x += state.target_facing.x * config.dash_jump_xy_boost;
         state.velocity.z += state.target_facing.z * config.dash_jump_xy_boost;
     }
+    AddStoredPlatformVelocity(state);
 }
 
 void ApplyJumpAndGravity(
@@ -311,8 +464,7 @@ void ApplyJumpAndGravity(
     // Inc 1: the input device owns the 0.10 s press buffer — `input.jump_pressed`
     // is the device-buffered edge (live for the buffer window). Consume it on
     // acceptance so the buffered edge cannot re-fire next frame.
-    if (input.jump_pressed && can_jump) {
-        input.ConsumeJumpPress();
+    if (can_jump && input.ConsumeJumpPress()) {
         StartJump(state, config, move_input);
         return;
     }
@@ -349,7 +501,8 @@ void ApplyJumpAndGravity(
 
 }  // namespace
 
-PlayerController::PlayerController(MovementConfig config) : config_(config), mover_() {
+PlayerController::PlayerController(MovementConfig config)
+    : config_(config), mover_(MakePlayerMoveConfig(config)) {
     // og-mover-overhaul Inc 2: the parity warning against PlayerMotorConfig is
     // gone (PlayerMotor is deleted). The single mover is MoveService (Inc 1);
     // MoveServiceConfig::half_height stays default 10 == config_.player_half_height.
@@ -366,6 +519,10 @@ void PlayerController::Step(
         return;
     }
 
+    if (room != nullptr) {
+        MovingSurfacePhase(state, *room);
+    }
+
     // Full OG pipeline (Inc 2): timers/input -> state (velocity edits) ->
     // MovePhase (SweepMove + LateContact). MovePhase(nullptr) already routes
     // to the contact-snapshot-only path, so the room-less fixture case and
@@ -373,6 +530,61 @@ void PlayerController::Step(
     StepContext context = TimerInputPhase(state, input, camera_forward, delta_seconds);
     StatePhase(state, input, context, delta_seconds, room);
     MovePhase(state, delta_seconds, room);
+}
+
+void PlayerController::MovingSurfacePhase(PlayerState& state, const Room& room) const {
+    if (!state.contact.was_grounded || state.contact.ground_surface_id < 0) {
+        return;
+    }
+
+    const MovingSurface* surface = FindMovingSurface(room, state.contact.ground_surface_id);
+    if (surface == nullptr) {
+        state.contact.ground_surface_id = -1;
+        return;
+    }
+
+    const Vec3& platform_velocity = surface->rider_velocity;
+    if (LengthXZ(platform_velocity) <= kEpsilon &&
+        std::fabs(platform_velocity.y) <= kEpsilon) {
+        return;
+    }
+
+    // OG RidingPlatformSetVelocity only replaces a live stored boost when the
+    // new platform velocity is useful relative to player momentum.
+    const float platform_speed_sq = LengthXZ(platform_velocity) * LengthXZ(platform_velocity);
+    const float player_speed_sq = LengthXZ(state.velocity) * LengthXZ(state.velocity);
+    const bool platform_turns_player =
+        LengthXZ(platform_velocity) > kEpsilon &&
+        LengthXZ(state.velocity) > kEpsilon &&
+        DotXZ(platform_velocity, state.velocity) /
+            (LengthXZ(platform_velocity) * LengthXZ(state.velocity)) < 0.5f;
+    if (state.platform_carry.time_remaining <= 0.0f ||
+        platform_velocity.y >= state.velocity.y ||
+        platform_speed_sq + 0.1f >= player_speed_sq ||
+        platform_turns_player) {
+        state.platform_carry.stored_velocity = platform_velocity;
+        state.platform_carry.time_remaining = surface->carry_storage_time > 0.0f
+            ? surface->carry_storage_time
+            : 0.10f;
+    }
+
+    // OG RidingPlatformMoved uses the same swept mover, with impact velocity
+    // resolution disabled, so blocked riders do not teleport through walls.
+    const Vec3 before = state.position;
+    mover_.SweepMove(state, room, surface->displacement, false);
+    const Vec3 moved = {
+        state.position.x - before.x,
+        state.position.y - before.y,
+        state.position.z - before.z,
+    };
+    if (state.movement_state == PlayerMovementState::Climbing) {
+        state.climb.corner_from.x += moved.x;
+        state.climb.corner_from.y += moved.y;
+        state.climb.corner_from.z += moved.z;
+        state.climb.corner_to.x += moved.x;
+        state.climb.corner_to.y += moved.y;
+        state.climb.corner_to.z += moved.z;
+    }
 }
 
 PlayerController::StepContext PlayerController::TimerInputPhase(
@@ -456,12 +668,16 @@ void PlayerController::StClimbingUpdate(
         // (controller-only fixtures) fall back to the motor's body-center flag.
         const WallHit gripped = ClimbCheckAt(state, config_, room);
         const bool grip_present = room != nullptr ? gripped.hit : state.wall_contact;
+        const bool corner_easing = state.climb.corner_ease > 0.0f;
 
         // Re-acquire the gripped face by identity, not by nearest-any-wall.
         // Keep the stored normal while the same face (or a consistent normal)
         // is present; update only on a genuine wall change (different face and
         // divergent normal, e.g. rounding a corner).
-        if (gripped.hit) {
+        // Corner easing is one kinematic transition across a temporary gap.
+        // Re-querying each intermediate point can snap back to the old wall;
+        // keep the adopted destination wall until the ease completes.
+        if (gripped.hit && !corner_easing) {
             const bool same_face = state.climb.grip_face_id == gripped.face_id;
             const bool climb_normal_xz = LengthXZ(climb_normal) > 0.1f;
             const bool same_direction = climb_normal_xz &&
@@ -522,6 +738,7 @@ void PlayerController::StClimbingUpdate(
                 state.velocity.z = -hop_dir.z * config_.climb_hop_forward_speed;
                 state.no_move_time_remaining = config_.climb_hop_no_move_time;
                 state.climb.cooldown_remaining = config_.climb_cooldown;
+                AddStoredPlatformVelocity(state);
                 // OG CancelGroundSnap parity (Player.cs:1473 climb exit): the
                 // mantle hop must not be snap-pulled back to the wall/floor.
                 state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
@@ -544,7 +761,7 @@ void PlayerController::StClimbingUpdate(
         // Button release and facing-away are still instant (deliberate intent,
         // not probe noise). The mantle path (above) already handles the real
         // wall top before this guard.
-        if (!input.climb_held || wall_facing_dot < 0.5f) {
+        if (!input.climb_held || (!corner_easing && wall_facing_dot < 0.5f)) {
 #ifdef N64
             debugf("[climb] EXIT %s lf=(%.2f,%.2f) wn=(%.2f,%.2f) grip=%d\n",
                    !input.climb_held ? "button" : "facing",
@@ -558,11 +775,13 @@ void PlayerController::StClimbingUpdate(
                                                     : LocomotionState::Fall;
             return;
         }
-        if (grip_present) {
-            state.climb.grip_lost_timer = kClimbGripGrace;
-        } else {
-            state.climb.grip_lost_timer -= delta_seconds;
-            if (state.climb.grip_lost_timer <= 0.0f) {
+        if (!corner_easing) {
+            if (grip_present) {
+                state.climb.grip_lost_timer = kClimbGripGrace;
+            } else {
+                state.climb.grip_lost_timer -= delta_seconds;
+            }
+            if (!grip_present && state.climb.grip_lost_timer <= 0.0f) {
 #ifdef N64
                 debugf("[climb] release grip_lost (grip=%d lf=(%.2f,%.2f) wn=(%.2f,%.2f))\n",
                        (int)grip_present,
@@ -578,26 +797,19 @@ void PlayerController::StClimbingUpdate(
         }
 
         // Wall jump from climb: velocity is SET away from the wall (OG WallJump).
-        if (input.jump_pressed) {
-            input.ConsumeJumpPress();
+        if (input.ConsumeJumpPress()) {
             state.movement_state = PlayerMovementState::Normal;
             const Vec3 jump_dir = NormalizeXZ(climb_normal,
                 Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
-            // Neutral wall jump splits vertical/horizontal (demake-tuned
-            // neutral pair 105/40, formerly MovementProfile; directional uses
-            // the OG pair 90/83.2). Config single source (S4).
-            const bool neutral = !has_move_input;
-            const float horizontal = neutral
-                ? config_.neutral_wall_jump_horizontal_speed
-                : config_.wall_jump_speed_x;
-            const float vertical = neutral
-                ? config_.neutral_wall_jump_vertical_speed
-                : config_.wall_jump_speed_y;
-            state.velocity.x = jump_dir.x * horizontal;
-            state.velocity.y = vertical;
-            state.velocity.z = jump_dir.z * horizontal;
+            // OG WallJump always sets the same launch velocity. Climb input
+            // (including neutral vs. holding a direction) does not select a
+            // second jump profile.
+            state.velocity.x = jump_dir.x * config_.wall_jump_speed_x;
+            state.velocity.y = config_.wall_jump_speed_y;
+            state.velocity.z = jump_dir.z * config_.wall_jump_speed_x;
             state.target_facing = jump_dir;
             state.last_facing = jump_dir;
+            AddStoredPlatformVelocity(state);
             state.locomotion_state = LocomotionState::Jump;
             state.hold_jump_speed = config_.jump_speed;
             state.hold_jump_time_remaining = config_.jump_hold_time;
@@ -611,10 +823,9 @@ void PlayerController::StClimbingUpdate(
         // Dash off the wall (parity with OG dash-out of Climb). The device
         // owns the 0.10 s press buffer, so `input.dash_pressed` is the
         // buffered edge; the press edge is consumed on acceptance.
-        const bool climb_dash_want = input.dash_pressed;
-        if (climb_dash_want &&
-            state.air_dash_available &&
-            state.dash_cooldown_remaining <= 0.0f) {
+        if (state.air_dash_available &&
+            state.dash_cooldown_remaining <= 0.0f &&
+            input.ConsumeDashPress()) {
             if (has_move_input) {
                 state.target_facing = move_input;
             }
@@ -627,14 +838,19 @@ void PlayerController::StClimbingUpdate(
             state.auto_jump = false;
             state.dash_hitstop_remaining = config_.dash_hitstop_time;
             state.dash_active_remaining = config_.dash_active_time;
-            state.dash_time_remaining = config_.dash_hitstop_time + config_.dash_active_time;
+            state.dash_time_remaining = config_.dash_active_time;
             state.dash_reset_cooldown_remaining = config_.dash_reset_cooldown;
             state.no_dash_jump_remaining = config_.no_dash_jump_time;
-            input.ConsumeDashPress();
-            context.dash_momentum = {};
-            state.velocity = {};
+            SetDashVelocity(state, config_);
+            context.dash_momentum = {state.velocity.x, 0.0f, state.velocity.z};
             return;
         }
+
+        // OG Player.cs:1473 cancels ground snap on every sustained climb tick
+        // (after release/jump/dash early exits). Climb can begin while
+        // grounded; once it leaves floor support, the mover's previous-tick
+        // grounded contact must not pull the kinematic wall step back down.
+        state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
 
         // ── Corner ease integration (OG structure: the ease branch REPLACES
         // the movement branch). Runs before release checks? No — release +
@@ -722,12 +938,15 @@ void PlayerController::StClimbingUpdate(
                                gripped)) {
                 state.climb.corner_from = pre_adopt;
                 state.climb.corner_to = state.position;
+                state.climb.corner_normal_from = climb_normal;
+                state.climb.corner_normal_to = state.climb.wall_normal;
                 // Facing ease: from the pre-adopt facing INTO the old wall →
                 // INTO the new wall (AdoptCornerWall set the new one).
                 state.climb.corner_facing_from = pre_facing;
                 state.climb.corner_facing_to = state.target_facing;
                 state.climb.corner_ease = config_.climb_corner_ease_time;
                 state.climb.corner_travel_origin = state.position;
+                state.position = state.climb.corner_from;
                 state.locomotion_state = LocomotionState::Climb;
                 context.corner_triggered = true;
                 return;
@@ -768,19 +987,25 @@ void PlayerController::StClimbingUpdate(
                              config_.climb_check_dist * 2.0f, &side_probe);
                 if (side_probe.hit &&
                     side_probe.face_id != state.climb.grip_face_id &&
-                    DotXZ(side_probe.plane_normal, climb_normal) < 0.99f) {
+                    DotXZ(side_probe.plane_normal, climb_normal) < 0.99f &&
+                    CornerAnchorWithinEaseReach(state, config_, side_probe) &&
+                    !CornerAnchorIsBehindOldWall(
+                        room, config_, climb_normal, side_probe)) {
                     force_corner = true;
                 }
             }
         }
         if (force_corner) {
             state.climb.corner_from = state.position;
+            state.climb.corner_normal_from = climb_normal;
             AdoptCornerWall(state, config_, side_probe);
             state.climb.corner_to = state.position;
+            state.climb.corner_normal_to = state.climb.wall_normal;
             state.climb.corner_facing_from = state.last_facing;
             state.climb.corner_facing_to = state.target_facing;
             state.climb.corner_ease = config_.climb_corner_ease_time;
             state.climb.corner_travel_origin = state.position;
+            state.position = state.climb.corner_from;
             state.locomotion_state = LocomotionState::Climb;
             context.corner_triggered = true;
             return;
@@ -838,9 +1063,8 @@ bool PlayerController::TryDashAccept(
     const PlayerInput& input,
     StepContext& context
 ) const {
-    if (!input.dash_pressed ||
-        !state.air_dash_available ||
-        state.dash_cooldown_remaining > 0.0f) {
+    if (!state.air_dash_available || state.dash_cooldown_remaining > 0.0f ||
+        !input.ConsumeDashPress()) {
         return false;
     }
     if (context.has_move_input) {
@@ -855,15 +1079,15 @@ bool PlayerController::TryDashAccept(
     state.auto_jump = false;
     state.dash_hitstop_remaining = config_.dash_hitstop_time;
     state.dash_active_remaining = config_.dash_active_time;
-    state.dash_time_remaining = config_.dash_hitstop_time + config_.dash_active_time;
+    state.dash_time_remaining = config_.dash_active_time;
     state.dash_reset_cooldown_remaining = config_.dash_reset_cooldown;
     state.no_dash_jump_remaining = config_.no_dash_jump_time;
     // OG CancelGroundSnap parity (Player.cs:939 TryDash): a grounded dash
     // cancels the snap so the launch cannot be pulled back down.
     state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
-    context.dash_momentum = {};
-    state.velocity = {};
-    input.ConsumeDashPress();
+    SetDashVelocity(state, config_);
+    context.dash_momentum = {state.velocity.x, 0.0f, state.velocity.z};
+    context.dash_started_this_tick = true;
     return true;
 }
 
@@ -916,24 +1140,13 @@ void PlayerController::StNormalUpdate(
 
     // Climb entry — OG TryClimb parity (Player.cs:856-880 + SolidWallCheck):
     // own waist-plane query (radius climb_check_dist, prefer -facing),
-    // neutral-or-into-wall input gate, ClimbNormalCheck gate (inside the
-    // query), plus the OG airborne rising +4-unit snap-up variant
-    // (Velocity.y > 0 && !grounded → probe waist + 4). The facing gate
-    // (wall_facing_dot >= 0.5) is a KEPT documented deviation (M2): OG ranks
-    // candidates by prefer only and never dot-gates; the narrower grab set
-    // targets the phantom-latch complaint (movement_spec.md, Inc 5).
+    // neutral-or-into-wall input gate against the queried face,
+    // ClimbNormalCheck gate (inside the query), plus OG's airborne rising
+    // +4-unit snap-up variant (Velocity.y > 0 && !grounded → probe waist + 4).
+    // Prefer direction ranks candidate faces; it does not reject side-facing
+    // grabs. Raw shoulder input must be valid; a stuck controller bit is an
+    // input-mapping fault, not a reason to narrow OG's wall-contact behavior.
     {
-        Vec3 entry_normal = state.wall_normal;
-        const bool entry_normal_valid = LengthXZ(entry_normal) > 0.1f;
-        if (!entry_normal_valid) {
-            entry_normal = {-state.last_facing.x, 0.0f, -state.last_facing.z};
-        }
-        const float wall_facing_dot = DotXZ(entry_normal,
-            {-state.last_facing.x, 0.0f, -state.last_facing.z});
-        const bool facing_wall = wall_facing_dot >= 0.5f;
-        const bool into_wall_input = !context.has_move_input ||
-                                     DotXZ(context.move_input, entry_normal) <= -0.5f;
-
         // OG airborne snap-up: only grab a higher wall while RISING and
         // airborne (Velocity.y > 0, Player.cs TryClimb +4 UnitZ variant).
         const bool airborne_rising = !state.grounded && state.velocity.y > 0.0f;
@@ -941,30 +1154,32 @@ void PlayerController::StNormalUpdate(
         bool grab = false;
         WallHit entry_hit{};
         if (input.climb_held &&
-            state.climb.cooldown_remaining <= 0.0f &&
-            facing_wall &&
-            into_wall_input) {
+            state.climb.cooldown_remaining <= 0.0f) {
             if (room != nullptr) {
-                // OG path: her OWN waist query decides — no motor flag. The
-                // entry probe uses the visibility radius (wall_probe_radius,
-                // = motor tangent rest distance 5 > climb_check_dist 4): at
-                // exact tangency she rests with her waist one unit beyond
-                // probe-4 reach, yet OG still grabs there (Popout first pulls
-                // her in; dist == radius counts as touching). Entry then
-                // re-anchors to the OG TryClimb spot, after which the r4
-                // sustain probe governs. The +4 snap-up variant uses r4 (OG:
-                // ClimbCheckDist reach above the lip).
+                // OG TryClimb: her OWN waist query decides — no motor flag.
+                // Use ClimbCheckDist for both entry and sustain. The model's
+                // wider visual bounds are handled in Render, not physics.
                 const Vec3 into_wall_dir = {-state.last_facing.x, 0.0f, -state.last_facing.z};
                 entry_hit = QueryClimbWall(*room, ClimbWaistPoint(state, config_),
-                                           config_.wall_probe_radius, into_wall_dir);
+                                           config_.climb_check_dist, into_wall_dir);
                 if (!entry_hit.hit && airborne_rising) {
                     entry_hit = ClimbCheckAt(state, config_, room, 4.0f);
                 }
-                grab = entry_hit.hit;
+                const bool into_wall_input = !context.has_move_input ||
+                    (entry_hit.hit &&
+                     DotXZ(context.move_input, entry_hit.plane_normal) <= -0.5f);
+                grab = entry_hit.hit && into_wall_input;
             } else {
                 // room == nullptr shim (controller-only fixtures): keep the
                 // flag-based entry so controller-only suites keep working.
-                grab = state.wall_contact;
+                Vec3 entry_normal = state.wall_normal;
+                if (LengthXZ(entry_normal) < 0.1f) {
+                    entry_normal = {-state.last_facing.x, 0.0f,
+                                    -state.last_facing.z};
+                }
+                const bool into_wall_input = !context.has_move_input ||
+                    DotXZ(context.move_input, entry_normal) <= -0.5f;
+                grab = state.wall_contact && into_wall_input;
             }
         }
 
@@ -976,16 +1191,14 @@ void PlayerController::StNormalUpdate(
                 state.climb.grip_face_id = entry_hit.face_id;
                 // OG TryClimb reposition (Player.cs:868-869): center = wall
                 // point + (half_height - waist_offset) up + pushout along the
-                // normal. Single-frame snap WITHOUT the old 3-unit/axis cap —
-                // the cap broke the anchor on sloped walls (the snap distance
-                // is legitimately > 3 units there, e.g. 6.06 for a 15° lean),
-                // leaving the body embedded in the wall plane (climb-bug
-                // probe: dist=-4.93 behind the plane). The climb movement is
-                // along the wall plane (wallUp) and the climb popout is
-                // waist-only, so the anchor is a stable equilibrium.
+                // full 3D normal. Keep the waist probe exactly at
+                // climb_pushout_dist on sloped walls too; omitting normal.y
+                // made the anchor drift into the wall and forced Popout to
+                // fight each climb step.
                 state.position = {
                     entry_hit.point.x + entry_hit.plane_normal.x * config_.climb_pushout_dist,
-                    entry_hit.point.y + (config_.player_half_height - config_.climb_waist_offset),
+                    entry_hit.point.y + entry_hit.plane_normal.y * config_.climb_pushout_dist +
+                        (config_.player_half_height - config_.climb_waist_offset),
                     entry_hit.point.z + entry_hit.plane_normal.z * config_.climb_pushout_dist,
                 };
                 // Tunnel guard: if the snap left her with NO wall face at the
@@ -1011,49 +1224,6 @@ void PlayerController::StNormalUpdate(
         }
     }
 
-    // Directional wall jump (without grab): SET velocity away from the wall.
-    // OG WallJumpCheck parity (Player.cs:900-910): a FRESH waist query decides
-    // — not the motor's stale flag. room==nullptr shim keeps controller-only
-    // fixtures on the flag path (same shim as climb entry).
-    if (!state.grounded &&
-        input.jump_pressed &&
-        !input.jump_press_consumed) {
-        bool wall_jump = false;
-        Vec3 jump_dir{};
-        float pushout_scale = 0.0f;
-        if (room != nullptr) {
-            const WallHit hit = ClimbCheckAt(state, config_, room);
-            if (hit.hit) {
-                wall_jump = true;
-                jump_dir = NormalizeXZ(hit.plane_normal,
-                    Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
-                // OG WallJumpCheck pushes her out along the face proportionally:
-                // pushout * (WallPushoutDist / ClimbCheckDist).
-                pushout_scale = config_.climb_pushout_dist / config_.climb_check_dist;
-                const float away = hit.pushout * pushout_scale;
-                state.position.x += hit.plane_normal.x * away;
-                state.position.z += hit.plane_normal.z * away;
-            }
-        } else if (state.wall_contact) {
-            wall_jump = true;
-            jump_dir = NormalizeXZ(state.wall_normal,
-                Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
-        }
-        if (wall_jump) {
-            input.ConsumeJumpPress();
-            state.target_facing = jump_dir;
-            state.last_facing = jump_dir;
-            state.velocity.x = jump_dir.x * config_.wall_jump_speed_x;
-            state.velocity.y = config_.wall_jump_speed_y;
-            state.velocity.z = jump_dir.z * config_.wall_jump_speed_x;
-            state.hold_jump_speed = config_.jump_speed;
-            state.hold_jump_time_remaining = config_.jump_hold_time;
-            // OG CancelGroundSnap parity (Player.cs:915 WallJumpCheck): the
-            // wall-jump launch must not be snap-pulled back to the floor.
-            state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
-        }
-    }
-
     // Dash acceptance — OG TryDash parity (Player.cs:939); shared with
     // StSkiddingUpdate. The device owns the 0.10 s press buffer, so
     // `input.dash_pressed` is the buffered edge; consumed on acceptance.
@@ -1070,6 +1240,9 @@ void PlayerController::StNormalUpdate(
         // lockout is active only friction applies — move input is ignored.
         const bool move_locked = state.no_move_time_remaining > 0.0f;
         const bool move_active = has_move_input && !move_locked;
+        const Vec3 ground_move_input = state.grounded && move_active
+            ? AvoidGroundLedge(state, config_, room, move_input)
+            : move_input;
         const Vec3 horizontal_velocity = {state.velocity.x, 0.0f, state.velocity.z};
         const float speed_xz = LengthXZ(horizontal_velocity);
         // Base max speed, then apply slope modulation when grounded on a
@@ -1079,92 +1252,159 @@ void PlayerController::StNormalUpdate(
         if (state.grounded && (state.contact.ground_normal.y < 0.999f)) {
             const float slope_dot_c =
                 1.0f - Clamp(state.contact.ground_normal.y, 0.0f, 1.0f);
-            // Along-slope input: project move_input onto the ground normal's
-            // XZ. OG uses Dot(groundNormal.XY().Normalized(), targetFacing)*2.
+            // OG uses the current target-facing basis, before this tick's
+            // steering update, to select uphill/downhill max-speed bias.
             const Vec3 gxz = NormalizeXZ(
                 {state.contact.ground_normal.x, 0.0f, state.contact.ground_normal.z},
-                move_input);
-            const float along = DotXZ(gxz, move_active ? move_input : state.target_facing);
+                state.target_facing);
+            const float along = DotXZ(gxz, state.target_facing);
             max_speed += max_speed * (slope_dot_c * along * 2.0f);
         }
+        const float true_max_speed = max_speed;
         const float desired_speed = max_speed * AnalogMagnitude(raw_input_length);
-        const Vec3 target_velocity = move_active
-            ? Vec3{move_input.x * desired_speed, state.velocity.y, move_input.z * desired_speed}
+        const Vec3 ground_target_velocity = move_active
+            ? Vec3{ground_move_input.x * desired_speed, state.velocity.y, ground_move_input.z * desired_speed}
             : Vec3{0.0f, state.velocity.y, 0.0f};
 
         if (state.grounded) {
             // OG: rotation-based turning when above rotate threshold.
-            if (move_active && speed_xz > config_.rotate_threshold) {
+            if (move_active && speed_xz >= config_.rotate_threshold) {
                 // Skid trigger (og-mover-overhaul Inc 4, OG Player.cs:1072-1078):
                 // when moving fast AND the camera-relative input opposes the
                 // velocity direction past SkidDotThreshold, enter Skidding.
-                const Vec3 vel_norm = NormalizeXZ(horizontal_velocity, move_input);
-                const float turn_dot = DotXZ(vel_norm, move_input);
+                const Vec3 vel_norm = NormalizeXZ(horizontal_velocity, ground_move_input);
+                const float turn_dot = DotXZ(vel_norm, ground_move_input);
                 if (turn_dot <= config_.skid_dot_threshold) {
                     state.movement_state = PlayerMovementState::Skidding;
                     state.no_skid_jump_remaining = config_.no_skid_jump_time;
-                    state.target_facing = move_input;
-                    state.facing = move_input;
+                    state.target_facing = ground_move_input;
+                    state.facing = ground_move_input;
                     state.locomotion_state = LocomotionState::Idle;
                     return;
                 }
-                state.target_facing = RotateTowardXZ(state.target_facing, move_input, config_.rotate_speed * delta_seconds);
-                const float accel = config_.acceleration;
-                const Vec3 rotated_target = {
-                    state.target_facing.x * desired_speed,
-                    state.velocity.y,
-                    state.target_facing.z * desired_speed,
-                };
-                state.velocity = ApproachXZ(state.velocity, rotated_target, accel * delta_seconds);
+                const bool past_max = speed_xz >= true_max_speed &&
+                    DotXZ(ground_move_input, horizontal_velocity) >= 0.7f;
+                const float accel = past_max ? config_.past_max_deceleration
+                                             : config_.acceleration;
+                const float rotate_speed = speed_xz > true_max_speed
+                    ? config_.rotate_speed_above_max
+                    : config_.rotate_speed;
+                state.target_facing = RotateTowardXZ(
+                    state.target_facing, ground_move_input,
+                    rotate_speed * delta_seconds);
+                const float next_speed = Approach(
+                    speed_xz, desired_speed, accel * delta_seconds);
+                state.velocity.x = state.target_facing.x * next_speed;
+                state.velocity.z = state.target_facing.z * next_speed;
             } else {
-                const float accel = move_active
-                    ? config_.acceleration
-                    : config_.friction;
-                state.velocity = ApproachXZ(state.velocity, target_velocity, accel * delta_seconds);
+                const bool past_max = move_active &&
+                    speed_xz >= true_max_speed &&
+                    DotXZ(ground_move_input, horizontal_velocity) >= 0.7f;
+                const float accel = !move_active ? config_.friction
+                    : (past_max ? config_.past_max_deceleration
+                                : config_.acceleration);
+                state.velocity = ApproachXZ(state.velocity, ground_target_velocity, accel * delta_seconds);
+                if (move_active) {
+                    state.target_facing = ground_move_input;
+                }
             }
             state.locomotion_state = move_active || speed_xz > kEpsilon
                 ? LocomotionState::Run
                 : LocomotionState::Idle;
-            if (move_active) {
-                state.target_facing = move_input;
-                state.facing = move_input;
-            }
         } else {
-            // Air movement: OG scales accel by dot product of input vs velocity direction
-            const float input_dot = move_active
-                ? DotXZ(NormalizeXZ(horizontal_velocity, state.target_facing), move_input)
-                : 1.0f;
-            float accel_mult = 1.0f;
-            if (input_dot < 0.0f) {
-                // Reversing direction: more accel (air_turn)
-                accel_mult = config_.air_accel_mult_min + (config_.air_accel_mult_max - config_.air_accel_mult_min) * (1.0f + input_dot);
-            }
-            float accel;
-            if (speed_xz > config_.run_speed) {
-                // Above max: past_max_decel (slower acceleration to preserve momentum)
-                accel = config_.past_max_deceleration * accel_mult;
-            } else {
-                accel = config_.acceleration * accel_mult;
-            }
             if (move_active) {
-                // OG: rotation-based turning in air too
-                if (speed_xz > config_.rotate_threshold) {
-                    state.target_facing = RotateTowardXZ(state.target_facing, move_input, config_.rotate_speed * delta_seconds);
-                    const Vec3 rotated_target = {
-                        state.target_facing.x * desired_speed,
-                        state.velocity.y,
-                        state.target_facing.z * desired_speed,
-                    };
-                    state.velocity = ApproachXZ(state.velocity, rotated_target, accel * delta_seconds);
-                } else {
-                    state.velocity = ApproachXZ(state.velocity, target_velocity, accel * delta_seconds);
-                }
-                state.target_facing = move_input;
+                // OG normalizes RelativeMoveInput in air and targets full
+                // MaxSpeed; analog magnitude remap applies only while grounded.
+                const Vec3 air_target_velocity = {
+                    move_input.x * config_.run_speed,
+                    state.velocity.y,
+                    move_input.z * config_.run_speed,
+                };
+
+                // OG air steering scales against targetFacing, not current
+                // velocity direction. PastMaxDeccel is used only when speed
+                // is at/above MaxSpeed AND input continues along velocity.
+                const float facing_dot = std::clamp(
+                    DotXZ(move_input, state.target_facing), -1.0f, 1.0f);
+                const float facing_t = (facing_dot + 1.0f) * 0.5f;
+                const bool past_max = speed_xz >= config_.run_speed &&
+                    DotXZ(move_input, NormalizeXZ(horizontal_velocity,
+                                                  state.target_facing)) >= 0.7f;
+                const float accel_mult = past_max
+                    ? config_.air_accel_mult_max -
+                          (config_.air_accel_mult_max - config_.air_accel_mult_min) * facing_t
+                    : config_.air_accel_mult_min +
+                          (config_.air_accel_mult_max - config_.air_accel_mult_min) * facing_t;
+                const float accel = past_max
+                    ? config_.past_max_deceleration * accel_mult
+                    : config_.acceleration * accel_mult;
+                state.velocity = ApproachXZ(
+                    state.velocity, air_target_velocity, accel * delta_seconds);
+            } else {
+                // OG's no-input/tNoMove path applies friction in air too,
+                // scaled by AirFrictionMult (0.1), instead of preserving
+                // horizontal velocity indefinitely.
+                const float air_friction = config_.friction * config_.air_friction_mult;
+                state.velocity = ApproachXZ(
+                    state.velocity,
+                    {0.0f, state.velocity.y, 0.0f},
+                    air_friction * delta_seconds);
             }
             state.locomotion_state = state.velocity.y > 0.0f ? LocomotionState::Jump : LocomotionState::Fall;
         }
 
-        ApplyJumpAndGravity(state, input, move_input, config_, delta_seconds);
+        // OG order: ordinary horizontal movement first, then coyote jump,
+        // then directional WallJumpCheck, and only then gravity. A wall-jump
+        // launch therefore cannot be altered by this tick's air friction or
+        // acceleration. Coyote jump keeps priority when both are possible.
+        const bool coyote_jump_available = state.coyote_time_remaining > 0.0f &&
+                                           input.JumpPressAvailable();
+        bool did_wall_jump = false;
+        if (!coyote_jump_available && !state.grounded &&
+            input.JumpPressAvailable()) {
+            bool wall_jump = false;
+            Vec3 jump_dir{};
+            float pushout = 0.0f;
+            if (room != nullptr) {
+                const Vec3 into_wall = {-state.last_facing.x, 0.0f, -state.last_facing.z};
+                const WallHit hit = QueryClimbWall(
+                    *room, ClimbWaistPoint(state, config_),
+                    config_.climb_check_dist, into_wall);
+                if (hit.hit) {
+                    wall_jump = true;
+                    jump_dir = NormalizeXZ(hit.plane_normal,
+                        Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
+                    // OG WallJumpCheck pushes out by
+                    // WallPushoutDist / ClimbCheckDist before launching.
+                    pushout = hit.pushout *
+                              (config_.climb_pushout_dist / config_.climb_check_dist);
+                    state.position.x += hit.plane_normal.x * pushout;
+                    state.position.z += hit.plane_normal.z * pushout;
+                }
+            } else if (state.wall_contact) {
+                wall_jump = true;
+                jump_dir = NormalizeXZ(state.wall_normal,
+                    Vec3{-state.last_facing.x, 0.0f, -state.last_facing.z});
+            }
+            if (wall_jump && input.ConsumeJumpPress()) {
+                state.target_facing = jump_dir;
+                state.last_facing = jump_dir;
+                state.velocity.x = jump_dir.x * config_.wall_jump_speed_x;
+                state.velocity.y = config_.wall_jump_speed_y;
+                state.velocity.z = jump_dir.z * config_.wall_jump_speed_x;
+                AddStoredPlatformVelocity(state);
+                state.hold_jump_speed = config_.jump_speed;
+                state.hold_jump_time_remaining = config_.jump_hold_time;
+                state.locomotion_state = LocomotionState::Jump;
+                // OG CancelGroundSnap parity (Player.cs:915 WallJumpCheck).
+                state.contact.ground_snap_cooldown_remaining =
+                    config_.ground_snap_cooldown;
+                did_wall_jump = true;
+            }
+        }
+        if (!did_wall_jump) {
+            ApplyJumpAndGravity(state, input, move_input, config_, delta_seconds);
+        }
     }
 }
 
@@ -1179,12 +1419,18 @@ void PlayerController::StDashingUpdate(
     const bool has_move_input = context.has_move_input;
     (void)room;
     if (state.movement_state == PlayerMovementState::Dashing) {
-            state.dash_time_remaining -= delta_seconds;
+            // OG StDashingEnter applies launch velocity before World.HitStun
+            // pauses later world ticks. The FSM cascade reaches this update on
+            // the same demake tick, so leave the entry-frame launch intact.
+            if (context.dash_started_this_tick) {
+                return;
+            }
             if (state.dash_hitstop_remaining > 0.0f) {
                 state.dash_hitstop_remaining = Approach(state.dash_hitstop_remaining, 0.0f, delta_seconds);
                 state.velocity = {};
                 return;
             }
+            state.dash_time_remaining -= delta_seconds;
             state.dash_active_remaining = Approach(state.dash_active_remaining, 0.0f, delta_seconds);
             // Dash steering (og-mover-overhaul Inc 4, OG Player.cs:1288-1293):
             // while dashing, rotate toward move input and re-set dash speed so
@@ -1194,25 +1440,22 @@ void PlayerController::StDashingUpdate(
                 state.target_facing = RotateTowardXZ(
                     dash_dir, move_input, config_.dash_rotate_speed * delta_seconds);
             }
-            state.velocity.x = state.target_facing.x * config_.dash_speed;
-            state.velocity.y = 0.0f;
-            state.velocity.z = state.target_facing.z * config_.dash_speed;
+            SetDashVelocity(state, config_);
             // Store dash momentum for conservation into jump
             context.dash_momentum.x = state.velocity.x;
             context.dash_momentum.z = state.velocity.z;
             if (state.dash_time_remaining <= 0.0f) {
                 if (!state.grounded) {
                     state.velocity.x *= config_.dash_end_speed_multiplier;
+                    state.velocity.y *= config_.dash_end_speed_multiplier;
                     state.velocity.z *= config_.dash_end_speed_multiplier;
                 }
                 state.movement_state = PlayerMovementState::Normal;
-                state.dash_cooldown_remaining = config_.dash_cooldown;
             } else {
                 if (state.dashed_on_ground &&
                     state.coyote_time_remaining > 0.0f &&
                     state.no_dash_jump_remaining <= 0.0f &&
-                    input.jump_pressed) {
-                    input.ConsumeJumpPress();
+                    input.ConsumeJumpPress()) {
                     state.movement_state = PlayerMovementState::Normal;
                     StartDashJump(state, config_, move_input, context);
                 }
@@ -1252,6 +1495,12 @@ void PlayerController::StSkiddingUpdate(
                 // skid-jump
                 if (state.no_skid_jump_remaining <= 0.0f && input.ConsumeJumpPress()) {
                     state.movement_state = PlayerMovementState::Normal;
+                    // OG SkidJump restores the recorded coyote height and
+                    // consumes coyote time. Without this, a second fixed tick
+                    // in the same render frame can treat the skid jump as a
+                    // fresh coyote jump if an input snapshot is replayed.
+                    state.position.y = state.contact.coyote_height;
+                    state.coyote_time_remaining = 0.0f;
                     // OG CancelGroundSnap parity: the skid-jump launch must not
                     // be snap-pulled back to the floor.
                     state.contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown;
@@ -1260,6 +1509,7 @@ void PlayerController::StSkiddingUpdate(
                     state.velocity.y = config_.skid_jump_speed;
                     state.hold_jump_speed = config_.skid_jump_speed;
                     state.hold_jump_time_remaining = config_.skid_jump_hold_time;
+                    AddStoredPlatformVelocity(state);
                     state.locomotion_state = LocomotionState::Jump;
                 } else {
                     // decel toward input direction
@@ -1297,8 +1547,11 @@ void PlayerController::OnStateExit(
     PlayerMovementState prev,
     PlayerMovementState next
 ) const {
-    (void)state; (void)prev; (void)next;
-    // Inc 2: exit hook. Currently a no-op.
+    if (prev == PlayerMovementState::Dashing && next != PlayerMovementState::Dashing) {
+        // OG StDashingExit (Player.cs:1267) runs on every dash exit, including
+        // DashJump's immediate transition back to Normal.
+        state.dash_cooldown_remaining = config_.dash_cooldown;
+    }
 }
 
 void PlayerController::StatePhase(
@@ -1326,10 +1579,10 @@ void PlayerController::StatePhase(
 
     // Transition cascade: the pre-FSM code ran the Dashing/Skidding blocks in
     // the SAME tick as the dash/skid acceptance (Normal→Dashing→StDashingUpdate,
-    // Normal→Skidding→StSkiddingUpdate) and the Normal block in the same tick
-    // as the dash end (Dashing→Normal→StNormalUpdate). The loop reproduces
-    // that; enter/exit hooks fire on each transition. Climb entry and skid
-    // exits are terminal for the tick (the pre-FSM code returned after them).
+    // Normal→Skidding→StSkiddingUpdate). Dashing→Normal is terminal: OG's
+    // StDashingUpdate returns after dash expiry or DashJump, so Normal must not
+    // run until next tick. Enter/exit hooks fire on each transition. Climb
+    // entry and skid exits are also terminal for the tick.
     for (int i = 0; i < 3; ++i) {
         const PlayerMovementState before = state.movement_state;
         switch (state.movement_state) {
@@ -1353,9 +1606,11 @@ void PlayerController::StatePhase(
         OnStateExit(state, before, state.movement_state);
         OnStateEnter(state, before, state.movement_state);
         if (state.movement_state == PlayerMovementState::Climbing ||
+            (before == PlayerMovementState::Dashing &&
+             state.movement_state == PlayerMovementState::Normal) ||
             (before == PlayerMovementState::Skidding &&
              state.movement_state != PlayerMovementState::Dashing)) {
-            break;  // climb entry / skid exit: terminal for the tick
+            break;  // OG early return: climb entry, dash exit, or skid exit
             // (Skidding→Dashing still cascades: the pre-FSM dash acceptance
             // ran before the state blocks, so a skid dash ran the Dashing
             // block in the same tick; Skidding→Normal cancel/done/jump only
@@ -1407,14 +1662,27 @@ void PlayerController::MovePhase(
     // OG LateUpdate ground checks (Player.cs:400-411): recompute grounded from
     // the post-move position, then ground snap if we left the ground.
     const bool prev_grounded = state.contact.was_grounded;
-    state.grounded = mover_.GroundCheck(state, *room, nullptr, nullptr);
+    GroundHit ground_hit{};
+    state.grounded = mover_.GroundCheck(state, *room, nullptr, nullptr, &ground_hit);
     if (!state.grounded && prev_grounded) {
         mover_.GroundSnap(state, *room, delta_seconds);
+        if (state.grounded) {
+            mover_.GroundCheck(state, *room, nullptr, nullptr, &ground_hit);
+        }
+    }
+    if (state.grounded && ground_hit.hit &&
+        FindMovingSurface(*room, ground_hit.owner_id) != nullptr) {
+        state.contact.ground_surface_id = ground_hit.owner_id;
+    } else {
+        state.contact.ground_surface_id = -1;
     }
 
     // Coyote refresh + dash refill when grounded (OG: tCoyote reset, dash
     // refill on ground within reset window).
     if (state.grounded) {
+        // OG LateUpdate clears autoJump on every grounded contact, including
+        // the frame where GroundSnap restores support after stepping down.
+        state.auto_jump = false;
         state.coyote_time_remaining = config_.coyote_time;
         state.contact.coyote_height = state.position.y;
         if (state.dash_reset_cooldown_remaining <= 0.0f) {

@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 #include "gameplay/runtime/timing.hpp"
 
@@ -52,12 +53,50 @@ static void test_per_frame_cap() {
     printf("[t2] per-frame tick cap OK\n");
 }
 
-// --- Test 3: spiral cap engages on 100 ms frame ------------------------------
+// --- Test 3: spiral cap engages on 120 ms frame ------------------------------
 static void test_spiral_cap() {
     FixedStepAccumulator acc;
-    int t = acc.BeginFrame(0.100f);
-    printf("[t3] 100ms → ticks = %d (want %d)\n", t, FixedStepAccumulator::kMaxTicksPerFrame);
-    assert(t == FixedStepAccumulator::kMaxTicksPerFrame && "spiral cap did not engage on 100ms");
+    int t = acc.BeginFrame(0.120f);
+    printf("[t3] 120ms → ticks = %d (want %d)\n", t, FixedStepAccumulator::kMaxTicksPerFrame);
+    assert(t == FixedStepAccumulator::kMaxTicksPerFrame && "spiral cap did not engage on 120ms");
+    const float expected_backlog = 0.120f -
+        FixedStepAccumulator::kMaxTicksPerFrame * FixedStepAccumulator::kTickDt;
+    assert(Near(acc.accumulator, expected_backlog, 1e-6f) &&
+           "elapsed time beyond per-frame work cap must remain queued, not disappear");
+
+    const int catchup_ticks = acc.BeginFrame(0.0f);
+    assert(catchup_ticks == 2 && "a short hitch should catch up on the next frame");
+    assert(acc.accumulator < FixedStepAccumulator::kTickDt &&
+           "catch-up must leave only fractional interpolation carry");
+}
+
+static void test_backlog_bound_and_discard_telemetry() {
+    FixedStepAccumulator acc;
+    const int ticks = acc.BeginFrame(1.0f);
+    const float max_backlog = FixedStepAccumulator::kMaxAccumulatedTicks *
+                              FixedStepAccumulator::kTickDt;
+    assert(ticks == FixedStepAccumulator::kMaxTicksPerFrame);
+    assert(Near(acc.accumulator, max_backlog - ticks * FixedStepAccumulator::kTickDt,
+                1e-6f));
+    assert(acc.PendingTicks() == 5);
+    assert(Near(acc.last_discarded_seconds,
+                1.0f - max_backlog, 1e-5f));
+
+    const int catchup_ticks = acc.BeginFrame(0.0f);
+    assert(catchup_ticks == 5 && acc.PendingTicks() == 0);
+    assert(Near(acc.last_discarded_seconds, 0.0f, 1e-6f) &&
+           "discard telemetry must reset on frames without a new drop");
+}
+
+static void test_invalid_dt_is_ignored() {
+    FixedStepAccumulator acc;
+    assert(acc.BeginFrame(std::numeric_limits<float>::quiet_NaN()) == 0);
+    assert(Near(acc.accumulator, 0.0f, 1e-6f));
+    assert(Near(acc.last_discarded_seconds, 0.0f, 1e-6f));
+
+    assert(acc.BeginFrame(-1.0f) == 0);
+    assert(Near(acc.accumulator, 0.0f, 1e-6f));
+    assert(Near(acc.last_discarded_seconds, 0.0f, 1e-6f));
 }
 
 // --- Test 4: interpolation alpha = 0.5 gives midpoint ------------------------
@@ -103,6 +142,8 @@ int main() {
     test_tick_count_300();
     test_per_frame_cap();
     test_spiral_cap();
+    test_backlog_bound_and_discard_telemetry();
+    test_invalid_dt_is_ignored();
     test_interpolation();
     test_prev_position_reset();
     printf("[timing_fixed_step_test] PASS\n");

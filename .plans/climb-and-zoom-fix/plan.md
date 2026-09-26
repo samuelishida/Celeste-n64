@@ -246,6 +246,14 @@ diagonal trim at mid-wall no longer sets grounded; ramp standing unaffected
 - Run: `./tests/run_host_tests.sh`
 - Done: lip walkover passes; surface_parity_smoke + gameplay_smoke green.
 
+**Single-mover migration follow-up (2026-09-25):** `player_motor.cpp` was
+later deleted by `.plans/og-mover-overhaul/`. Its lip criterion had no live
+MoveService coverage and regressed to a hard stop at `x=-3`. The current owner
+is `MoveService::TryStepUp` in `player_movement.cpp`; `move_service_smoke`
+covers 5-unit walkover plus rejection of a 6-unit lip and a low overhang.
+This supersedes this increment's old file/test ownership, not its acceptance
+intent.
+
 ### Inc 4 — Zoom speed tuning (S)
 **Depends on:** none
 **Unblocks:** 5

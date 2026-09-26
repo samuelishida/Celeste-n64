@@ -33,6 +33,34 @@ inline constexpr bool kDebugAutoWalk = false;
 // guarantee >=1 seam crossing. Default 100.0 preserves the legacy behavior.
 inline constexpr float kDebugAutoWalkDistance = 260.0f;
 
+// Deterministic movement diagnostics. Replaces controller input with a
+// fixed-step run/stop/reverse/jump/dash/climb sequence and emits compact
+// [phys] samples. Climb target is selected from real collision geometry.
+// `make physics-autoplay-rom` enables this only in its isolated diagnostic
+// build; normal ROMs keep it disabled.
+#if defined(MC_DEBUG_PHYSICS_AUTOPLAY)
+inline constexpr bool kDebugPhysicsAutoplay = true;
+#else
+inline constexpr bool kDebugPhysicsAutoplay = false;
+#endif
+#if defined(MC_DEBUG_PHYSICS_AUTOPLAY_MANTLE)
+inline constexpr bool kDebugPhysicsAutoplayMantle = true;
+#else
+inline constexpr bool kDebugPhysicsAutoplayMantle = false;
+#endif
+#if defined(MC_DEBUG_PHYSICS_AUTOPLAY_CORNER)
+inline constexpr bool kDebugPhysicsAutoplayCorner = true;
+#else
+inline constexpr bool kDebugPhysicsAutoplayCorner = false;
+#endif
+// Temporary live-controller trace for the Ares repro session. Reset false
+// after capture; emits ~10 Hz samples plus input/state/contact transitions.
+#if defined(MC_DEBUG_INPUT_RECORDING)
+inline constexpr bool kDebugInputRecording = true;
+#else
+inline constexpr bool kDebugInputRecording = false;
+#endif
+
 // streaming-experience Inc 4: per-cell reveal animation gate. When true, a
 // cell that enters the drawn 3×3 while still loading (or whose staged parse
 // lands while it is already drawn) animates in via a matrix pivot-scale about

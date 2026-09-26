@@ -81,7 +81,7 @@ PlayerState RunScenePlayerTick(
 int main() {
     MovementConfig config;
     PlayerController controller(config);
-    MoveService mover;
+    const MoveService& mover = controller.Mover();
     RespawnSystem respawn(config);
     CameraController camera_ctrl;
 
@@ -95,7 +95,7 @@ int main() {
 
     constexpr float kDt = 1.0f / 60.0f;
     // Feet-on-floor center: half_height above the floor plane at y=0.
-    constexpr float kHalfHeight = 10.0f;
+    const float kHalfHeight = config.player_half_height;
 
     // --- Single tick with zero input: position must match resolver-only
     //     output, grounded agrees, no duplicate writer drifts the y. ---

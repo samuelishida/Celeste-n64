@@ -125,11 +125,11 @@ formulas, is what closes the clip and the divergent-repair-path bugs.
   converts to feet-anchored (+Y): waist = center.y − half_height + 3, head =
   center.y − half_height + 10, ground ray origin = center.y − half_height + 5.
   Source: code @ Player.cs:154-157 vs player_motor.hpp half_height=10.
-- Decision: single climb entry site exists and already matches OG TryClimb
-  (climb-parity-3 Inc 2 done); this plan re-wires its *repositioning* through
-  the mover but keeps the entry gates (facing-dot ≥ 0.5 kept as the documented
-  deviation; neutral-or-into-wall stick; ClimbNormalCheck < 0.35). Source:
-  code @ player_controller.cpp:434-457, docs/movement_spec.md deviations list.
+- Decision at plan time: single climb entry site exists and already matches OG
+  TryClimb (climb-parity-3 Inc 2 done); this plan re-wires its *repositioning*
+  through the mover and initially keeps the facing-dot ≥ 0.5 gate. That gate is
+  removed by the 2026-09-25 OG side-facing climb-entry parity follow-up below;
+  neutral-or-into-wall stick and ClimbNormalCheck < 0.35 remain.
 - Decision: the user was unavailable for the question gate; recommended
   defaults chosen autonomously (full OG mover; OG collision primitives; port
   Skidding; clip-context "not isolated — fix the class, verify by capture").
@@ -528,13 +528,23 @@ fixtures green; a fast exit-dash at a corner cannot pass through the wall
 **Depends on:** 2, 3 (serialized after 3 — both edit
 player_controller.cpp; ledge-avoid rays interact with climb entry probes)
 **Unblocks:** 5
+
+**Follow-up audit (2026-09-25):** the earlier DONE label overstated parity:
+`ledge_sweep_dist` existed but was unused, and `ledge_smoke` only asserted
+that some movement occurred. Restored OG's feet-anchored floor/wall probes and
+bounded side sweep in grounded Normal movement. Strengthened the regression so
+it fails without supported-side steering and also checks clear-path, wall-ahead,
+idle, and roomless behavior. Host suite 67/67 and ROM build pass. This fixes grounded
+edge-follow input only; it does not establish wall/camera visual clearance.
+
 **Done criteria:** reversing at ≥ RotateThreshold triggers Skidding (state
 visible, EndSkidSpeed exit at 0.8×max, SkidJump available after 0.1 s);
 dash has the full OG steering loop (rotate at DashRotateSpeed + re-
 `SetDashSpeed`, continuous steer gate `Dot(move, facing) >= -0.2`) and a
 0.10 s dash input buffer (OG VirtualButton device buffer, matching Jump's);
 jump buffer at 0.10 s; coyote jump snaps to `coyote_y` takeoff height;
-walking into a wall ledge-follows (input rotation) instead of dead-stopping;
+near an unsupported edge, input rotates toward a side with supported floor;
+ordinary wall-ahead movement remains unchanged;
 downhill/uphill modulates max speed; partial stick maps to
 `ClampedMap(.4,.92,.3,1)` max-speed scale. All host-asserted.
 
@@ -586,7 +596,7 @@ downhill/uphill modulates max speed; partial stick maps to
 - Done: suite green + the feel section in movement_spec ("Demake
   implementation") updated.
 
-### Inc 5 — Close-out: telemetry, docs, device gate (S) — [done; device capture pending]
+### Inc 5 — Close-out: telemetry, docs, device gate (S) — [implementation complete; final acceptance pending]
 **Depends on:** 2, 3, 4
 **Unblocks:** none
 **Done criteria:** continuous Ares session (≥120 s, kDebugAutoWalk walk +
@@ -615,10 +625,12 @@ anomalies), ≤1 `[climb] START` per intentional grab, 0 phantom grabs at rest
   1. kill plane −200 (demake world) vs OG −100;
   2. hitstop controller-local (OG world-level freeze);
   3. camera zoom rates 1.8/1.0 (documented pre-existing deviation);
-  4. climb entry facing-dot ≥ 0.5 gate (OG has none);
+  4. climb entry facing-dot ≥ 0.5 gate (OG has none; removed in the
+     2026-09-25 parity follow-up below);
   5. 2-tick mantle confirm (OG instant);
-  6. climb-state collision radius 3 with entry visibility radius 5
-     (climb-parity-3 documented deviation, retained);
+  6. physics/climb wall radius 3 with OG `ClimbCheckDist=4` for entry and
+     sustain; static model clearance is renderer-only and must not widen the
+     gameplay probe or collision shell;
   7. normal-state wall rest distance now 3 (OG WallPushoutDist) — changed
      from the old motor's 5-radius tangent (og-mover-overhaul decision,
      fixture (e) locked);
@@ -641,15 +653,156 @@ anomalies), ≤1 `[climb] START` per intentional grab, 0 phantom grabs at rest
   attributing any grab line.
 
 #### Verification
-- Run: `tools/capture_baseline.sh madeline_cube_rom.z64 120 og-mover-final`
+- Run: `bash tools/capture_baseline.sh madeline_cube_rom.z64 120 og-mover-final`
   → archive to `build/baseline-og-mover-final-<ts>.txt`; diff vs
   `baseline-diag-20260826-150416.txt` for regressions in
   `[profiler]`/`[counters]` — gate: `[profiler]` update ≤0.25 ms (measured
   pre-overhaul budget 0.194 ms + ≤30% headroom; substeps + ≤2 wall
-  probes/tick vs today's passes must not cost CPU) and `[memory]` delta
+  probes/tick vs today's passes must not cost CPU); confirm `[artifact]` ROM
+  SHA-256 matches tested build and `[memory]` delta
   < 50 KB (no new persistent allocations).
 - `./tests/run_host_tests.sh` green immediately before close.
 - Done: capture cited in AGENTS.md; suite green; ROM rebuilt.
+
+#### Revalidation (2026-09-25)
+
+The final guided Ares route now approaches a real map wall without teleporting,
+enters at 3.35 units (OG probe range 4), climbs 17 ticks, and mantles. The
+machine clearance gate records 17 samples, zero violations, and 0.50 minimum
+rendered-model gap. `./tests/run_host_tests.sh` passes 67/67 and the normal ROM
+was rebuilt with physics autoplay disabled. This is implementation/device
+telemetry evidence only; it does not close final acceptance: current interactive
+Ares process predates the ROM rebuild, so latest visual state and the continuous
+120 s walk/manual controller checklist remain pending.
+
+### Grounded lip step-up migration follow-up (2026-09-25)
+
+Audit found the old climb-and-zoom Inc 3 knee-high-lip acceptance was not
+migrated when `PlayerMotor` was deleted. Reproduction stopped a grounded mover
+at `x=-3` against a 5-unit lip. `MoveService::TryStepUp` now probes the
+leading-edge support surface, steps only while grounded and only up to 5 units,
+and rejects blocked headroom or a second wall. `move_service_smoke` covers the
+5-unit mover walkover, the same traversal through actual controller input/state
+ticks, 6-unit rejection, and low-overhang rejection. Full host suite passes
+67/67. Fresh ROM builds with autoplay disabled. This is a collision
+regression fix, not proof that the screenshot's wall/model overlap is gone;
+current Ares session still needs reload for visual revalidation.
+
+### Ground-snap landing bookkeeping follow-up (2026-09-25)
+
+A one-tick controller regression across a 4-unit step-down showed a parity
+hole: feet snapped to `y=-4`, but `grounded` and `was_grounded` remained false.
+`GroundSnap` had used its confirming `GroundCheck` only to copy the floor
+normal; controller coyote/dash contact bookkeeping therefore skipped the
+snap tick. This also left OG `autoJump` uncleared after contact. The regression
+asserts same-tick feet position, grounded/contact flags, coyote refresh, and
+auto-jump clearing. Focused `move_service_smoke` passes after updating the
+mover's grounded result and the controller's common landing branch. Full
+host suite passes 67/67; `make madeline_cube_rom.z64` succeeds. ROM SHA-256:
+`b991c51377ac91770ba83c2d69c3c7f636edf06fd4e3de0b287bd70e7636b1dc`.
+Live Ares/manual controller acceptance remains pending; current process still
+emits the old `[input-trace]` format.
+
+### Per-move contact accumulation follow-up (2026-09-25)
+
+Before-fix mover regression swept across a narrow `MAT_DEATH` strip and ended
+on safe floor with `death_contact=0`: `Popout` cleared the per-move flag at
+each <=2-unit repair substep. Moved death/ceiling resets to sweep entry and
+made step-up, climb, and ground-snap contact writes accumulate for the whole
+move. Focused mover fixture fails before/fixes after; full host suite 67/67 and
+`make madeline_cube_rom.z64` pass. ROM SHA-256:
+`19db75053a5971a6e83d2f81eed1d6d4a230186d6a283850f6092df8cf887053`.
+
+This is a contact-reporting fix, not visual proof for the user's wall/model
+glitch. Interactive Ares PID 190708 predates this ROM; latest visual/controller
+acceptance still needs user reload and retest.
+
+### Sustained-climb ground-snap regression follow-up (2026-09-25)
+
+Grounded synthetic entry reproduced a real state-ordering bug: first held
+up-climb tick ended with `dy=0`, `grounded=1`, and no snap cooldown. OG
+`StClimbingUpdate` re-arms `CancelGroundSnap` every sustained tick after its
+release/jump/dash early exits; the demake had only launch and mantle setters.
+Added that refresh plus a grounded-entry regression. The real-map guided test
+now starts at manifest Start, walks to face 5190, rests against it for 30 ticks
+with neutral input (0.000 drift), then grabs while still grounded. First climb
+step rises and mantle completes after 16 climb ticks. It records 196 waist/head
+samples with zero collision-shell overlaps and 62 runtime-equivalent model
+samples with zero violations (minimum gap 0.500, maximum correction 6.110);
+maximum ordinary tick displacement is 1.491. Continued forward input at this
+cliff edge invokes OG ledge-avoid steering, so rest telemetry releases movement
+before measuring drift. Host suite passes 68/68. `make
+madeline_cube_rom.z64` succeeds; SHA-256:
+`bd3c4f38646fccd3c522eb4d2b5edb91c388509ed15979a8c832adccda7e75c4`.
+The opt-in Ares autoplay gate now also requires grounded wall entry, first
+climb-step rise ≥0.5, and positive snap cooldown after state update; the prior
+10-tick aggregate missed this one-tick regression. Device rerun remains pending.
+`make physics-autoplay-rom` builds the diagnostic artifact separately as
+`physics_autoplay.z64` under a distinct object tree; normal ROM keeps autoplay
+off. Its filesystem is included and its current hash is
+`b5b8a4ff24eb2bb16b86a68933fc17baf8c7c1d76b360315c18546ba3b0f584d`.
+This closes the reproducible sustained-climb snap defect, not the remaining
+visual/manual acceptance gate: Ares PID 190708 was not restarted and predates
+this build.
+
+### Physics capture provenance follow-up (2026-09-25)
+
+The existing capture script could start a second Ares beside an interactive
+session and did not record which ROM file produced telemetry. It now refuses
+when Ares is already live, prints ROM SHA-256/size, and prefixes captures with
+`[artifact]`; ROM boot also prints `[build] compiled=...` for manual sessions.
+`bash -n` passes; live-Ares refusal was verified against PID 190708. A stubbed
+capture verified the metadata header against the current ROM hash
+`73fc8f81f43b49e532f9a5d5aae212cca93ad5a6b082a03c95f98e66ec7e80eb`.
+No second emulator was launched. Current ROM's manual boot marker is
+`[build] compiled=Sep 25 2026 03:01:07`.
+
+### Guided physics device rerun (2026-09-25)
+
+`make physics-autoplay-rom` followed by
+`bash tools/capture_baseline.sh physics_autoplay.z64 30 current-autoplay`
+passes Ares route gate. Capture:
+`build/baseline-current-autoplay-20260925-051503.txt`; ROM SHA-256
+`a400df43bfa453aeb451d6c42ffc8cff10518105e21fe7a695d301d4ca9a9b42`.
+Route starts 51.2 units from face 5190, walks 50 ticks to 3.35-unit entry gap,
+enters climb while grounded, rises 0.67 on first held climb tick with 0.100 s
+snap cooldown, climbs 16 ticks, and mantles. All 16 rendered-model clearance
+samples pass at 0.50-unit minimum gap; zero violations. Movement gates pass:
+run peak 64, brake to 0, reverse speed 64, jump rise 24, dash distance 37.7.
+Idle shoulders remain zero. This is scripted device evidence, not user feel
+acceptance; normal ROM `madeline_cube_rom.z64` remains the manual test target.
+
+### Live-controller replay instrumentation (2026-09-25)
+
+The fixed-tick `[input-trace]` now records movement and camera input, camera
+forward, current/target facing, raw button bits, buffered action/edge
+consumption, position, velocity, contacts, movement state,
+dash/coyote/jump-hold timers, and dash
+availability. `make physics-input-trace-rom` builds a separate
+`physics_input_trace.z64` with live controller input and trace enabled; it does
+not enable autoplay or change default logging. After the air-control and
+texture-prefilter fixes below, current artifact hashes are: normal ROM
+`2f90a5e14a04b7fced12dc922f561470d31745c661a675e2e067e7c13e00eace`, input
+trace ROM `fbb7181dfc2adea04e066fc149fa6cc2ade55292dc1d254fd47da49b71d70eeb`,
+and autoplay ROM `73d11293943244fd2475fa858d5447a9b3264d19bcb8b6ba5b7111806ccda5ae`.
+Builds succeed; host suite passes 71/71. The live Ares process was not
+restarted or disturbed, so controller/visual acceptance still requires loading
+the current normal ROM in the user's session.
+
+### OG air-control parity regression (2026-09-25)
+
+Before-fix captures in `/tmp/hawk-fix-bug-air-friction-before.log` and
+`/tmp/hawk-fix-bug-air-analog-repro.log` reproduced two mismatches against the
+local OG `Player.cs`: no-input air velocity failed to decay from 64 to 24 over
+30 ticks, and half-stick airborne steering stayed below `run_speed`. OG
+normalizes `RelativeMoveInput` in air, targets full `MaxSpeed`, and applies
+`AirFrictionMult=0.1` when input is idle; `AnalogMagnitude` only scales the
+grounded target. The controller now has those separate ground/air rules, with
+coyote jump priority and directional wall-jump launch preserved by keeping
+wall-jump after horizontal movement and skipping same-tick gravity/accel.
+`locomotion_smoke` covers idle-air friction, half-stick air target, unchanged
+ground analog speed, and the existing wall-jump launch contract. Full host
+suite passes 71/71; all three ROM variants above rebuild successfully.
 
 ## Cross-cutting verification
 
@@ -715,3 +868,230 @@ anomalies), ≤1 `[climb] START` per intentional grab, 0 phantom grabs at rest
 - Respawn/transition overhaul (whole-scene OG reload is a different
   architecture than the demake's respawn_system; keep).
 - Spikes/DeathBlocks (no spike actors exist; death plane + respawn unchanged).
+
+### Integrated air-control route gate (2026-09-25)
+
+The isolated map autoplay's post-jump idle window did not test directional
+air steering or release braking end-to-end. Replace ticks 170–179 with six
+camera-right airborne steering ticks followed by four no-input ticks; retain
+the dash press at tick 180 and existing no-teleport guided climb route. Record
+camera-right velocity delta, release horizontal speed drop, and any grounded
+tick. Gate pass on delta ≥8, drop ≥4, and remaining airborne for the full
+window. `locomotion_smoke` now replays the same 6+4 sequence from a captured
+jump velocity. Validation: host suite 74/74 (including registered
+`slope_smoke`); isolated
+`make physics-autoplay-rom` succeeds (SHA-256
+`dbf72d53a396d9e2cb8d249946b965ba4757e9bc3109b64042e8cd296f2e18a6`). At the
+time of this entry the Ares gate was pending; the post-fix device replay is
+recorded below.
+
+### Slope-speed regression registration (2026-09-25)
+
+Review found `tests/feel_spec/slope_smoke.cpp` asserted flat, uphill, downhill,
+and near-vertical movement scaling but was absent from `tests/run_host_tests.sh`.
+Register it beside `locomotion_smoke` so future controller changes execute this
+gate on every host-suite run. Manual slope feel comparison is now item 10 in
+`docs/physics_feel_acceptance.md`.
+
+### Grounded overspeed carry and steering parity (2026-09-25)
+
+OG `Player.cs` saves slope-adjusted `trueMax` before analog scaling, selects
+`PastMaxDeccel` for aligned overspeed carry, rotates above-max `targetFacing`
+at `RotateSpeedAboveMax`, and approaches scalar speed along that facing. The
+demake had used slow deceleration only in air, never used the above-max turn
+rate, and overwrote the rotated target facing with raw stick input. It also
+computed slope bias from current/ledge-adjusted input rather than the
+pre-turn facing basis. Restored OG ordering and equations.
+
+Regressions fail before fix: grounded aligned speed 100 must become 99 after
+one 60 Hz tick; above-max diagonal steering must turn about
+`RotateSpeedAboveMax / 60` radians without snapping to input. Real-map guided
+climb now targets the selected wall plane, ignores unrelated contact flicker,
+and waits for tangent velocity to settle before its 30-tick wall-rest sample.
+Route passes: rest drift 0.000, grounded climb entry, 16 climb ticks, mantle,
+zero shell/model overlap. Host suite: 74/74.
+
+The boot log supplied for the missing-map issue exposed a separate asset
+contract bug: generated `__TB_empty` had no texture path but inherited
+`bilinear`, so `MaterialCatalog` rejected the entire MATMETA and flat fallback
+then read compressed LVL bytes through raw `fopen`. Sentinel metadata now uses
+`filter=none`; textured renderer remains available with a null catalog for
+flat-color fallback; MapRuntime no longer constructs an unused legacy room
+renderer. Fresh Ares boot loads 32 material slots, 13 residents, and reports
+56 near batches / 9 texture uploads, with no `bad magic` or catalog failure.
+
+Normal ROM SHA-256: `156ca7b9d286c33339652a9bfc6928acb4b7ebbf182ebb0c15b69bcefb188fb3`.
+Separate autoplay ROM SHA-256:
+`dbfa9ecf10e08c8c43328b09cfb93cb526d2b7b35fe89827e4b9150ffa9e2064`.
+Fresh Ares `[phys-test] result=PASS`: run peak 64, brake to 0, reverse 64,
+jump rise 24, dash distance 37.9, air-steer delta 26.1, air-release drop 5.3;
+grounded wall entry at gap 3.35, first climb step +0.67 with 0.100 s snap
+cooldown, 16 climb ticks, mantle, and zero model-clearance violations.
+Existing interactive Ares PID 387484 remains untouched. Free-form movement
+feel, slope feel, and camera-angle shimmer still need manual inspection after
+reloading the normal ROM.
+
+### Climb wall-jump input parity (2026-09-25)
+
+Source/test audit found a demake-only neutral split: climb wall-jump set
+`(horizontal=40, vertical=105)` with no stick input, but OG `WallJump()` always
+sets outward `WallJumpXYSpeed=83.2` and `JumpSpeed=90`. The split had no tuning
+evidence and made the same action launch differently based on unrelated climb
+steering. `climb_mantle_smoke` now asserts the same OG launch for neutral and
+up-input jumps; its pre-fix run failed at `(0,105,40)`. Host suite passes
+74/74.
+
+The isolated Ares route now attempts wall-jump after 10 sustained climb ticks,
+before its selected short wall can mantle. Fresh Ares capture
+`build/physics-autoplay-walljump-vector-gate-20260925.log` reports
+`result=PASS`, grounded entry, 10 climb ticks, first-step rise 0.67,
+`walljump_ok=1`, XY speed 83.2, vertical speed 90, outward speed 83.2, and
+zero model-clearance violations across 10 samples. Normal ROM SHA-256:
+`df143c56d1398da4a2d0d0d77beb2f5f4ff51e6974378462f961ed41de572266`;
+autoplay ROM SHA-256:
+`5154415ca871712725c8ea91fc8b6f24a76c3cc9881f3d31d1928b438e31aa0b`.
+Manual controller checklist remains open; existing Ares PID 387484 still has
+the prior ROM loaded.
+
+### Moving-surface carry + late-coyote integration follow-up (2026-09-25)
+
+Closed the gameplay writer gap for the existing `Room::moving_surfaces` path:
+post-move `GroundHit.owner_id` records rider ownership, then the next fixed
+tick's pre-input phase applies platform displacement through `SweepMove` and
+stores the platform velocity for OG's 0.10 s launch window. This does not add
+the deferred actor-trait/solid ownership architecture. `surface_parity_smoke`
+guards rider ownership, swept displacement, and one-shot jump carry.
+
+Added and registered `coyote_edge_smoke`: run off a finite floor, wait until
+late in the 0.12 s coyote window, then assert height restoration at the
+state-phase boundary and upward movement after `MovePhase`. Full suite:
+76/76. Fresh normal ROM builds; separate current autoplay/input-trace ROMs are
+available for device replay. No Ares capture was taken because interactive PID
+387484 is still open. Manual controller/A-B feel gate remains open.
+
+### Real-map slope-speed replay (2026-09-25)
+
+The prior `slope_smoke` injected synthetic normals and could pass a blocked
+real-map track because it only checked that the player stayed grounded. Added
+`real_map_slope_smoke`: scan CMSH for stable two-way ramp corridors, replay 12
+ordinary fixed controller ticks in each direction, compare against flat speed,
+and require nonzero movement plus uphill/downhill speed ordering. First stable
+candidate had zero uphill speed due adjacent geometry and is now rejected; the
+second candidate passes on face 17 with downhill `73.06`, flat `64.00`, uphill
+`54.94` (normal `(0, 0.929, 0.369)`). Host suite prints selected route metrics
+directly. This strengthens slope evidence but does not close subjective device
+feel or the still-pending manual checklist.
+
+### ROM build-marker freshness (2026-09-25)
+
+The user-provided Ares log's 03:01 marker was ambiguous: `__DATE__/__TIME__`
+was compiled into `rom_main.o`, while Make later relinked gameplay objects
+without rebuilding that TU. Added a phony marker prerequisite for
+`$(BUILD_DIR)/src/user/rom_main.o`, including isolated autoplay/input-trace
+builds. Dry-run now schedules that compile; normal build refreshed the object
+at 08:48 and emitted ROM SHA-256
+`e6b561c79589d61849c2b8eaa50d19a56cda415c8cf34a4af25457401f9083da`.
+The captured `[map_runtime] LvlRoomRenderer::Load FAILED` line is absent from
+current source/binary; reload current ROM before treating old Ares output as
+current behavior. `rom_main.o` now rebuilds once per ROM invocation by design.
+
+### Physics capture qualification gate (2026-09-25)
+
+Added `tools/verify_physics_capture.py` and one-command
+`tools/capture_physics_autoplay.sh`. A capture now qualifies only when its
+SHA-256 matches the just-built ROM, boot/map/collision/material/textured-room
+telemetry succeeds, near-render counters are nonzero, every raw Z/L/R/analog
+sample is released, and detailed run/air/jump/dash/approach/climb/walljump/
+clearance metrics pass. `capture_baseline.sh` preserves those startup tags.
+The regression fixture proves the verifier rejects a `[phys-test] PASS` log
+that also has malformed MATMETA, raw-LVL magic failure, and held Z, matching
+the contaminated older capture pattern. Full runtime recapture remains
+pending because interactive Ares PID 387484 is still active; never interpret
+that process as the isolated current autoplay build.
+
+The archived `build/baseline-current-autoplay-20260925-051503.txt` was run
+through the new verifier and correctly rejected: map/collision/catalog/room
+startup telemetry was absent, counters stayed `near_batches=0 resident=0`, and
+its old physics result did not include current air-control and wall-jump gates.
+Its earlier `result=PASS` remains narrow historical route evidence, not a
+qualified whole-runtime physics capture.
+
+### OG side-facing climb-entry parity (2026-09-25)
+
+The 0.5 facing-dot gate was a demake-only rejection: `QueryClimbWall` already
+uses facing as candidate preference, as OG does, but `StNormalUpdate` then
+rejected valid wall hits when the player faced sideways. The gate had been
+retained to address phantom grabs; raw Ares telemetry instead showed `z=1` at
+rest, proving that report came from controller mapping. A new
+`climb_mantle_smoke` case fails before the change (`valid side-facing climb
+press was rejected`) and passes after. Entry now queries first, then checks
+directional movement against the returned face normal; neutral input still
+requires the climb shoulder, and movement away still rejects. This restores
+OG candidate-ranking behavior without weakening input validation. Manual
+controller feel remains unverified until current ROM is loaded in Ares.
+
+### Independent wall-jump and mantle device profiles (2026-09-25)
+
+Audit found the wall-jump route could emit `result=PASS` with `mantle=0`.
+Added a separately built mantle profile; verifier now checks profile identity
+and requires the selected exit event, preventing one climb exit from masking
+the other. Both profiles still perform the same run/brake/reverse, jump/dash,
+air-control, no-teleport real-wall approach, grounded climb entry, first-step,
+and rendered-model clearance gates.
+
+Fresh Ares captures:
+
+- Wall-jump: `build/baseline-walljump-guided-20260925-102621.txt`, SHA-256
+  `d9073254938d39a0e01681ab3d19cee43c5d738d0417582051db02437f832e09`;
+  PASS at 10 climb ticks, `(83.2,90)` launch, 10 clear samples.
+- Mantle: `build/baseline-mantle-guided-20260925-102327.txt`, SHA-256
+  `8cfbc0c31e02f39f78d828f64dcffc9490435b232fc2b29cba6e877c41864007`;
+  PASS at 16 climb ticks, mantle event, 16 clear samples.
+
+Both captures passed map/collision/material/texture/runtime health and raw
+shoulder gates; host suite passes 79/79. This closes the scripted mantle gap,
+not live-controller feel or visual acceptance.
+
+### Fresh current-build qualification (2026-09-25)
+
+The prior pending-capture note naming Ares PID 387484 is historical. Current
+normal ROM SHA-256 `5588babc1194eccd979105fc693d91b1a0288ed8b074eb79a3c158d1c6149b66`
+boots 45 map cells, 10,618 global collision triangles, 32 materials and
+textured rooms; stationary counters are 56 near batches / 13 resident cells.
+Current isolated wall-jump (`8009168981c56b64b6644582f2c9e4b4e8d4921eb17b0df38c7e5570183dd7a1`)
+and mantle (`c603a31f2afc71efd2eaa23f5ddf7958f99aa15135e329ee0ea88e6c31b561cb`)
+captures both pass actual real-map approach, grounded climb, movement/air
+gates, and zero rendered-model clearance violations. Separate profile gates
+require their respective wall-jump or mantle event.
+
+Interactive Ares now runs `physics_input_trace.z64` SHA-256
+`c125799c4a2f9e1f7ddcacf452ca24418c7b223865925ecc2356211853781605` (PID
+674964). Current session remains grounded/neutral in observed trace; no manual
+movement or corner traversal has been recorded yet. Host suite 79/79. Thus
+Inc 5's machine-verifiable route/collision gates are current, but its 120 s
+walk and manual control/corner acceptance remain open.
+
+### No-teleport corner device gate (2026-09-25)
+
+Added `corner` profile to the isolated physics autoplay. Unlike host-only
+corner fixtures that initialized beside the wall, the route starts from map
+`Start`, walks to the z=38.4 face with normal movement, grabs at the live
+`ClimbCheckDist`, and holds side input through the real corner ease. It does
+not write `PlayerState::position`. Terminal gate requires exactly one corner
+adoption, arrival on target normal, 10 stable grip ticks, ≤6-unit max corner
+step, and no rendered-model clearance violations.
+
+Host `real_map_corner_traverse_smoke`: 50 approach ticks, 51.20→3.57 gap,
+49.24-unit displacement, one corner, zero exits, max step 1.914, 0.296 waist
+and head pushout, 0.500 model gap. Ares capture
+`build/baseline-physics-corner-20260925-175629.txt`, SHA-256
+`725086e63bd938eef3fe3061a629be1757abd33ecd5d890609ed194d43756547`: PASS,
+49 approach ticks, 73 climb ticks, one corner, target arrived, 10 stable
+ticks, 86 clearance samples, zero violations, neutral raw shoulders. Verifier
+has an independent corner profile and rejects repeated corner events. Host
+suite 81/81; normal ROM rebuilt and re-booted in Ares with all map materials,
+textured rooms, and neutral `z=0`.
+
+Still open: actual rendered corner-frame inspection, live controller feel,
+and 120-second uninterrupted walk. The Ares route qualifies mechanics and
+clearance math, not final visual acceptance.

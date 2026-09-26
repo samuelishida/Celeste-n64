@@ -23,7 +23,7 @@ Default parity tolerance unless a fixture says otherwise:
 | Source dependency | OG evidence | C++ status | Gap |
 | --- | --- | --- | --- |
 | buffered virtual buttons | `Controls.cs`, historical Foster `VirtualButton` | **done (Inc 1)** | `InputSystem` owns `VirtualButtonState` (0.10 s device buffer + consume-once); controller's internal buffers deleted |
-| deadzoned virtual sticks | `Controls.cs`, Foster `VirtualStick` | **done (Inc 1)** | `VirtualStickState` + circular deadzone; `move_deadzone` config field (default 0.0, OG 0.35 behind a flag) |
+| deadzoned virtual sticks | `Controls.cs`, Foster `VirtualStick` | **done (Inc 1)** | `VirtualStickState` + circular deadzone; `move_deadzone` defaults to OG 0.35 and remains configurable |
 | angle / approach / interval helpers | Foster `Calc`, local player helpers | partial | controller carries private clones (out of scope) |
 | state machine | `Helpers/StateMachine.cs` | **done (Inc 2)** | `StatePhase` dispatcher over Normal/Dashing/Skidding/Climbing with enter/exit hooks + same-tick transition cascade (enum stays at the 4 locomotion states) |
 | actor lifecycle / typed queries | `World.cs` | missing | actors are lightweight structs with bespoke scene wiring (out of scope) |

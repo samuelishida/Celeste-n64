@@ -163,6 +163,53 @@ int main() {
         }
     }
 
+    // OG TryClimb ranks candidate walls by facing preference; it does not
+    // reject a valid nearby wall when the player faces sideways. This guards
+    // against the demake-only 0.5 facing-dot gate swallowing an intentional
+    // climb press after oblique contact.
+    {
+        Harness h;
+        h.Setup(30.0f);
+        h.state.facing = {1.0f, 0.0f, 0.0f};
+        h.state.target_facing = {1.0f, 0.0f, 0.0f};
+        h.state.last_facing = {1.0f, 0.0f, 0.0f};
+        h.state.wall_normal = {0.0f, 0.0f, 1.0f};
+        h.Tick(MakeInput(true));
+        if (h.state.movement_state != PlayerMovementState::Climbing) {
+            printf("FAIL: valid side-facing climb press was rejected\n");
+            return 1;
+        }
+        if (std::fabs(h.state.climb.wall_normal.z - 1.0f) > 0.01f ||
+            h.state.last_facing.z > -0.99f) {
+            printf("FAIL: side-facing climb did not adopt wall plane/facing\n");
+            return 1;
+        }
+
+        Harness no_grab;
+        no_grab.Setup(30.0f);
+        no_grab.state.facing = {1.0f, 0.0f, 0.0f};
+        no_grab.state.target_facing = {1.0f, 0.0f, 0.0f};
+        no_grab.state.last_facing = {1.0f, 0.0f, 0.0f};
+        no_grab.state.wall_normal = {0.0f, 0.0f, 1.0f};
+        no_grab.Tick(MakeInput(false));
+        if (no_grab.state.movement_state == PlayerMovementState::Climbing) {
+            printf("FAIL: side-facing wall auto-grabbed without climb input\n");
+            return 1;
+        }
+
+        Harness away;
+        away.Setup(30.0f);
+        away.state.facing = {1.0f, 0.0f, 0.0f};
+        away.state.target_facing = {1.0f, 0.0f, 0.0f};
+        away.state.last_facing = {1.0f, 0.0f, 0.0f};
+        away.state.wall_normal = {0.0f, 0.0f, 1.0f};
+        away.Tick(MakeInput(true, -1.0f));  // camera-relative move away from wall
+        if (away.state.movement_state == PlayerMovementState::Climbing) {
+            printf("FAIL: climb press accepted while moving away from wall\n");
+            return 1;
+        }
+    }
+
     // --- 3: neutral-stick hang stability ---
     {
         Harness h;
@@ -212,28 +259,39 @@ int main() {
         }
     }
 
-    // --- 5: walljump from climb SETS velocity away from the wall ---
+    // --- 5: climb walljump matches OG with neutral and held movement input ---
     {
-        Harness h;
-        h.Setup(30.0f);
-        if (!h.EnterClimb(MakeInput(true))) {
-            printf("FAIL: expected Climbing before walljump\n");
-            return 1;
-        }
-        PlayerInput wj = MakeInput(true);
-        wj.jump_pressed = true;
-        wj.jump_held = true;
-        h.Tick(wj);
-        // Neutral stick => OG-neutral launch values, SET not added.
-        // Wall normal points +z (toward the player side), so the launch is +z.
-        if (!(std::fabs(h.state.velocity.z - 40.0f) < 0.5f &&
-              std::fabs(h.state.velocity.y - 105.0f) < 0.5f)) {
-            printf("FAIL: neutral walljump SET velocity wrong (%.1f, %.1f, %.1f)\n",
-                   h.state.velocity.x, h.state.velocity.y, h.state.velocity.z);
-            return 1;
-        }
-        if (h.state.movement_state != PlayerMovementState::Normal) {
-            printf("FAIL: walljump did not exit Climbing\n");
+        const auto walljump = [](float move_y, const char* label) {
+            Harness h;
+            h.Setup(30.0f);
+            if (!h.EnterClimb(MakeInput(true))) {
+                printf("FAIL: expected Climbing before %s walljump\n", label);
+                return false;
+            }
+            PlayerInput wj = MakeInput(true, move_y);
+            wj.jump_pressed = true;
+            wj.jump_held = true;
+            h.Tick(wj);
+            // OG WallJump always sets outward XY to MaxSpeed*1.3 and Y to
+            // JumpSpeed, independent of movement input. Wall normal points
+            // +z (toward the player side), so launch must be +z.
+            const float expected_horizontal = MovementConfig{}.wall_jump_speed_x;
+            const float expected_vertical = MovementConfig{}.wall_jump_speed_y;
+            if (!(std::fabs(h.state.velocity.x) < 0.5f &&
+                  std::fabs(h.state.velocity.z - expected_horizontal) < 0.5f &&
+                  std::fabs(h.state.velocity.y - expected_vertical) < 0.5f)) {
+                printf("FAIL: %s walljump SET velocity wrong (%.1f, %.1f, %.1f)\n",
+                       label, h.state.velocity.x, h.state.velocity.y,
+                       h.state.velocity.z);
+                return false;
+            }
+            if (h.state.movement_state != PlayerMovementState::Normal) {
+                printf("FAIL: %s walljump did not exit Climbing\n", label);
+                return false;
+            }
+            return true;
+        };
+        if (!walljump(0.0f, "neutral") || !walljump(1.0f, "up-input")) {
             return 1;
         }
     }
@@ -293,7 +351,9 @@ int main() {
     //     must mantle within a few ticks, not pump release/regrab. ---
     {
         Harness h;
-        h.Setup(SyntheticMesh::kWallTop + 8.0f - 10.0f);  // feet ~2 below lip
+        const float half_height = h.controller.Mover().Config().half_height;
+        const float climb_distance = 40.0f * kDt * 15.0f;
+        h.Setup(SyntheticMesh::kWallTop - 2.0f - climb_distance + half_height);
         if (!h.EnterClimb(MakeInput(true, 1.0f), 10)) {
             printf("FAIL: near-lip grab never entered Climbing\n");
             return 1;

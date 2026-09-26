@@ -89,6 +89,38 @@ int main() {
         printf("skid-jump: vy=%.2f (expect ~%.0f)\n", p.velocity.y, config.skid_jump_speed);
     }
 
+    // A render frame below 60 FPS can run two physics ticks from sibling
+    // copies of one input snapshot. A skid jump must consume that press once,
+    // clear coyote time (OG SkidJump), and remain the stronger 120-unit jump
+    // through the next tick instead of replaying it as an ordinary 90 jump.
+    {
+        PlayerState p;
+        p.grounded = true;
+        p.contact.was_grounded = true;
+        p.position = {0.0f, config.player_half_height, 0.0f};
+        p.velocity = {config.run_speed, 0.0f, 0.0f};
+        p.movement_state = PlayerMovementState::Skidding;
+        p.target_facing = {1.0f, 0.0f, 0.0f};
+        p.last_facing = {1.0f, 0.0f, 0.0f};
+        p.no_skid_jump_remaining = 0.0f;
+
+        VirtualButtonState jump;
+        UpdateVirtualButton(jump, true, config.jump_buffer_time, kDt);
+        PlayerInput frame_input;
+        frame_input.move = {1.0f, 0.0f};
+        frame_input.jump_pressed = jump.pressed;
+        frame_input.jump_held = true;
+        frame_input.jump_device = &jump;
+        PlayerInput first_tick = frame_input;
+        PlayerInput second_tick = frame_input;
+
+        controller.Step(p, first_tick, cam, kDt, &no_room);
+        assert(p.velocity.y == config.skid_jump_speed);
+        assert(p.coyote_time_remaining == 0.0f);
+        controller.Step(p, second_tick, cam, kDt, &no_room);
+        assert(p.velocity.y >= config.skid_jump_speed - 0.01f);
+    }
+
     // ── 4: dash rotation steering ──
     {
         PlayerState p;

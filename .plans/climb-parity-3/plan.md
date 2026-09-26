@@ -189,10 +189,11 @@ gate never got a clean confirming capture):
   mitigation: TryClimb now does its OWN waist query (OG model), so climb
   entry no longer needs the motor's flag at all; the Normal-state walljump
   also queries fresh (OG `WallJumpCheck` parity).
-- The facing gate is KEPT at `wall_facing_dot >= 0.5`, a deliberate
-  narrowing vs OG (no dot threshold there) — accepted because the live
-  user complaint is phantom latching; documented in movement_spec.md
-  (Inc 5). Revisit only if device review asks for OG-authentic side-grabs.
+- The `wall_facing_dot >= 0.5` gate was initially kept as a deliberate
+  narrowing vs OG to address phantom-latch reports. A later raw-input capture
+  showed `z=1` at rest, identifying Ares mapping as the trigger; the gate has
+  since been removed. Directional input is now checked against the actual
+  queried face, while neutral input still requires the climb button.
 - Corner ease must freeze gravity input, or the player sags mid-lerp —
   the ease branch zeroes velocity and sets position directly (OG parity).
 - Sphere-independent ceil/floor probes untouched — plan must not change
@@ -345,8 +346,8 @@ Host fixtures: no-entry-when-facing-away 90° fixture passes; suite green.
   (waist anchored at the wall surface + 3 out; feet follow the center).
   Velocity zeroed. `target_facing = -normal.XZ` (OG sets facing INTO the
   wall).
-- **Facing gate — SINGLE DECISION (review pass 2 MUST-FIX M2): KEEP the
-  `wall_facing_dot >= 0.5` entry precondition.** Fact check that forced the
+- **Facing gate — historical Inc 2 decision, superseded 2026-09-25:** the
+  original plan kept `wall_facing_dot >= 0.5` as the entry precondition. Fact check that forced the
   explicit choice: OG's `ClimbCheckAt` has NO dot threshold — the prefer
   vector only RANKS candidate faces (a lone wall behind her still returns a
   hit, `World.cs:577-594`), and the demake's `QueryWallClosestToFace`
@@ -355,9 +356,9 @@ Host fixtures: no-entry-when-facing-away 90° fixture passes; suite green.
   from OG (narrower grab set: no side/behind grabs while facing away),
   chosen because the user's live complaint is phantom latching and OG-exact
   removal would WIDEN the grab set. Recorded as a documented deviation in
-  `docs/movement_spec.md` (Inc 5) and listed under "Risks accepted". If
-  device review shows OG-authentic side-grabs are wanted, delete the
-  `facing_wall` conjunct — one line, parity restored.
+  `docs/movement_spec.md` (Inc 5) and listed under "Risks accepted" at that
+  time. The follow-up below removes the `facing_wall` conjunct and adds
+  regression coverage; this paragraph records the original review decision.
 - Function(s): `bool TryClimb(PlayerState&, const Room*, float y_extra = 0)`
   mirroring OG; called from the entry site and (later) from Feather-adjacent
   paths if ever added.
@@ -400,9 +401,10 @@ Host fixtures: no-entry-when-facing-away 90° fixture passes; suite green.
 - Grabbing while rising past a wall top: the +4 waist-unit snap-up variant
   MUST not grab above the lip (the lip probe in Inc 4 handles the mantle);
   OG behavior: only grabs when `Velocity.y > 0 && !grounded` — replicate.
-- Grabbing a wall beside her while facing away: BLOCKED by the explicit
-  `wall_facing_dot >= 0.5` gate — a deliberate narrowing vs OG (M2
-  decision above; OG would allow this grab via prefer-rank alone).
+- Grabbing a wall beside her while facing away: previously blocked by the
+  explicit `wall_facing_dot >= 0.5` gate; now follows OG prefer-rank behavior
+  (see Facing-gate parity follow-up below). A held climb input is still
+  required, and directional input away from the selected wall still rejects.
 - Entry reposition pushes the player INTO a corner: cap the snap so the
   final center position never exceeds 3 units of net movement per axis
   (OG moves via SweepTestMove; our single-snap respects the same bound).
@@ -465,9 +467,10 @@ Zero uncommanded climb exits across all three fixtures.
      `QueryWallRay(waist, -climb_normal, climb_check_dist + 2)` hits with
      ClimbNormalCheck → same center-anchored adoption.
   3. **outer corner rotation**: else if `move_x != 0` and
-     `QueryWallRay(waist + forward*(climb_check_dist+1) + side*move_x,
-     -side*move_x, climb_check_dist*2)` hits → same adoption, plus start the
-     corner ease: `corner_from = position at the START of this movement
+     `QueryWallRay(waist + forward*(climb_check_dist+1) - side*move_x,
+     side*move_x, climb_check_dist*2)` hits a face opposing the side intent
+     AND the candidate anchor remains on the player's side of the old wall →
+     same adoption, plus start the corner ease: `corner_from = position at the START of this movement
      tick` (the pre-move position, stashed before the tick's movement runs
      — review pass 2 C1: OG stashes `climbCornerFrom` after the move section
      of the PREVIOUS update; define it as "position before this tick's
@@ -573,7 +576,7 @@ radius-4 probe.
   `grip_face_id` equality in the fixture path).
 - Done: green; `grep -rn QueryWallPresent src/user/gameplay/player` is empty.
 
-### Inc 5 — Device validation + telemetry + docs (S) — DONE (telemetry + docs; device capture pending toolchain)
+### Inc 5 — Device validation + telemetry + docs (S) — IMPLEMENTATION COMPLETE; live-controller acceptance pending
 **Depends on:** 2, 3, 4
 **Unblocks:** none
 **Done criteria:** rebuilt ROM boots on Ares; scripted capture (no-input walk
@@ -601,8 +604,9 @@ corners round smoothly, lip mantle works. Host suite 100% green.
 - What changes: replace the wall-contact section with the OG-parity model:
   probe anchors (waist feet+3/head feet+10), ClimbCheckDist 4,
   WallPushoutDist 3, ClimbNormalCheck 0.35, corner mechanics (inner/slope/
-  outer + 0.2s ease), mantle rule — INCLUDING the two documented deviations:
-  (a) facing gate `|dot(normal, -facing)| >= 0.5` kept (OG has none),
+  outer + 0.2s ease), mantle rule — INCLUDING the then-current deviations:
+  (a) facing gate `|dot(normal, -facing)| >= 0.5` kept at plan completion
+  (superseded by Facing-gate parity follow-up below),
   (b) 2-tick mantle confirm retained (OG is instant).
 
 ##### AGENTS.md
@@ -628,6 +632,28 @@ corners round smoothly, lip mantle works. Host suite 100% green.
 - Climb to a lip holding up: 1 MANTLE, lands on top.
 - Wall-slide: full fall speed (`wall_slide_seam_smoke` covers host-side).
 - `./tests/run_host_tests.sh` green; `./compile-rom.sh` clean.
+
+#### Revalidation (2026-09-25)
+
+Toolchain is available now. `build/baseline-physics-guided-climb-20260925-020022.txt`
+passed a scripted real-map route without teleporting to the target: approach
+gap 51.2 → 3.35 in 49 ticks, one scripted grab, 17 climb ticks, one mantle,
+and zero model-clearance violations. Host suite passes 67/67 and normal ROM
+builds. This does NOT close live-controller acceptance: the grab was scripted,
+not deliberate physical Z/L/R input; 120-second clean-input/corner session and
+manual controller checklist remain pending.
+
+#### Finite-edge corner follow-up (2026-09-25)
+
+The real-map seam replay reproduced a back-side `OuterCornerRay` hit: the ray
+normal was valid for its origin but opposite the player's side, and adoption
+snapped 6.41 units into the wall. Corner rays now cast from the player side,
+require a normal opposing lateral intent, and reject anchors behind the old
+wall. When this finite edge has no reachable front-side continuation, grip
+expires without corner adoption. Replay now reports `max_step=0.667`,
+`max_body_pushout=0`, `wrong_side_adopt=0`, and clean release. Full host suite
+passes 69/69; clean ROM build completed. Live Ares visual/controller result
+still pending user reload and retest.
 
 ## Cross-cutting verification
 
@@ -673,9 +699,29 @@ corners round smoothly, lip mantle works. Host suite 100% green.
 - The 2-tick mantle guard is a deliberate OG deviation (documented in
   movement_spec.md by Inc 4) — if the user prefers OG-exact instant hops,
   delete the `ledge_miss_ticks >= 2` gate and this stays parity-clean.
-- The entry facing gate (`|dot| >= 0.5`) is a deliberate narrowing vs OG
-  (OG has NO dot threshold; prefer-rank only) — same one-line removal if
-  OG-authentic side-grabs are wanted after device review (M2 decision).
+
+### Facing-gate parity follow-up (2026-09-25)
+
+`climb_mantle_smoke` now reproduces the old rejection: player is within
+`ClimbCheckDist`, holds climb, and faces sideways; `77/78` host tests passed
+before the source change with `valid side-facing climb press was rejected`.
+Entry now queries the wall first and applies any directional-input gate to
+that hit's plane normal. Neutral side-facing grab succeeds and movement away
+from the wall remains rejected. This restores OG's prefer-ranking-only rule;
+it does not hide a stuck physical shoulder bit. Device replay on the current
+ROM remains pending while the older interactive Ares process is open.
+
+### Fresh current-build route evidence (2026-09-25)
+
+The older-session note above is historical. Current isolated Ares wall-jump
+and mantle captures both pass real-map approach, grounded climb entry, first
+climb step, and zero rendered-model clearance violations; their profiles
+independently require wall-jump or mantle completion. Current trace ROM
+`physics_input_trace.z64` SHA-256
+`c125799c4a2f9e1f7ddcacf452ca24418c7b223865925ecc2356211853781605` is now
+open in Ares (PID 674964), but observed input remains neutral and no deliberate
+corner traversal or live climb input has been captured. Machine route gates
+are current; Inc 5's live-controller/corner-feel acceptance remains open.
 
 ## Out of scope
 
@@ -691,3 +737,15 @@ corners round smoothly, lip mantle works. Host suite 100% green.
   wall-climb-overhaul).
 - Global `sweep_step` retuning for the motor (2.0-unit substeps stayed
   climb-local only).
+
+### Real-map corner-ease regression guard (2026-09-25)
+
+The new `tests/real_map_corner_traverse_smoke.cpp` replays a genuine vertical
+edge near the Forsaken City start through normal climb entry, lateral movement,
+corner adoption, and all ease ticks. A prior run reproduced an 8-unit anchor
+snap and wrong-face grip churn. The handoff now suspends ordinary grip/facing
+gates while easing, preserves explicit release, rejects distant anchors, and
+starts interpolation from the pre-adoption position. Current result: one
+corner event, target wall adopted, zero exits, max step 1.866, waist pushout
+0.296, model gap 0.500 across 13 samples. Host suite passes 80/80. User/Ares
+live-input and subjective corner-feel acceptance remain open.

@@ -239,19 +239,59 @@ static void TestPlayerInputDevicePropagation() {
     assert(in2.ConsumeDashPress());
     assert(!dash.pressed);
 
+    // GameplayScene copies one render-frame snapshot into every fixed physics
+    // tick. At <60 render FPS, sibling copies must still share consume-once
+    // device semantics: one tick claiming an edge makes it unavailable to the
+    // next tick in the same rendered frame.
+    VirtualButtonState shared_jump;
+    UpdateVirtualButton(shared_jump, true, 0.10f, 1.0f / 60.0f);
+    PlayerInput frame_input;
+    frame_input.jump_pressed = shared_jump.pressed;
+    frame_input.jump_device = &shared_jump;
+    PlayerInput first_tick = frame_input;
+    PlayerInput second_tick = frame_input;  // mirrors tick_input = input
+    assert(first_tick.ConsumeJumpPress());
+    assert(!second_tick.ConsumeJumpPress());
+
+    VirtualButtonState shared_dash;
+    UpdateVirtualButton(shared_dash, true, 0.10f, 1.0f / 60.0f);
+    frame_input = {};
+    frame_input.dash_pressed = shared_dash.pressed;
+    frame_input.dash_device = &shared_dash;
+    first_tick = frame_input;
+    second_tick = frame_input;
+    assert(first_tick.ConsumeDashPress());
+    assert(!second_tick.ConsumeDashPress());
+
     std::printf("[input] TestPlayerInputDevicePropagation PASS\n");
 }
 
 static void TestMoveDeadzone() {
-    // Deadzone 0 (default): any deflection is live.
-    VirtualStickState s0 = ApplyCircularDeadzone({0.05f, 0.0f}, 0.0f);
-    assert(s0.value.x == 0.05f);
+    // OG ControlsConfig defaults Move to a 0.35 circular deadzone. Keep the
+    // deadzone configurable, but use OG's profile by default so tiny stick
+    // noise cannot become the controller's minimum 30% run target.
+    const InputSystem input_system;
+    assert(std::fabs(input_system.move_deadzone - 0.35f) < 0.0001f);
+    const Vec2 tiny_raw = SampleStickAxis(5, 0, 80);
+    VirtualStickState s0 = ApplyCircularDeadzone(
+        tiny_raw, input_system.move_deadzone);
+    assert(s0.value.x == 0.0f && s0.value.y == 0.0f);
+    assert(std::fabs(s0.raw_value.x + 0.0625f) < 0.001f);
+
     // Deadzone 0.35 (OG): inside the circle is zeroed.
     VirtualStickState s1 = ApplyCircularDeadzone({0.2f, 0.1f}, 0.35f);
     assert(s1.value.x == 0.0f && s1.value.y == 0.0f);
     // Outside the circle: the raw value passes through.
     VirtualStickState s2 = ApplyCircularDeadzone({0.4f, 0.0f}, 0.35f);
     assert(s2.value.x == 0.4f);
+
+    // Explicit A/B override remains available for the prior zero-deadzone
+    // profile without changing the production default.
+    InputSystem ab_profile;
+    ab_profile.move_deadzone = 0.0f;
+    const VirtualStickState s_ab = ApplyCircularDeadzone(
+        tiny_raw, ab_profile.move_deadzone);
+    assert(std::fabs(s_ab.value.x - tiny_raw.x) < 0.001f);
 
     std::printf("[input] TestMoveDeadzone PASS\n");
 }

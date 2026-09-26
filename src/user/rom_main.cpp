@@ -51,6 +51,7 @@ size_t MemoryBucketFrameArenaPeak() {
 int main() {
     debug_init_isviewer();
     debug_init_usblog();
+    debugf("[build] compiled=%s %s\n", __DATE__, __TIME__);
     joypad_init();
 
     // Target hardware is the N64 with the Expansion Pak (8 MB RDRAM). The

@@ -28,3 +28,14 @@ reads it.
 `contact.ground_snap_cooldown_remaining = config_.ground_snap_cooldown` at
 every OG `CancelGroundSnap` site (Jump, dash-jump, walljump ×2, dash accept,
 skid-jump, mantle).
+
+## Sustained climb is also a cancel site
+
+OG calls `CancelGroundSnap()` on every held `StClimbingUpdate` tick, after
+release/jump/dash early exits. This matters when a climb starts while grounded:
+the first kinematic uphill step leaves floor support, but the previous-tick
+grounded bit would snap the player back down if the cooldown had expired.
+Refresh the cooldown before each sustained climb move; do not rely only on
+takeoff or mantle setters. Guard with a grounded-entry wall fixture that
+asserts positive upward displacement on the next tick and positive cooldown,
+plus the real-map guided approach/climb/mantle regression.

@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# capture_baseline.sh — capture the ROM's on-device telemetry at map center.
+# capture_baseline.sh — capture the ROM's runtime telemetry from Ares.
 #
-# Greps the [profiler] / [render-phases] / [counters] / [memory] report
-# lines from emulator stdout and writes them to build/baseline-<date>.txt so
-# the before/after comparison is reproducible.
+# Greps boot, map/render, physics, and [profiler] / [counters] / [memory]
+# telemetry from emulator stdout and writes build/baseline-<date>.txt with ROM
+# SHA-256 provenance so every claim identifies exact artifact and runtime state.
 #
 # Device emulator: Ares (sole validator per AGENTS.md). Ares prints the ROM's
 # USB-serial debugf() telemetry to stdout. Ares is GUI-only (opens a window and
 # stays running), so we launch it in the background, poll the captured stdout
-# for report lines, and kill it once we have enough or the wall budget elapses.
+# for report lines, and kill only our own process group. Existing Ares session
+# causes a fail-fast refusal; this script cannot capture another process's log.
 #
 # Report cadence (src/user/rom_main.cpp):
 #   [profiler] / [render-phases] / [counters] / [distant-cells]  every 60 frames
@@ -28,7 +29,7 @@
 #                 (default: 120 = 2 min; enough for ~2 [memory] lines at ~60 fps)
 #   label         optional label embedded in the output filename
 #
-# Env overrides: ARES_BIN, ARES_LIBDIR.
+# Env overrides: ARES_BIN, ARES_LIBDIR, CAPTURE_OUT_DIR.
 
 set -uo pipefail
 
@@ -44,7 +45,26 @@ LABEL="${3:-}"
 ARES_BIN="${ARES_BIN:-/snap/ares-emulator/current/usr/bin/ares}"
 ARES_LIBDIR="${ARES_LIBDIR:-/snap/ares-emulator/current/usr/lib/x86_64-linux-gnu}"
 
-OUT_DIR="$REPO_ROOT/build"
+if [[ ! -f "$ROM" || ! -r "$ROM" ]]; then
+  echo "[capture_baseline] ERROR: ROM is missing or unreadable: $ROM" >&2
+  exit 1
+fi
+if ! ROM_SHA256="$(sha256sum "$ROM" | awk '{print $1}')"; then
+  echo "[capture_baseline] ERROR: could not hash ROM: $ROM" >&2
+  exit 1
+fi
+ROM_SIZE_BYTES="$(stat -c '%s' -- "$ROM")"
+
+# Never create a second emulator beside the interactive/user session. Its
+# stdout cannot be captured by this script, and two Ares instances compete for
+# the same controller/device state and make physics evidence ambiguous.
+if command -v pgrep >/dev/null 2>&1 && pgrep -x ares >/dev/null 2>&1; then
+  echo "[capture_baseline] ERROR: Ares is already running; refusing a second instance" >&2
+  pgrep -a -x ares >&2 || true
+  exit 1
+fi
+
+OUT_DIR="${CAPTURE_OUT_DIR:-$REPO_ROOT/build}"
 mkdir -p "$OUT_DIR"
 DATE="$(date +%Y%m%d-%H%M%S)"
 NAME="baseline${LABEL:+-$LABEL}-$DATE.txt"
@@ -52,6 +72,7 @@ OUT="$OUT_DIR/$NAME"
 RAW="$OUT_DIR/raw-$NAME.log"
 
 echo "[capture_baseline] rom=$ROM"
+echo "[capture_baseline] rom_sha256=$ROM_SHA256 size_bytes=$ROM_SIZE_BYTES"
 echo "[capture_baseline] wall_seconds=$WALL_SECONDS"
 echo "[capture_baseline] ares=$ARES_BIN"
 echo "[capture_baseline] out=$OUT"
@@ -77,6 +98,18 @@ cleanup() {
   # Kill the whole process group, then the PID as a fallback.
   kill -- "-$PGID" 2>/dev/null || true
   kill "$PID" 2>/dev/null || true
+  # Ares may ignore SIGTERM in GUI mode. Bound the grace period, then reap
+  # only the process group this script created so captures cannot hang.
+  for attempt in 1 2 3 4 5; do
+    if ! kill -0 "$PID" 2>/dev/null; then
+      break
+    fi
+    sleep 0.2
+  done
+  if kill -0 "$PID" 2>/dev/null; then
+    kill -KILL -- "-$PGID" 2>/dev/null || true
+    kill -KILL "$PID" 2>/dev/null || true
+  fi
   wait "$PID" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -102,8 +135,15 @@ done
 cleanup
 trap - EXIT
 
-# Extract the report lines, preserving order.
-grep -nE '\[(profiler|render-phases|counters|distant-cells|memory|budget)\]' "$RAW" > "$OUT" || true
+# Extract boot, map/render health, and physics report lines with artifact
+# identity. A physics PASS without its ROM/build/world/input context is not a
+# valid capture (stale ROMs and stuck shoulder mappings have caused false
+# conclusions before).
+{
+  printf '[artifact] rom=%s sha256=%s size_bytes=%s\n' \
+    "$ROM" "$ROM_SHA256" "$ROM_SIZE_BYTES"
+  grep -nE '\[(build|init|mappack|map_runtime|matcat|texroom|lvlroom|profiler|render-phases|counters|distant-cells|memory|budget|phys-test|phys|move|climb|input-trace|input)\]' "$RAW" || true
+} > "$OUT"
 
 echo "[capture_baseline] wrote $OUT"
 echo "=== captured report lines ==="
