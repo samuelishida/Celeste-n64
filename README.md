@@ -45,6 +45,10 @@ In progress:
 
 See [`.agents/map-creation.md`](.agents/map-creation.md) for the full end-to-end pipeline (author → bake → load).
 
+## Screenshot
+
+![Madeline in the Forsaken City level](docs/screenshots/madeline-gameplay.png)
+
 ## Interconnected map bake
 
 The full A-side `1.map` is baked through the canonical world IR into one
