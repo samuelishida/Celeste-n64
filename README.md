@@ -1,27 +1,10 @@
-# Madeline Cube ROM
+# Celeste 64 Demake
 
-Tiny Celeste64-inspired N64 prototype, scoped around the first playable milestone:
+<p align="center"><img src="docs/screenshots/madeline-gameplay.png" alt="Madeline in the Forsaken City level" width="720"></p>
 
-- one cube player
-- one floating island
-- analog-stick movement
-- jump
-- air dash
-- fall respawn
-- one collectible
+A Celeste64-inspired Nintendo 64 demake built with libdragon and tiny3d. The current build features an animated Madeline model, the Forsaken City A-side world, and movement with jumping, dashing, and wall climbing.
 
-The project is organized to fit a future Pyrite64 project layout:
-
-```txt
-assets/       source assets we own
-data/         editor-authored scene data once Pyrite64 is introduced
-docs/         design notes and milestone specs
-src/user/     custom gameplay code we own
-```
-
-Pyrite64 should create and manage its generated project/runtime files later. The durable code in `src/user/` is kept engine-light on purpose so the movement model can be tuned before it is wired into scene scripts.
-
-The small smoke test in `tests/gameplay_smoke.cpp` exercises the first gameplay rules without requiring the N64 toolchain yet.
+The project keeps gameplay code engine-light while the ROM layer handles N64 input, rendering, and streaming the baked world.
 
 ## Current status
 
@@ -44,10 +27,6 @@ In progress:
 - Verifying collision mesh queries under the Forsaken City map geometry
 
 See [`.agents/map-creation.md`](.agents/map-creation.md) for the full end-to-end pipeline (author → bake → load).
-
-## Screenshot
-
-![Madeline in the Forsaken City level](docs/screenshots/madeline-gameplay.png)
 
 ## Interconnected map bake
 
