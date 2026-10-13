@@ -48,8 +48,8 @@ def test_reachability():
     d = tempfile.mkdtemp(prefix="inc5-reach-")
     try:
         report = bake(d)
-        from mappack_format import read_mappack_v2_binary
-        pack = read_mappack_v2_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
+        from mappack_format import read_mappack_binary
+        pack = read_mappack_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
         by_id = {r.id: r for r in pack.rooms}
         start = pack.start_room_id
         assert start in by_id, f"start room {start} not in rooms"
@@ -77,8 +77,8 @@ def test_start_room_has_start_spawn():
     d = tempfile.mkdtemp(prefix="inc5-start-")
     try:
         bake(d)
-        from mappack_format import read_mappack_v2_binary
-        pack = read_mappack_v2_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
+        from mappack_format import read_mappack_binary
+        pack = read_mappack_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
         start_room = next(r for r in pack.rooms if r.id == pack.start_room_id)
         starts = [s for s in start_room.spawns if s.kind == 0]
         assert len(starts) == 1, f"start room has {len(starts)} Start spawns"

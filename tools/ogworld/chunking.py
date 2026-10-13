@@ -9,6 +9,7 @@ cell. Collision geometry is NOT partitioned here (it is global).
 
 from __future__ import annotations
 
+from dataclasses import replace
 import math
 from typing import List, Tuple, Dict, Optional
 
@@ -20,6 +21,67 @@ from .class_policy import RENDER_STATIC, RENDER_ACTOR, RENDER_NONE
 # Reuse the canonical cell_of from brush_grid (byte-for-byte the runtime).
 from ogmap_lib.brush_grid import cell_of, cell_id
 from ogmap_lib.brush_geom import clip_polygon_by_plane
+
+
+# Tiny3D stores texture coordinates as signed s10.5: one texel is 32 units.
+_UV_FIXED_SCALE = 32.0
+_UV_TEXEL_MIN = -32768.0 / _UV_FIXED_SCALE
+_UV_TEXEL_MAX = 32767.0 / _UV_FIXED_SCALE
+
+
+def condition_texture_uvs(uvs, profile):
+    """Keep each clipped face's texture coordinates valid in signed s10.5.
+
+    Repeating axes may be translated by whole texture periods without changing
+    sampled texels. Rebase those axes near zero so fixed-point overflow cannot
+    corrupt interpolated gradients (and therefore RDP mip selection). Clamp
+    axes instead saturate to signed representable bounds, preserving which
+    edge of the tile the hardware clamp selects.
+    """
+    if profile.get("name") not in ("world_repeat_rgba16", "world_decal_rgba16"):
+        return tuple(tuple(uv) for uv in uvs)
+    if not uvs:
+        return tuple()
+
+    conditioned = [list(uv) for uv in uvs]
+    for axis, wrap_key, size_key in (
+        (0, "wrap_s", "output_width"),
+        (1, "wrap_t", "output_height"),
+    ):
+        values = [uv[axis] for uv in conditioned]
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError(f"non-finite UV on axis {axis}")
+
+        if profile.get(wrap_key) == "repeat":
+            period = float(profile.get(size_key, 0))
+            if not math.isfinite(period) or period <= 0.0:
+                raise ValueError(f"repeating texture axis {axis} has invalid period {period}")
+            low, high = min(values), max(values)
+            if high - low > _UV_TEXEL_MAX - _UV_TEXEL_MIN:
+                raise ValueError(
+                    f"repeating UV span {high - low:.6g} texels exceeds s10.5 range"
+                )
+
+            center = (low + high) * 0.5
+            nearest_period = math.floor(center / period + 0.5)
+            offsets = [(nearest_period + step) * period for step in range(-2, 3)]
+            valid_offsets = [
+                offset for offset in offsets
+                if low - offset >= _UV_TEXEL_MIN and high - offset <= _UV_TEXEL_MAX
+            ]
+            if not valid_offsets:
+                raise ValueError(
+                    f"cannot rebase repeating UV range [{low:.6g}, {high:.6g}] "
+                    "into signed s10.5"
+                )
+            offset = min(valid_offsets, key=lambda candidate: (abs(center - candidate), abs(candidate)))
+            for uv in conditioned:
+                uv[axis] -= offset
+        else:
+            for uv in conditioned:
+                uv[axis] = max(_UV_TEXEL_MIN, min(_UV_TEXEL_MAX, uv[axis]))
+
+    return tuple((uv[0], uv[1]) for uv in conditioned)
 
 
 def world_cell(point, chunk_size: float, scale: float) -> CellKey:
@@ -144,7 +206,8 @@ def clip_polygon_to_column(
     for v in verts:
         # world = (map_x*s, map_z*s, -map_y*s) => map = (wx/s, -wz/s, wy/s)
         q = (v[0] * inv_scale, -v[2] * inv_scale, v[1] * inv_scale)
-        uvs.append(compute_uv(q, face, scale))
+        uvs.append(compute_uv(q, face, scale,
+                              (sf.uv_scale_u, sf.uv_scale_v)))
 
     return WorldPolygon(
         verts=tuple(verts),
@@ -227,6 +290,9 @@ def partition_world(
             for p in polys:
                 cp = clip_polygon_to_column(p, cell, chunk_size, scale)
                 if cp is not None:
+                    profile = build.texture_profiles.get(cp.texture)
+                    if profile is not None:
+                        cp = replace(cp, uvs=condition_texture_uvs(cp.uvs, profile))
                     clipped.append(cp)
             existing = list(chunks[cell].polygons)
             existing.extend(clipped)

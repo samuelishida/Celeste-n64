@@ -5,8 +5,8 @@ Parses once, builds the canonical IR, builds world geometry, builds the global
 collision scene, and partitions visual geometry into cells — producing an
 in-memory `WorldBuild` before any output directory is touched.
 
-Inc 3 produces the in-memory build + a report. Inc 4 adds the writers that
-serialize it to CMSH/LVL/map-pack v2.
+Inc 3 produces the in-memory build + a report. The artifact pipeline emits
+CMSH/LVL plus MPP5/DSOL (MPP2-MPP4 remain readable at runtime).
 
 Usage:
     python3 tools/bake_interconnected_map.py <map> --out-dir DIR
@@ -35,9 +35,11 @@ from ogworld.distant_lod import (
     build_distant_dlod, build_distant_dlod_directional,
 )
 from writers.colmesh_world_writer import write_colmesh
+from writers.dynamic_solid_writer import write_dynamic_solids
 from writers.lvl_world_writer import write_lvl_room
 from mappack_format import (
-    MapPackV2, V2Room, V2Spawn, write_mappack_v2_binary,
+    MapPackV5, V4Hazard, V4Room, V4Spawn, V5DynamicSolid,
+    write_mappack_v5_binary,
     SPAWN_START, SPAWN_ANCHOR, SPAWN_ACTOR,
 )
 from artifact_hash import crc32_file, artifact_hash
@@ -51,6 +53,26 @@ K_MAX_ROOMS = 64
 
 class BakeError(Exception):
     pass
+
+
+def _actor_flags_for_spawn(spawn) -> int:
+    """Encode source properties that affect runtime actor behavior."""
+    if spawn.classname != "Refill":
+        return 0
+    raw = spawn.properties.get("double", "").strip()
+    if not raw:
+        return 0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise BakeError(
+            f"entity {spawn.source_id} has invalid Refill.double property {raw!r}"
+        ) from exc
+    if not math.isfinite(value):
+        raise BakeError(
+            f"entity {spawn.source_id} has non-finite Refill.double property {raw!r}"
+        )
+    return 1 if value > 0.0 else 0
 
 
 def count_visual_faces(chunk) -> int:
@@ -161,9 +183,8 @@ def main() -> int:
     budget = collision_budget(scene)
     adjacency = build_adjacency(chunks)
 
-    # 7. Write artifacts (Inc 4): one global CMSH, per-room LVL, map-pack v2.
-    #    Writes to an isolated staging dir; the published DFS dir is switched
-    #    only after the v2 reader lands (Inc 6).
+    # 7. Write artifacts: one global CMSH, one DSOL actor mesh, per-room LVL,
+    #    and MPP5. Writes go to isolated staging before publication.
     staging = out_dir / "staging"
     staging.mkdir(parents=True, exist_ok=True)
 
@@ -178,6 +199,10 @@ def main() -> int:
     audit_path = staging / f"{args.mappack_id}.colmesh.audit.json"
     cmsh_stats = write_colmesh(scene, str(global_colmesh_path), str(audit_path))
     g_hash = artifact_hash(str(global_colmesh_path))
+
+    dsol_path = staging / f"{args.mappack_id}.dsol"
+    dsol_stats = write_dynamic_solids(build, polygons, scene, str(dsol_path))
+    dsol_hash = artifact_hash(str(dsol_path))
 
     # Per-room LVL + spawn table.
     v2_rooms: List[V2Room] = []
@@ -247,11 +272,12 @@ def main() -> int:
         for s in c.spawns:
             kind = SPAWN_START if s.kind == "start" else (
                 SPAWN_ANCHOR if s.kind == "anchor" else SPAWN_ACTOR)
-            spawns.append(V2Spawn(
+            spawns.append(V4Spawn(
                 kind=kind, source_id=s.source_id, room_id=cid,
                 position=s.position, name=s.name, classname=s.classname,
+                actor_flags=_actor_flags_for_spawn(s),
             ))
-        v2_rooms.append(V2Room(
+        v2_rooms.append(V4Room(
             id=cid,
             lvl_path=f"rom:/lvl/{args.mappack_id}/{cid}.lvl",
             render_origin=render_origin,
@@ -271,7 +297,33 @@ def main() -> int:
     if not start_room_id and v2_rooms:
         start_room_id = v2_rooms[0].id
 
-    pack = MapPackV2(
+    hazard_kinds = {"death": 1, "spike": 2}
+    hazards = [V4Hazard(
+        kind=hazard_kinds[h.kind],
+        source_id=h.source_id,
+        bounds_min=h.bounds_min,
+        bounds_max=h.bounds_max,
+        spike_direction=h.spike_direction,
+    ) for h in build.hazards]
+
+    dynamic_solids = [V5DynamicSolid(
+        source_id=solid.source_id,
+        solid_id=solid.solid_id,
+        kind=solid.kind,
+        flags=solid.flags,
+        position=solid.position,
+        yaw_radians=math.radians(solid.yaw_degrees),
+        cms_first_source_face_id=solid.cms_first_source_face_id,
+        cms_face_count=solid.cms_face_count,
+        dsol_first_face=solid.dsol_first_face,
+        dsol_face_count=solid.dsol_face_count,
+        dsol_first_vertex=solid.dsol_first_vertex,
+        dsol_vertex_count=solid.dsol_vertex_count,
+        target_source_id=solid.target_source_id,
+        target_position=solid.target_position,
+    ) for solid in build.dynamic_solids]
+
+    pack = MapPackV5(
         id=args.mappack_id,
         source_sha256=build.source_sha256,
         pipeline_version=2,
@@ -285,9 +337,14 @@ def main() -> int:
         global_bvh_node_count=cmsh_stats["bvh_nodes"],
         start_room_id=start_room_id,
         rooms=v2_rooms,
+        hazards=hazards,
+        dsol_path=f"rom:/lvl/{args.mappack_id}/{args.mappack_id}.dsol",
+        dsol_crc32=dsol_hash["crc32"],
+        dsol_size=dsol_hash["size_bytes"],
+        dynamic_solids=dynamic_solids,
     )
     mappack_path = staging / f"{args.mappack_id}.mappack"
-    write_mappack_v2_binary(pack, str(mappack_path))
+    write_mappack_v5_binary(pack, str(mappack_path))
 
     # Emit the per-pack material manifest (Inc 5): one material name per line,
     # in the SAME order as `build.texture_manifest` (the per-cell LVL string
@@ -300,6 +357,30 @@ def main() -> int:
         for mat in build.texture_manifest:
             f.write(mat + "\n")
 
+    # Material metadata is a strict, tab-delimited companion to the legacy
+    # name-only manifest.  Runtime uses this file for texture path and blend /
+    # wrap policy; material IDs remain byte-for-byte in manifest order.
+    matmeta_path = staging / f"{args.mappack_id}.matmeta"
+    with open(matmeta_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(f"MATMETA\t1\t{len(build.texture_manifest)}\n")
+        for material_id, mat in enumerate(build.texture_manifest):
+            if "\t" in mat or "\n" in mat or "\r" in mat:
+                raise BakeError(f"material name contains a line delimiter: {mat!r}")
+            profile = build.texture_profiles.get(mat)
+            if profile is None:
+                raise BakeError(f"missing texture profile for material {material_id}:{mat}")
+            fields = [
+                str(material_id), mat, profile.get("rom_path", ""),
+                profile.get("name", "none"), profile.get("alpha_mode", "none"),
+                profile.get("wrap_s", "none"), profile.get("wrap_t", "none"),
+                profile.get("filter", "nearest"),
+                f"{float(profile.get('uv_scale_u', 1.0)):.9g}",
+                f"{float(profile.get('uv_scale_v', 1.0)):.9g}",
+            ]
+            if any("\t" in field or "\n" in field or "\r" in field for field in fields):
+                raise BakeError(f"invalid material metadata field for {mat!r}")
+            f.write("\t".join(fields) + "\n")
+
     report = {
         "source": args.map,
         "source_sha256": build.source_sha256,
@@ -309,6 +390,19 @@ def main() -> int:
         "polygons": len(polygons),
         "geometry_diagnostics": len(geom_diags),
         "collision": budget,
+        "actor_hazards": {
+            "total": len(build.hazards),
+            "spike_blocks": sum(h.kind == "spike" for h in build.hazards),
+            "death_blocks": sum(h.kind == "death" for h in build.hazards),
+        },
+        "dynamic_solids": {
+            **dsol_stats,
+            "classes": {
+                record.classname: sum(item.classname == record.classname
+                                      for item in build.dynamic_solids)
+                for record in build.dynamic_solids
+            },
+        },
         "coverage_errors": len(coverage_errors),
         "chunk_count": len(chunks),
         "cap_errors": cap_errors,
@@ -355,7 +449,9 @@ def main() -> int:
           f"{budget['vertices']} collision verts")
     print(f"PASS: global CMSH -> {cmsh_stats['triangles']} tris, "
           f"{cmsh_stats['vertices']} verts, {cmsh_stats['bvh_nodes']} BVH nodes")
-    print(f"PASS: map-pack v2 -> {len(v2_rooms)} rooms, start={start_room_id}")
+    print(f"PASS: map-pack v5 -> {len(v2_rooms)} rooms, "
+          f"{len(hazards)} hazards, {len(dynamic_solids)} dynamic solids, "
+          f"start={start_room_id}")
     if cap_errors:
         print(f"WARN: {len(cap_errors)} cap diagnostic(s) recorded "
               f"(full-map fit is an Inc 5 gate)")

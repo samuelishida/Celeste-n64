@@ -75,8 +75,8 @@ def test_pack_references_staged_files():
         bake(d)
         staging = Path(d) / "staging"
         # The pack's global colmesh path + each room's lvl path must exist.
-        from mappack_format import read_mappack_v2_binary
-        pack = read_mappack_v2_binary(str(staging / "forsyken-city.mappack"))
+        from mappack_format import read_mappack_binary
+        pack = read_mappack_binary(str(staging / "forsyken-city.mappack"))
         # Global colmesh.
         gname = pack.global_colmesh_path.rsplit("/", 1)[-1]
         assert (staging / gname).exists(), f"missing {gname}"
@@ -105,8 +105,8 @@ def test_no_timestamp_in_artifacts():
             # The v2 binary has no timestamp field; assert it's stable by
             # re-reading and comparing to a fresh parse (already covered by
             # determinism). Here we just assert the binary is parseable.
-            from mappack_format import read_mappack_v2_binary
-            read_mappack_v2_binary(str(f))
+            from mappack_format import read_mappack_binary
+            read_mappack_binary(str(f))
         print("PASS: v2 binary parses; no timestamp field in format")
     finally:
         shutil.rmtree(d, ignore_errors=True)

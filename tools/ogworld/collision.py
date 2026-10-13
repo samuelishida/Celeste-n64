@@ -19,6 +19,7 @@ from .class_policy import (
     COLLISION_SOLID, COLLISION_ONEWAY, COLLISION_CLIMBABLE, COLLISION_NONE,
 )
 from .geometry import validate_triangle_normal
+from .wall_order import SolidGridRecord, static_world_wall_order
 
 # Reuse the proven fan triangulation.
 from ogmap_lib.brush_geom import fan_triangulate
@@ -32,10 +33,12 @@ class CollisionScene:
         self.tris: List[CollisionTriangle] = []
         # triangle index -> source face id string (for the audit sidecar).
         self.tri_source: List[str] = []
+        self.og_solid_grid: List[SolidGridRecord] = []
+        self.og_omitted_world_faces = set()
 
-    def add_polygon(self, poly: WorldPolygon) -> None:
+    def add_polygon(self, poly: WorldPolygon, og_order=(-1, -1)) -> None:
         """Add a polygon's collision triangles to the scene."""
-        if poly.collision_mode == COLLISION_NONE:
+        if not emits_collision(poly):
             return
         base = len(self.verts)
         self.verts.extend(poly.verts)
@@ -48,10 +51,19 @@ class CollisionScene:
                 entity_index=poly.entity_index,
                 brush_index=poly.brush_index,
                 face_index=poly.face_index,
+                og_solid_id=og_order[0],
+                og_face_order=og_order[1],
             ))
             self.tri_source.append(
                 f"{poly.entity_index}:{poly.brush_index}:{poly.face_index}"
             )
+
+
+def emits_collision(poly: WorldPolygon) -> bool:
+    """Mirror OG GenerateSolid's non-collider texture exclusions."""
+    return (poly.collision_mode != COLLISION_NONE
+            and not poly.texture.startswith("__")
+            and poly.texture != "TB_empty")
 
 
 def build_global_collision(
@@ -65,10 +77,18 @@ def build_global_collision(
     triangles are added exactly once (no per-room duplication).
     """
     scene = CollisionScene()
+    og_face_order, scene.og_solid_grid, scene.og_omitted_world_faces = \
+        static_world_wall_order(polygons, scale)
     for poly in polygons:
-        if poly.collision_mode == COLLISION_NONE:
+        if not emits_collision(poly):
             continue
-        scene.add_polygon(poly)
+        key = (poly.entity_index, poly.brush_index, poly.face_index)
+        # OG Map.Load's strict chunk loop never creates solids for worldspawn
+        # brushes left outside all 1000-unit chunk boxes. Match that behavior;
+        # visual polygons remain in the rendered map.
+        if poly.classname == "worldspawn" and key in scene.og_omitted_world_faces:
+            continue
+        scene.add_polygon(poly, og_face_order.get(key, (-1, -1)))
     return scene
 
 
@@ -84,14 +104,16 @@ def collision_budget(scene: CollisionScene) -> Dict[str, float]:
     # measured 8191 nodes / 10596 tris ≈ 0.77).
     n_bvh = int(n_tris * 0.77)
     # On-disk: header(72) + verts*6 + tris*12 + bvh*16 (quantized int16).
-    disk = 72 + n_verts * 6 + n_tris * 12 + n_bvh * 16
+    n_solid_grid = len(scene.og_solid_grid)
+    disk = 72 + n_verts * 6 + n_tris * 12 + n_bvh * 16 + n_solid_grid * 24
     # Resident: pre-dequantized verts (3xf32) + tris (3x u16 + u16 + u16) +
     # BVH nodes (6x i16 + 2x u16) + loader overhead.
-    resident = (n_verts * 12 + n_tris * 8 + n_bvh * 16 + 4096)
+    resident = (n_verts * 12 + n_tris * 8 + n_bvh * 16 + n_solid_grid * 24 + 4096)
     return {
         "vertices": n_verts,
         "triangles": n_tris,
         "bvh_nodes_est": n_bvh,
+        "og_solid_grid_records": n_solid_grid,
         "disk_bytes_est": disk,
         "resident_bytes_est": resident,
     }
@@ -110,7 +132,9 @@ def validate_global_coverage(
     # Count solid polygons by source face.
     solid_faces = {
         (p.entity_index, p.brush_index, p.face_index)
-        for p in polygons if p.collision_mode != COLLISION_NONE
+        for p in polygons if emits_collision(p)
+        and not (p.classname == "worldspawn" and
+                 (p.entity_index, p.brush_index, p.face_index) in scene.og_omitted_world_faces)
     }
     # Count triangles in the scene by source face.
     scene_faces = {

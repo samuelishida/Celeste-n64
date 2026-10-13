@@ -12,7 +12,11 @@ namespace madeline_cube { struct PlayerState; }
 
 namespace madeline_cube {
 
-namespace physics { struct CollMesh; }  // forward declare; include coll_mesh.hpp in .cpp
+namespace physics {
+struct CollMesh;
+struct SweepSphereHit;
+}  // forward declare; include coll_mesh.hpp in .cpp
+class DynamicSolidGeometry;
 
 // Axis-aligned bounding box for collision and culling.
 struct AABB {
@@ -74,8 +78,7 @@ struct WallHit {
     bool hit = false;
     Vec3 point;
     Vec3 normal;
-    // Owning triangle's geometric plane normal, oriented toward the query
-    // centre (OG SolidWallCheckClosestToNormal parity). Unlike `normal`
+    // Owning surface's authored outward plane normal. Unlike `normal`
     // (centre-relative, diagonal near seams/edges), this is the true face
     // plane for face-region contacts. Zero-length when unavailable — callers
     // must fall back to `normal`.
@@ -132,6 +135,7 @@ struct ActorSpawn {
     Vec3 position;
     uint16_t placeholder_id = 0;
     uint32_t source_id = 0;  // stable source entity id (Inc 9)
+    uint8_t actor_flags = 0;  // normalized manifest actor flags
 };
 
 // A graybox room composed of static geometry, collision, and spawns.
@@ -169,6 +173,9 @@ struct Room {
     // Triangle mesh collision for static world geometry. Set by level_loader
     // when .colmesh sidecar exists. All static queries use this path.
     physics::CollMesh* coll_mesh = nullptr;
+    // Map-wide actor-local geometry plus live transforms. Null for legacy
+    // rooms without a DSOL sidecar.
+    const DynamicSolidGeometry* dynamic_solids = nullptr;
 
     // Optional counter sink for diagnostic telemetry.  When non-null, static
     // query helpers increment it for every raycast/sweep/overlap issued against
@@ -188,6 +195,9 @@ void AdvanceMovingSurfaces(Room& room, float delta_seconds);
 
 // Source-shaped raycast with backface policy and face/owner identity.
 GroundHit RaycastRoomSource(const Room& room, const Vec3& origin, const Vec3& direction, float max_distance, BackfacePolicy backface = BackfacePolicy::Ignore);
+physics::SweepSphereHit SweepSphereRoom(const Room& room, const Vec3& origin,
+                                        const Vec3& normalized_direction,
+                                        float radius, float max_distance);
 
 // Source-shaped vertical probes.
 GroundHit QueryFloorSource(const Room& room, const Vec3& origin, float max_distance);
@@ -225,12 +235,14 @@ bool QueryWallPresent(const Room& room, const Vec3& point, float radius);
 // Wall whose normal is closest to the given direction.
 WallHit QueryWallClosestToNormal(const Room& room, const Vec3& point, float radius, const Vec3& normal);
 
-// OG SolidWallCheck parity: returns all wall hits by plane projection (not
-// sphere-closest-point). For each solid face, the face plane is intersected at
-// the query point's own level and the plane normal is used — stable across
-// seams/edges where a sphere closest-point normal would be diagonal and flip
-// frame-to-frame. Only near-vertical faces (|plane_normal.y| < 0.35, matching
-// OG ClimbNormalCheck) are walls. Returns up to max_hits.
+// OG SolidWallCheck geometry: intersect triangle with horizontal probe plane,
+// then take the closest point on that finite slice, accepting distance <= radius.
+// No contact above/below a face or on its infinite plane extension. Return
+// plane_normal for climb facing and center-relative normal for pushout.
+// Signed authored plane distance must be in [0,radius]. The surface's outward
+// normal never changes with query location. General wall collection excludes
+// only horizontal surfaces; climb applies its .35 gate after candidate ranking.
+// `orient_to_point` is retained for compatibility and has no effect.
 int QueryWallsFacePlane(const Room& room, const Vec3& point, float radius,
                         WallHit* out_hits, int max_hits,
                         CollisionQueryDiagnostics* diagnostics = nullptr,
@@ -243,7 +255,7 @@ WallHit QueryWallClosestToFace(const Room& room, const Vec3& point, float radius
 // OG SolidWallCheckNearest parity for the MoveService Popout wall test
 // (Player.cs:688-714; World.cs:556-571): the plane-projected wall with the
 // LARGEST pushout (most overlap). Wrapper over the unified plane family
-// (QueryWallsFacePlane — near-vertical gate |n.y|<0.35 + geometry bounding),
+// (QueryWallsFacePlane — signed authored side + finite geometry),
 // NOT a new near-duplicate wall query (M3). `point` is a single probe centre
 // (waist or head); Popout calls it once per test height. Returns the wall to
 // push out along with its true face `plane_normal`.
@@ -265,11 +277,10 @@ WallHit QueryClimbWall(const Room& room, const Vec3& point, float radius, const 
 // Bool variant (OG ClimbCheckAt's "is there a climbable wall" answer).
 bool QueryClimbWallPresent(const Room& room, const Vec3& point, float radius, const Vec3& prefer_dir);
 
-// Horizontal raycast for OG corner mechanics (inc 3): BackfaceCull::Ignore
-// (baked winding can be inverted) + only hits whose face normal passes the
-// OG ClimbNormalCheck gate. `origin` is typically the waist, `dir` the side/
-// into-wall ray. A ray hitting a slope (|n.y| >= 0.35) reports no hit (OG
-// semantics). Returns a WallHit with the face-plane normal + pushout.
+// General authored-front-side ray shared by static mesh and moving colliders.
+// Preserve nonunit direction: reach = direction * max_distance, as in OG.
+// State branches own their normal gates (inner corner accepts all normals;
+// slope/outer corners apply ClimbNormalCheck after the closest hit).
 bool QueryWallRay(const Room& room, const Vec3& origin, const Vec3& direction,
                   float max_distance, WallHit* out_hit);
 
@@ -295,6 +306,7 @@ public:
 
     // Release the global mesh.
     void Reset();
+    void Swap(WorldCollision& other);
 
     bool IsLoaded() const { return mesh_ != nullptr; }
     physics::CollMesh* Mesh() { return mesh_; }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Global CMSH writer (Inc 4).
 
-Writes one CMSH v1 from the global collision triangle stream, including
+Writes one CMSH v2 from the global collision triangle stream, including
 quantization, BVH construction from quantized positions, face/material ids,
 and a runtime-query audit sidecar mapping triangle ids to source ids.
 
@@ -27,12 +27,35 @@ from writers.colmesh_writer import (
 )
 
 MAGIC = b"CMSH"
-VERSION = 1
+VERSION = 2
 FLAG_HAS_BVH = 0x0001
 
 
 def float_to_uint32(v: float) -> int:
     return struct.unpack(">I", struct.pack(">f", v))[0]
+
+
+def source_face_id_map(scene: CollisionScene) -> dict[tuple[int, int, int], int]:
+    """Return CMSH's canonical 1-based face ids, including OG tie order."""
+    face_order = {}
+    for t in scene.tris:
+        key = (t.entity_index, t.brush_index, t.face_index)
+        value = (t.og_solid_id, t.og_face_order)
+        if key in face_order and face_order[key] != value:
+            raise ValueError(f"inconsistent OG face order metadata for {key}")
+        face_order[key] = value
+    ordered_face_keys = sorted(
+        face_order,
+        key=lambda key: (
+            0 if face_order[key][0] >= 0 else 1,
+            face_order[key][0] if face_order[key][0] >= 0 else 0,
+            face_order[key][1] if face_order[key][1] >= 0 else 0,
+            key,
+        ),
+    )
+    if len(ordered_face_keys) > 0xFFFF:
+        raise ValueError("source face group count exceeds CMSH uint16 limit")
+    return {key: index + 1 for index, key in enumerate(ordered_face_keys)}
 
 
 def write_colmesh(
@@ -56,21 +79,46 @@ def write_colmesh(
     qverts, origin, qscale = quantize_all(verts)
 
     # Build BVH from QUANTIZED positions.
-    raw_tris = [
-        (t.i0, t.i1, t.i2, t.material_flags, 0) for t in tris
-    ]
+    source_face_ids = source_face_id_map(scene)
+    ordered_face_keys = sorted(source_face_ids, key=source_face_ids.__getitem__)
+    face_order = {}
+    for t in tris:
+        face_order[(t.entity_index, t.brush_index, t.face_index)] = (
+            t.og_solid_id, t.og_face_order)
+    raw_tris = []
+    for t in tris:
+        key = (t.entity_index, t.brush_index, t.face_index)
+        source_face_id = source_face_ids[key]
+        raw_tris.append((t.i0, t.i1, t.i2, t.material_flags, source_face_id))
     bvh_nodes, flat_tris = build_bvh(raw_tris, qverts)
     stats = {
         "vertices": len(qverts),
         "triangles": len(flat_tris),
         "bvh_nodes": len(bvh_nodes),
+        "og_solid_grid_records": len(scene.og_solid_grid),
     }
 
+    face_ranges = {}
+    for key in ordered_face_keys:
+        solid_id = face_order[key][0]
+        if solid_id < 0:
+            continue
+        face_id = source_face_ids[key]
+        if solid_id not in face_ranges:
+            face_ranges[solid_id] = [face_id, face_id]
+        else:
+            face_ranges[solid_id][1] = face_id
+    solid_bounds = {record.solid_id: record for record in scene.og_solid_grid}
+    if set(face_ranges) != set(solid_bounds):
+        raise ValueError("OG solid bounds and collision face metadata disagree")
+    if len(solid_bounds) > 0xFFFF:
+        raise ValueError("OG SolidGrid record count exceeds uint16 limit")
+
     # Rebuild triangles in flat order, updating face_ids.
-    reordered: List[Tuple[int, int, int, int, int]] = []
+    reordered: List[Tuple[int, int, int, int, int, int]] = []
     for new_idx, raw in enumerate(flat_tris):
-        i0, i1, i2, mat, _ = raw
-        reordered.append((i0, i1, i2, mat, new_idx))
+        i0, i1, i2, mat, source_face_id = raw
+        reordered.append((i0, i1, i2, mat, new_idx, source_face_id))
 
     # Quantized AABB.
     qxs = [q[0] for q in qverts]
@@ -85,6 +133,7 @@ def write_colmesh(
     off_tris = (off_verts + len(qverts) * 6 + 7) & ~7
     off_bvh = (off_tris + len(reordered) * 12 + 7) & ~7
     off_slinks = (off_bvh + len(bvh_nodes) * 16 + 7) & ~7
+    off_solid_grid = (off_slinks + 7) & ~7  # CMSH v2 starts records at 8-byte alignment
 
     has_bvh = 1 if bvh_nodes else 0
 
@@ -105,7 +154,7 @@ def write_colmesh(
         f.write(struct.pack(">I", off_tris))
         f.write(struct.pack(">I", off_bvh))
         f.write(struct.pack(">I", off_slinks))
-        f.write(struct.pack(">I", 0))  # pad
+        f.write(struct.pack(">I", len(solid_bounds)))  # v2 solid-grid record count
 
         f.seek(off_verts)
         for qv in qverts:
@@ -113,8 +162,9 @@ def write_colmesh(
 
         f.seek(off_tris)
         for tri in reordered:
-            i0, i1, i2, mat, fid = tri
-            f.write(struct.pack(">HHHHHH", i0, i1, i2, mat & 0xFFFF, fid & 0xFFFF, 0))
+            i0, i1, i2, mat, fid, source_face_id = tri
+            f.write(struct.pack(">HHHHHH", i0, i1, i2, mat & 0xFFFF,
+                                fid & 0xFFFF, source_face_id & 0xFFFF))
 
         f.seek(off_bvh)
         for node in bvh_nodes:
@@ -122,6 +172,14 @@ def write_colmesh(
                 int(node.aabb_min[0]), int(node.aabb_min[1]), int(node.aabb_min[2]),
                 int(node.aabb_max[0]), int(node.aabb_max[1]), int(node.aabb_max[2]),
                 node.left_or_first & 0xFFFF, node.count_or_zero & 0xFFFF))
+
+        f.seek(off_solid_grid)
+        for solid_id in sorted(solid_bounds):
+            record = solid_bounds[solid_id]
+            first_face, last_face = face_ranges[solid_id]
+            f.write(struct.pack(">HHHHffff",
+                solid_id, first_face, last_face, 0,
+                record.min_x, record.min_y, record.max_x, record.max_y))
 
     # Audit sidecar: triangle id -> source face id.
     if audit_path:

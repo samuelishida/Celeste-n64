@@ -4,17 +4,16 @@
 #include <cstring>
 
 #include "gameplay/math_types.hpp"
+#include "gameplay/world/dynamic_solid_geometry.hpp"
 #include "gameplay/world/mappack_loader.hpp"  // MapSpecV2, V2RoomSpec, V2SpawnSpec
 #include "gameplay/world/world.hpp"          // WorldCollision, Room, AABB
 
 namespace madeline_cube {
 
-class LvlRoomRenderer;  // forward decl (N64-only; null on host)
-
-// One authoritative active visual room view. Owns room metadata, dynamic
-// colliders, a renderer handle, room id, cell key, render origin, and actor
-// records. It does NOT own a static collision mesh — all static queries go
-// through the global WorldCollision.
+// One authoritative active room view. Owns room metadata, dynamic
+// colliders, room id, cell key, render origin, and actor records. It does NOT
+// own a static collision mesh or visual renderer — TileStreamer owns visual
+// cell residency, and all static queries use global WorldCollision.
 struct ActiveRoomView {
     static constexpr int kIdLen = 16;
 
@@ -24,13 +23,11 @@ struct ActiveRoomView {
     Vec3 render_origin = {0.0f, 0.0f, 0.0f};
     AABB world_aabb;
     Room room;                       // dynamic colliders, spawns, atmosphere
-    LvlRoomRenderer* renderer = nullptr;  // N64-only; null on host
     bool loaded = false;
 };
 
 // The authoritative map runtime (Inc 6). Owns ONE global WorldCollision plus
-// one staged/active visual room. Replaces the parallel legacy Map pool for
-// map-pack v2.
+// one staged/active room state. TileStreamer owns visual cell residency.
 class MapRuntime {
 public:
     MapRuntime() = default;
@@ -57,8 +54,8 @@ public:
     // *new_room_id. Does NOT perform the swap — the caller calls CommitActive.
     bool SetActiveByPosition(const Vec3& player_pos, const char** new_room_id);
 
-    // Stage + commit a visual room as active. Loads the room's .lvl into the
-    // active view (renderer + dynamic colliders + spawns). On failure, the old
+    // Stage + commit a room state as active. Loads the room's .lvl into the
+    // active view (dynamic colliders + spawns). On failure, the old
     // active room remains active and global collision stays valid. Returns true
     // on success.
     bool CommitActive(const char* room_id);
@@ -74,6 +71,8 @@ public:
     }
     WorldCollision& GlobalCollision() { return collision_; }
     const WorldCollision& GlobalCollision() const { return collision_; }
+    DynamicSolidGeometry& DynamicGeometry() { return dynamic_geometry_; }
+    const DynamicSolidGeometry& DynamicGeometry() const { return dynamic_geometry_; }
     const MapSpecV2& Spec() const { return spec_; }
 
     // Explicit spawn/checkpoint lookup.
@@ -82,17 +81,25 @@ public:
 
     // Build ActorSpawn entries for the active room's manifest spawn records
     // (with stable source_id). Returns the count written to `out` (up to
-    // `max_out`). This is the authoritative actor source for map-pack v2 —
-    // it uses the manifest spawn table, not LVL entity order, so overlapping
-    // visual geometry never duplicates an actor record.
+    // `max_out`), or -1 if output capacity is insufficient. This uses the
+    // manifest table, not LVL entity order, so visual geometry cannot
+    // duplicate actor records.
     int ActiveSpawns(ActorSpawn* out, int max_out) const;
 
+    // Enumerate supported actor records across every manifest room. Gameplay
+    // uses this once at boot so actor cooldown/collected state survives room
+    // transitions. Returns -1 rather than truncating on capacity overflow.
+    int AllActorSpawns(ActorSpawn* out, int max_out) const;
+
 private:
-    // Load a room's .lvl into the active view (renderer + dynamic state).
+    bool InitInPlace(const char* mappack_path, const char* build_dir);
+    bool SwapState(MapRuntime& other);
+    // Load a room's .lvl into the active view (dynamic state).
     bool LoadRoomIntoActive(const V2RoomSpec& room_spec, ActiveRoomView& view);
 
     MapSpecV2 spec_;
     WorldCollision collision_;
+    DynamicSolidGeometry dynamic_geometry_;
     ActiveRoomView active_;
     bool active_committed_ = false;
     char build_dir_[256] = {};

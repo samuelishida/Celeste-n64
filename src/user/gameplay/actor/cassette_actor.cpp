@@ -4,19 +4,18 @@ namespace madeline_cube {
 
 void CassetteActor::InitAt(const Vec3& start_position) {
     position = start_position;
-    pickup_radius = 1.2f;
+    pickup_radius = kPickupRadius;
     collected = false;
     active = true;
     spin_phase_seconds_ = 0.0f;
 }
 
-bool CassetteActor::Step(float delta_seconds, const Vec3& player_position) {
-    if (collected) {
-        return false;
-    }
-
+void CassetteActor::Update(float delta_seconds) {
     spin_phase_seconds_ += delta_seconds;
+}
 
+bool CassetteActor::TryPickup(const Vec3& player_position) {
+    if (collected) return false;
     const float dx = position.x - player_position.x;
     const float dy = position.y - player_position.y;
     const float dz = position.z - player_position.z;
@@ -27,8 +26,12 @@ bool CassetteActor::Step(float delta_seconds, const Vec3& player_position) {
     }
 
     collected = true;
-    active = false;
     return true;
+}
+
+bool CassetteActor::Step(float delta_seconds, const Vec3& player_position) {
+    Update(delta_seconds);
+    return TryPickup(player_position);
 }
 
 }  // namespace madeline_cube

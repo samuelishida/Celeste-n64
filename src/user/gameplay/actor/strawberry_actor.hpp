@@ -12,6 +12,7 @@ public:
     void Init() override;
     void Update(float delta_seconds) override;
     void OnCollect() override;
+    Vec3 UpdateBoundsHalfExtent() const override { return {10.0f, 10.0f, 10.0f}; }
 
     bool IsCollectible() const override { return true; }
 };

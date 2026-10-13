@@ -1,20 +1,279 @@
 #include "gameplay/world/world.hpp"
 
 #include <cmath>
+#include <algorithm>
 
 #include "gameplay/physics/coll_mesh.hpp"
+#include "gameplay/world/dynamic_solid_geometry.hpp"
 
 namespace madeline_cube {
 
 namespace {
 
 constexpr float kRayEpsilon = 0.0001f;
+constexpr int kOgGridCellSize = 200;
+constexpr int kOgGridCount = 100;
 // Sentinel: colliders added at runtime (moving platforms) have owner_id >= 0.
 // Static colliders from the legacy path have owner_id == -1 and are skipped
 // when a CollMesh is present (CollMesh handles all static geometry).
 constexpr int kStaticOwner = -1;
 
 struct OwnerInfo { int id; Vec3 velocity; };
+
+struct WallQueryOrder {
+    bool has_og_solid = false;
+    uint32_t query_cell = 0xFFFFFFFFu;
+    uint32_t insertion_ordinal = 0xFFFFFFFFu;
+    uint16_t source_face_id = 0xFFFFu;
+    int face_id = 0x7FFFFFFF;
+};
+
+struct SourceRayQueryBounds {
+    float min_x = 0.0f;
+    float min_y = 0.0f;
+    float max_x = 0.0f;
+    float max_y = 0.0f;
+};
+
+struct SourceRayOrder {
+    bool has_og_solid = false;
+    uint32_t query_cell = 0xFFFFFFFFu;
+    uint32_t insertion_ordinal = 0xFFFFFFFFu;
+    uint16_t source_face_id = 0;
+    int face_id = -1;
+};
+
+int PositiveGridModulo(int value) {
+    const int remainder = value % kOgGridCount;
+    return remainder < 0 ? remainder + kOgGridCount : remainder;
+}
+
+bool GridRangeContainsWrappedCell(int start, int end, int cell) {
+    const int width = end - start;
+    return width >= kOgGridCount ||
+        (width > 0 && PositiveGridModulo(cell - start) < width);
+}
+
+bool TryOgRayOrder(float solid_min_x, float solid_min_y,
+                   float solid_max_x, float solid_max_y,
+                   uint32_t insertion_ordinal, uint16_t source_face_id,
+                   const SourceRayQueryBounds& query,
+                   SourceRayOrder& order) {
+    const int query_left = static_cast<int>(std::floor(
+        (query.min_x - 1.0f) / kOgGridCellSize));
+    const int query_top = static_cast<int>(std::floor(
+        (query.min_y - 1.0f) / kOgGridCellSize));
+    const int query_right = static_cast<int>(std::ceil(
+        (query.max_x + 1.0f) / kOgGridCellSize));
+    const int query_bottom = static_cast<int>(std::ceil(
+        (query.max_y + 1.0f) / kOgGridCellSize));
+    const int query_height = query_bottom - query_top;
+    if (query_right <= query_left || query_height <= 0) return false;
+
+    const int solid_left = static_cast<int>(std::floor(
+        (solid_min_x - 1.0f) / kOgGridCellSize));
+    const int solid_top = static_cast<int>(std::floor(
+        (solid_min_y - 1.0f) / kOgGridCellSize));
+    const int solid_right = static_cast<int>(std::ceil(
+        (solid_max_x + 1.0f) / kOgGridCellSize));
+    const int solid_bottom = static_cast<int>(std::ceil(
+        (solid_max_y + 1.0f) / kOgGridCellSize));
+    for (int x = query_left; x < query_right; ++x) {
+        if (!GridRangeContainsWrappedCell(solid_left, solid_right, x)) continue;
+        for (int y = query_top; y < query_bottom; ++y) {
+            if (!GridRangeContainsWrappedCell(solid_top, solid_bottom, y)) continue;
+            order = {
+                .has_og_solid = true,
+                .query_cell = static_cast<uint32_t>(x - query_left) *
+                    static_cast<uint32_t>(query_height) +
+                    static_cast<uint32_t>(y - query_top),
+                .insertion_ordinal = insertion_ordinal,
+                .source_face_id = source_face_id,
+                .face_id = -1,
+            };
+            return true;
+        }
+    }
+    return false;
+}
+
+SourceRayQueryBounds MakeSourceRayQueryBounds(const Vec3& origin,
+                                               const Vec3& end) {
+    return {
+        .min_x = std::fmin(origin.x, end.x),
+        .min_y = -std::fmax(origin.z, end.z),
+        .max_x = std::fmax(origin.x, end.x),
+        .max_y = -std::fmin(origin.z, end.z),
+    };
+}
+
+SourceRayOrder MakeStaticRayOrder(const physics::CollMesh& mesh, int face_id,
+                                 const SourceRayQueryBounds& query) {
+    SourceRayOrder order{};
+    if (!mesh.header || !mesh.triangles || face_id < 0 ||
+        static_cast<uint32_t>(face_id) >= mesh.header->triangle_count) return order;
+    const physics::CollTriangle& triangle = mesh.triangles[face_id];
+    order.source_face_id = triangle.source_face_id;
+    order.face_id = face_id;
+    const physics::CollSolidGridRecord* solid =
+        physics::SolidGridRecordOf(mesh, face_id);
+    if (solid && TryOgRayOrder(solid->min_x, solid->min_y,
+                               solid->max_x, solid->max_y,
+                               solid->solid_id, triangle.source_face_id,
+                               query, order)) {
+        order.face_id = face_id;
+    }
+    return order;
+}
+
+SourceRayOrder MakeDynamicRayOrder(const DynamicSolidView& view,
+                                   uint16_t source_face_id, int face_id,
+                                   const SourceRayQueryBounds& query) {
+    SourceRayOrder order{};
+    order.source_face_id = source_face_id;
+    order.face_id = face_id;
+    if (TryOgRayOrder(view.bounds.min.x, -view.bounds.max.z,
+                      view.bounds.max.x, -view.bounds.min.z,
+                      view.reinsert_ordinal, source_face_id, query, order)) {
+        order.face_id = face_id;
+    }
+    return order;
+}
+
+bool SourceRayOrderIsLater(const SourceRayOrder& candidate,
+                           const SourceRayOrder& best) {
+    if (candidate.has_og_solid != best.has_og_solid)
+        return candidate.has_og_solid;
+    if (candidate.has_og_solid) {
+        if (candidate.query_cell != best.query_cell)
+            return candidate.query_cell > best.query_cell;
+        if (candidate.insertion_ordinal != best.insertion_ordinal)
+            return candidate.insertion_ordinal > best.insertion_ordinal;
+        if (candidate.source_face_id != best.source_face_id)
+            return candidate.source_face_id > best.source_face_id;
+        // OG stops at first intersecting fan triangle within one authored face.
+        // CMSH face order follows that fan order, independent of BVH traversal.
+        return candidate.face_id < best.face_id;
+    }
+    if (candidate.source_face_id != best.source_face_id)
+        return candidate.source_face_id > best.source_face_id;
+    // Legacy CMSH has no authored-face provenance; preserve traversal order.
+    return candidate.source_face_id == 0 && candidate.face_id > best.face_id;
+}
+
+bool SourceRayCandidateWins(float distance, const SourceRayOrder& order,
+                            const GroundHit& best,
+                            const SourceRayOrder& best_order) {
+    if (!best.hit || distance < best.distance) return true;
+    return distance == best.distance &&
+           SourceRayOrderIsLater(order, best_order);
+}
+
+bool TryOgWallBoundsOrder(float min_x, float min_plane_y,
+                          float max_x, float max_plane_y,
+                          uint32_t insertion_ordinal, uint16_t source_face_id,
+                          const Vec3& point, float radius,
+                          WallQueryOrder& order) {
+    // OG GridPartition.Cells inflates both query and inserted solid bounds by
+    // one world unit, then floors minima / ceils maxima. Query loops X outer,
+    // Y inner; its first shared wrapped cell determines solid encounter order.
+    const double query_min_x = point.x - radius - 1.0;
+    const double query_max_x = point.x + radius + 1.0;
+    const double query_min_y = -point.z - radius - 1.0;
+    const double query_max_y = -point.z + radius + 1.0;
+    const int query_left = static_cast<int>(std::floor(query_min_x / kOgGridCellSize));
+    const int query_top = static_cast<int>(std::floor(query_min_y / kOgGridCellSize));
+    const int query_right = static_cast<int>(std::ceil(query_max_x / kOgGridCellSize));
+    const int query_bottom = static_cast<int>(std::ceil(query_max_y / kOgGridCellSize));
+    const int query_height = query_bottom - query_top;
+    if (query_right <= query_left || query_height <= 0) return false;
+
+    const int solid_left = static_cast<int>(std::floor((min_x - 1.0) / kOgGridCellSize));
+    const int solid_top = static_cast<int>(std::floor((min_plane_y - 1.0) / kOgGridCellSize));
+    const int solid_right = static_cast<int>(std::ceil((max_x + 1.0) / kOgGridCellSize));
+    const int solid_bottom = static_cast<int>(std::ceil((max_plane_y + 1.0) / kOgGridCellSize));
+    for (int x = query_left; x < query_right; ++x) {
+        if (!GridRangeContainsWrappedCell(solid_left, solid_right, x)) continue;
+        for (int y = query_top; y < query_bottom; ++y) {
+            if (!GridRangeContainsWrappedCell(solid_top, solid_bottom, y)) continue;
+            const uint32_t query_cell = static_cast<uint32_t>(x - query_left) *
+                static_cast<uint32_t>(query_height) + static_cast<uint32_t>(y - query_top);
+            order = {
+                .has_og_solid = true,
+                .query_cell = query_cell,
+                .insertion_ordinal = insertion_ordinal,
+                .source_face_id = source_face_id,
+                .face_id = -1,
+            };
+            return true;
+        }
+    }
+    return false;
+}
+
+bool TryOgWallQueryOrder(const physics::CollMesh& mesh, int face_id,
+                         const Vec3& point, float radius,
+                         WallQueryOrder& order) {
+    const physics::CollSolidGridRecord* solid =
+        physics::SolidGridRecordOf(mesh, face_id);
+    if (!solid) return false;
+    if (!TryOgWallBoundsOrder(solid->min_x, solid->min_y,
+                              solid->max_x, solid->max_y,
+                              solid->solid_id,
+                              mesh.triangles[face_id].source_face_id,
+                              point, radius, order)) return false;
+    order.face_id = face_id;
+    return true;
+}
+
+WallQueryOrder MakeWallQueryOrder(const physics::CollMesh& mesh, int face_id,
+                                 const Vec3& point, float radius) {
+    WallQueryOrder order;
+    if (TryOgWallQueryOrder(mesh, face_id, point, radius, order)) return order;
+    const uint16_t source_face_id = face_id >= 0 &&
+        face_id < static_cast<int>(mesh.header->triangle_count)
+        ? mesh.triangles[face_id].source_face_id : 0;
+    // Unmodeled entity solids follow worldspawn chunks in OG. Their exact
+    // actor transforms/order remain outside this static-world metadata slice.
+    order.source_face_id = source_face_id != 0 ? source_face_id : 0xFFFFu;
+    order.face_id = face_id;
+    return order;
+}
+
+WallQueryOrder MakeRoomWallQueryOrder(const Room& room, int face_id,
+                                      const Vec3& point, float radius) {
+    if (room.dynamic_solids && room.coll_mesh) {
+        const physics::CollSolidGridRecord* solid =
+            physics::SolidGridRecordOf(*room.coll_mesh, face_id);
+        const DynamicSolidView* view = solid
+            ? room.dynamic_solids->FindViewBySolidId(solid->solid_id) : nullptr;
+        if (view) {
+            WallQueryOrder order;
+            const uint16_t source_face_id =
+                room.coll_mesh->triangles[face_id].source_face_id;
+            if (TryOgWallBoundsOrder(view->bounds.min.x, -view->bounds.max.z,
+                                     view->bounds.max.x, -view->bounds.min.z,
+                                     view->reinsert_ordinal, source_face_id,
+                                     point, radius, order)) {
+                order.face_id = face_id;
+                return order;
+            }
+        }
+    }
+    return MakeWallQueryOrder(*room.coll_mesh, face_id, point, radius);
+}
+
+bool WallQueryOrderBefore(const WallQueryOrder& a, const WallQueryOrder& b) {
+    if (a.has_og_solid != b.has_og_solid) return a.has_og_solid;
+    if (a.has_og_solid) {
+        if (a.query_cell != b.query_cell) return a.query_cell < b.query_cell;
+        if (a.insertion_ordinal != b.insertion_ordinal)
+            return a.insertion_ordinal < b.insertion_ordinal;
+    }
+    if (a.source_face_id != b.source_face_id)
+        return a.source_face_id < b.source_face_id;
+    return a.face_id < b.face_id;
+}
 
 OwnerInfo ResolveOwner(const physics::CollMesh& mesh, const Room& room, int face_id) {
     uint16_t owner_raw = physics::SurfaceOwnerOf(mesh, face_id);
@@ -39,8 +298,6 @@ Vec3 AddScaled(const Vec3& origin, const Vec3& direction, float distance) {
 
 bool RaycastPlane(const Collider& collider, const Vec3& origin, const Vec3& direction, float max_distance,
                   float& distance, Vec3& normal) {
-    if (Abs(direction.y) <= kRayEpsilon) return false;
-
     // Slopes set has_plane_origin so the plane equation references an actual
     // on-plane point.  Axis-aligned floors leave it unset and the min-corner /
     // max-y combination resolves to the same horizontal plane the bounds
@@ -71,9 +328,7 @@ bool RaycastPlane(const Collider& collider, const Vec3& origin, const Vec3& dire
         return false;
     }
 
-    normal = denom < 0.0f
-        ? collider.normal
-        : Vec3{-collider.normal.x, -collider.normal.y, -collider.normal.z};
+    normal = collider.normal;
     return true;
 }
 
@@ -82,6 +337,7 @@ bool RaycastBox(const Collider& collider, const Vec3& origin, const Vec3& direct
     float near_time = 0.0f;
     float far_time = max_distance;
     Vec3 near_normal;
+    Vec3 far_normal;
 
     const float origins[3] = {origin.x, origin.y, origin.z};
     const float directions[3] = {direction.x, direction.y, direction.z};
@@ -110,13 +366,18 @@ bool RaycastBox(const Collider& collider, const Vec3& origin, const Vec3& direct
             near_time = axis_near;
             near_normal = axis_normal;
         }
-        if (axis_far < far_time) far_time = axis_far;
+        if (axis_far < far_time) {
+            far_time = axis_far;
+            far_normal = {-axis_normal.x,-axis_normal.y,-axis_normal.z};
+        }
         if (near_time > far_time) return false;
     }
 
     if (near_time < 0.0f || near_time > max_distance) return false;
-    distance = near_time;
-    normal = near_normal;
+    const bool has_entry = near_normal.x != 0 || near_normal.y != 0 || near_normal.z != 0;
+    distance = has_entry ? near_time : far_time;
+    normal = has_entry ? near_normal : far_normal;
+    if (normal.x == 0 && normal.y == 0 && normal.z == 0) return false;
     return true;
 }
 
@@ -124,6 +385,125 @@ bool IsCloser(float candidate_dist, int candidate_face_id, const GroundHit& best
     if (!best.hit) return true;
     if (candidate_dist < best.distance - kRayEpsilon) return true;
     return Abs(candidate_dist - best.distance) <= kRayEpsilon && candidate_face_id < best.face_id;
+}
+
+Vec3 WorldToActorLocalPoint(const Vec3& world, const DynamicSolidView& view) {
+    const float dx = world.x - view.position.x;
+    const float dz = world.z - view.position.z;
+    const float cosine = std::cos(view.yaw_radians);
+    const float sine = std::sin(view.yaw_radians);
+    return {cosine * dx - sine * dz, world.y - view.position.y,
+            sine * dx + cosine * dz};
+}
+
+Vec3 WorldToActorLocalVector(const Vec3& world, const DynamicSolidView& view) {
+    const float cosine = std::cos(view.yaw_radians);
+    const float sine = std::sin(view.yaw_radians);
+    return {cosine * world.x - sine * world.z, world.y,
+            sine * world.x + cosine * world.z};
+}
+
+Vec3 ActorLocalToWorldPoint(const Vec3& local, const DynamicSolidView& view) {
+    const float cosine = std::cos(view.yaw_radians);
+    const float sine = std::sin(view.yaw_radians);
+    return {view.position.x + cosine * local.x + sine * local.z,
+            view.position.y + local.y,
+            view.position.z - sine * local.x + cosine * local.z};
+}
+
+Vec3 ActorLocalToWorldVector(const Vec3& local, const DynamicSolidView& view) {
+    const float cosine = std::cos(view.yaw_radians);
+    const float sine = std::sin(view.yaw_radians);
+    return {cosine * local.x + sine * local.z, local.y,
+            -sine * local.x + cosine * local.z};
+}
+
+bool IsDynamicProxyTriangle(const physics::CollMesh& mesh, int triangle_index,
+                            void* user_data) {
+    const Room& room = *static_cast<const Room*>(user_data);
+    if (!room.dynamic_solids) return false;
+    const physics::CollSolidGridRecord* solid =
+        physics::SolidGridRecordOf(mesh, triangle_index);
+    return solid && room.dynamic_solids->OwnsSolidId(solid->solid_id);
+}
+
+bool IncludeStaticTriangle(const physics::CollMesh& mesh, int triangle_index,
+                           void* user_data) {
+    return !IsDynamicProxyTriangle(mesh, triangle_index, user_data);
+}
+
+bool BoundsOverlapSegment(const AABB& bounds, const Vec3& origin,
+                          const Vec3& direction, float max_distance) {
+    const Vec3 end = AddScaled(origin, direction, max_distance);
+    const physics::AABB segment_bounds{
+        {std::fmin(origin.x, end.x), std::fmin(origin.y, end.y),
+         std::fmin(origin.z, end.z)},
+        {std::fmax(origin.x, end.x), std::fmax(origin.y, end.y),
+         std::fmax(origin.z, end.z)}};
+    return physics::AABBOverlap({bounds.min, bounds.max}, segment_bounds);
+}
+
+GroundHit RaycastDynamicSolids(const Room& room, const Vec3& origin,
+                               const Vec3& direction, float max_distance,
+                               BackfacePolicy backface, GroundHit best) {
+    const DynamicSolidGeometry* geometry = room.dynamic_solids;
+    if (!geometry || !room.coll_mesh || max_distance < 0.0f) return best;
+    const SourceRayQueryBounds query = MakeSourceRayQueryBounds(
+        origin, AddScaled(origin, direction, max_distance));
+    SourceRayOrder best_order = best.hit
+        ? MakeStaticRayOrder(*room.coll_mesh, best.face_id, query)
+        : SourceRayOrder{};
+    const DynamicSolidSpec* actors = geometry->Actors();
+    const DynamicSolidView* views = geometry->Views();
+    const DynamicSolidFace* faces = geometry->Faces();
+    const DynamicSolidVertex* vertices = geometry->Vertices();
+    for (uint16_t actor_index = 0; actor_index < geometry->ActorCount(); ++actor_index) {
+        const DynamicSolidView& view = views[actor_index];
+        if (!view.collidable) continue;
+        if (!BoundsOverlapSegment(view.bounds, origin, direction, max_distance)) continue;
+        const Vec3 local_origin = WorldToActorLocalPoint(origin, view);
+        const Vec3 local_direction = WorldToActorLocalVector(direction, view);
+        const Vec3 local_end = AddScaled(local_origin, local_direction, max_distance);
+        const DynamicSolidSpec& actor = actors[actor_index];
+        for (uint32_t fi = actor.dsol_first_face;
+             fi < actor.dsol_first_face + actor.dsol_face_count; ++fi) {
+            const DynamicSolidFace& face = faces[fi];
+            if (!(face.collision_material & physics::MAT_SOLID) ||
+                face.cms_source_face_id == 0) continue;
+            const int stable_face_id = face.collision_face_id == 0xFFFFu
+                ? -1 : static_cast<int>(face.collision_face_id);
+            if (stable_face_id < 0) continue;
+            for (uint32_t fan = 1; fan + 1 < face.vertex_count; ++fan) {
+                const Vec3& a = vertices[face.first_vertex].position;
+                const Vec3& b = vertices[face.first_vertex + fan].position;
+                const Vec3& c = vertices[face.first_vertex + fan + 1].position;
+                const physics::TriHit hit = physics::SegmentTriangle(
+                    local_origin, local_end, a, b, c,
+                    backface == BackfacePolicy::Ignore
+                        ? physics::BackfaceCull::Cull
+                        : physics::BackfaceCull::Ignore);
+                if (!hit.hit) continue;
+                const float distance = hit.t * max_distance;
+                const SourceRayOrder order = MakeDynamicRayOrder(
+                    view, face.cms_source_face_id, stable_face_id, query);
+                if (!SourceRayCandidateWins(distance, order, best,
+                                           best_order)) continue;
+                const Vec3 normal = ActorLocalToWorldVector(
+                    physics::Norm(hit.normal), view);
+                best = GroundHit{
+                    .hit = true,
+                    .point = ActorLocalToWorldPoint(hit.point, view),
+                    .normal = normal,
+                    .distance = distance,
+                    .face_id = stable_face_id,
+                    .owner_id = 0x40000000 | actor_index,
+                    .owner_velocity = view.velocity,
+                };
+                best_order = order;
+            }
+        }
+    }
+    return best;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,257 +518,450 @@ static GroundHit RaycastRoomMesh(const Room& room, const physics::CollMesh& mesh
                                   const Vec3& origin, const Vec3& direction,
                                   float max_distance, BackfacePolicy backface) {
     using namespace physics;
-    RayHit h;
+    const Vec3 end = AddScaled(origin, direction, max_distance);
+    const SourceRayQueryBounds source_query =
+        MakeSourceRayQueryBounds(origin, end);
+    const physics::AABB query{
+        {std::fmin(origin.x, end.x) - 1.0f,
+         std::fmin(origin.y, end.y) - 1.0f,
+         std::fmin(origin.z, end.z) - 1.0f},
+        {std::fmax(origin.x, end.x) + 1.0f,
+         std::fmax(origin.y, end.y) + 1.0f,
+         std::fmax(origin.z, end.z) + 1.0f}};
+    struct QueryState {
+        const Room* room;
+        const CollMesh* mesh;
+        Vec3 origin;
+        Vec3 end;
+        Vec3 direction;
+        float max_distance;
+        BackfaceCull cull;
+        SourceRayQueryBounds source_query;
+        GroundHit best;
+        SourceRayOrder best_order;
+    } state{&room, &mesh, origin, end, direction, max_distance,
+            backface == BackfacePolicy::Ignore
+                ? BackfaceCull::Cull : BackfaceCull::Ignore,
+            source_query, GroundHit{}, SourceRayOrder{}};
+    const auto visit = [](int face_id, void* data) -> bool {
+        QueryState& state = *static_cast<QueryState*>(data);
+        const CollMesh& mesh = *state.mesh;
+        if (!IncludeStaticTriangle(mesh, face_id,
+                                   const_cast<Room*>(state.room))) return true;
+        const CollTriangle& triangle = mesh.triangles[face_id];
+        const TriHit hit = SegmentTriangle(
+            state.origin, state.end,
+            mesh.world_verts[triangle.i0],
+            mesh.world_verts[triangle.i1],
+            mesh.world_verts[triangle.i2], state.cull);
+        if (!hit.hit) return true;
+        const float distance = hit.t * state.max_distance;
+        const SourceRayOrder order = MakeStaticRayOrder(
+            mesh, face_id, state.source_query);
+        if (!SourceRayCandidateWins(distance, order, state.best,
+                                    state.best_order)) return true;
+        const OwnerInfo owner = ResolveOwner(mesh, *state.room, face_id);
+        state.best = GroundHit{
+            .hit = true,
+            .point = hit.point,
+            .normal = Norm(hit.normal),
+            .distance = distance,
+            .face_id = face_id,
+            .owner_id = owner.id,
+            .owner_velocity = owner.velocity,
+        };
+        state.best_order = order;
+        return true;
+    };
     uint32_t nodes = 0;
     uint32_t* nodes_ptr = room.query_counters ? &nodes : nullptr;
-    // Always use Ignore so inverted-winding triangles are found; apply the same
-    // dot-product filter as legacy RaycastRoomSource to respect BackfacePolicy.
-    h = RaycastMesh(mesh, origin, direction, max_distance, BackfaceCull::Ignore, nodes_ptr);
+    VisitOverlappingTriangles(mesh, query, visit, &state, nodes_ptr);
     if (room.query_counters) {
         ++room.query_counters->raycasts;
         room.query_counters->bvh_nodes_touched += nodes;
     }
-    if (!h.hit) return GroundHit{};
-    if (backface == BackfacePolicy::Ignore) {
-        const float dot = h.normal.x*direction.x + h.normal.y*direction.y + h.normal.z*direction.z;
-        if (dot >= 0.0f) return GroundHit{};
+    return RaycastDynamicSolids(room, origin, direction, max_distance,
+                                backface, state.best);
+}
+
+static void InsertOrderedWallHit(const Room& room, const Vec3& point,
+                                 float radius, const WallHit& candidate,
+                                 WallHit* out_hits, int max_hits, int& count) {
+    const uint16_t source_face = room.coll_mesh && candidate.face_id >= 0 &&
+        static_cast<uint32_t>(candidate.face_id) < room.coll_mesh->header->triangle_count
+        ? room.coll_mesh->triangles[candidate.face_id].source_face_id : 0;
+    for (int i = 0; i < count; ++i) {
+        const int previous_id = out_hits[i].face_id;
+        const uint16_t previous_source = room.coll_mesh && previous_id >= 0 &&
+            static_cast<uint32_t>(previous_id) < room.coll_mesh->header->triangle_count
+            ? room.coll_mesh->triangles[previous_id].source_face_id : 0;
+        if ((source_face != 0 && source_face == previous_source) ||
+            (source_face == 0 && candidate.face_id == previous_id)) {
+            if (candidate.pushout > out_hits[i].pushout)
+                out_hits[i] = candidate;
+            return;
+        }
     }
-    OwnerInfo owner = ResolveOwner(mesh, room, h.face_id);
-    return GroundHit{
-        .hit = true,
-        .point = h.point,
-        .normal = h.normal,
-        .distance = h.t * max_distance,  // h.t is fraction [0,1]; convert to world units
-        .face_id = h.face_id,
-        .owner_id = owner.id,
-        .owner_velocity = owner.velocity,
-    };
+    const WallQueryOrder key = MakeRoomWallQueryOrder(
+        room, candidate.face_id, point, radius);
+    int insert_at = count;
+    while (insert_at > 0) {
+        const WallQueryOrder previous_key = MakeRoomWallQueryOrder(
+            room, out_hits[insert_at - 1].face_id, point, radius);
+        if (!WallQueryOrderBefore(key, previous_key)) break;
+        if (insert_at < max_hits) out_hits[insert_at] = out_hits[insert_at - 1];
+        --insert_at;
+    }
+    if (insert_at < max_hits) {
+        out_hits[insert_at] = candidate;
+        if (count < max_hits) ++count;
+    }
 }
 
 static int QueryWallsMesh(const Room& room, const physics::CollMesh& mesh,
-                           const Vec3& point, float radius,
-                           WallHit* out_hits, int max_hits) {
+                          const Vec3& point, float radius,
+                          WallHit* out_hits, int max_hits) {
     using namespace physics;
-    physics::AABB q = {
-        { point.x - radius, point.y - radius, point.z - radius },
-        { point.x + radius, point.y + radius, point.z + radius },
+    if (!out_hits || max_hits <= 0) return 0;
+    const physics::AABB query{
+        {point.x - radius, point.y - radius, point.z - radius},
+        {point.x + radius, point.y + radius, point.z + radius}};
+    struct QueryState {
+        const Room* room;
+        const CollMesh* mesh;
+        const Vec3* point;
+        float radius;
+        WallHit* out_hits;
+        int max_hits;
+        int count;
+    } state{&room, &mesh, &point, radius, out_hits, max_hits, 0};
+    const auto visit = [](int fid, void* data) -> bool {
+        QueryState& state = *static_cast<QueryState*>(data);
+        const Room& room = *state.room;
+        const CollMesh& mesh = *state.mesh;
+        if (IsDynamicProxyTriangle(mesh, fid, const_cast<Room*>(&room))) return true;
+        const CollTriangle& ct = mesh.triangles[fid];
+        if (!(ct.material & MAT_SOLID)) return true;
+        const Vec3& a = mesh.world_verts[ct.i0];
+        const Vec3& b = mesh.world_verts[ct.i1];
+        const Vec3& c = mesh.world_verts[ct.i2];
+        const SphereTriHit sh = SphereTriangle(*state.point, state.radius, a, b, c);
+        if (!sh.hit) return true;
+        const Vec3 delta = Sub(*state.point, sh.closest);
+        const float length = std::sqrt(Len2(delta));
+        if (length < 1e-7f) return true;
+        const Vec3 normal = Scale(delta, 1.0f / length);
+        if (normal.y >= 0.85f || normal.y <= -0.85f) return true;
+        Vec3 plane_normal = Norm(Cross(Sub(b, a), Sub(c, a)));
+        if (Dot(plane_normal, delta) < 0.0f)
+            plane_normal = Scale(plane_normal, -1.0f);
+        const float pushout = state.radius - sh.dist;
+        if (pushout < 0.0f) return true;
+        const OwnerInfo owner = ResolveOwner(mesh, room, fid);
+        InsertOrderedWallHit(room, *state.point, state.radius,
+            WallHit{.hit=true,.point=sh.closest,.normal=normal,
+                    .plane_normal=plane_normal,.pushout=pushout,.face_id=fid,
+                    .owner_id=owner.id,.owner_velocity=owner.velocity},
+            state.out_hits, state.max_hits, state.count);
+        return true;
     };
-    int candidates[256];
     uint32_t nodes = 0;
-    uint32_t* nodes_ptr = room.query_counters ? &nodes : nullptr;
-    int n = OverlapAabbMesh(mesh, q, candidates, 256, nodes_ptr);
+    VisitOverlappingTriangles(mesh, query, visit, &state,
+                              room.query_counters ? &nodes : nullptr);
     if (room.query_counters) {
         ++room.query_counters->overlap_queries;
         room.query_counters->bvh_nodes_touched += nodes;
     }
 
-    int count = 0;
-    for (int i = 0; i < n && count < max_hits; ++i) {
-        int fid = candidates[i];
-        const CollTriangle& ct = mesh.triangles[fid];
-        if (!(ct.material & MAT_SOLID)) continue;
-
-        const Vec3& a = mesh.world_verts[ct.i0];
-        const Vec3& b = mesh.world_verts[ct.i1];
-        const Vec3& c = mesh.world_verts[ct.i2];
-
-        SphereTriHit sh = SphereTriangle(point, radius, a, b, c);
-        if (!sh.hit) continue;
-
-        const float dx = point.x - sh.closest.x;
-        const float dy = point.y - sh.closest.y;
-        const float dz = point.z - sh.closest.z;
-        const float len = std::sqrt(dx*dx + dy*dy + dz*dz);
-        if (len < 1e-7f) continue;
-
-        const Vec3 normal = { dx/len, dy/len, dz/len };
-        if (normal.y >= 0.85f || normal.y <= -0.85f) continue;
-
-        // Owning triangle's plane, oriented toward the query centre. For
-        // face-region contacts this is the true face normal; near seams/edges
-        // it stays a real adjacent-face plane instead of the diagonal
-        // centre-relative direction that made fall speed bleed away.
-        Vec3 pn = physics::Norm(physics::Cross(
-            physics::Sub(b, a), physics::Sub(c, a)));
-        if ((pn.x*dx + pn.y*dy + pn.z*dz) < 0.0f) {
-            pn.x = -pn.x; pn.y = -pn.y; pn.z = -pn.z;
+    const DynamicSolidGeometry* geometry = room.dynamic_solids;
+    if (!geometry) return state.count;
+    const DynamicSolidSpec* actors = geometry->Actors();
+    const DynamicSolidView* views = geometry->Views();
+    const DynamicSolidFace* faces = geometry->Faces();
+    const DynamicSolidVertex* vertices = geometry->Vertices();
+    const madeline_cube::AABB query_world{query.min, query.max};
+    for (uint16_t ai = 0; ai < geometry->ActorCount(); ++ai) {
+        const DynamicSolidView& view = views[ai];
+        if (!view.collidable) continue;
+        if (!view.bounds.Intersects(query_world)) continue;
+        const Vec3 local_point = WorldToActorLocalPoint(point, view);
+        const DynamicSolidSpec& actor = actors[ai];
+        for (uint32_t fi = actor.dsol_first_face;
+             fi < actor.dsol_first_face + actor.dsol_face_count; ++fi) {
+            const DynamicSolidFace& face = faces[fi];
+            if (!(face.collision_material & MAT_SOLID) ||
+                face.cms_source_face_id == 0) continue;
+            const int stable_face = face.collision_face_id == 0xFFFFu
+                ? -1 : static_cast<int>(face.collision_face_id);
+            if (stable_face < 0) continue;
+            WallHit candidate{};
+            bool found = false;
+            for (uint32_t fan = 1; fan + 1 < face.vertex_count; ++fan) {
+                const Vec3& a = vertices[face.first_vertex].position;
+                const Vec3& b = vertices[face.first_vertex + fan].position;
+                const Vec3& c = vertices[face.first_vertex + fan + 1].position;
+                const SphereTriHit sh = SphereTriangle(local_point, radius, a, b, c);
+                if (!sh.hit) continue;
+                const Vec3 delta = Sub(local_point, sh.closest);
+                const float length = std::sqrt(Len2(delta));
+                if (length < 1e-7f) continue;
+                const Vec3 local_normal = Scale(delta, 1.0f / length);
+                if (local_normal.y >= 0.85f || local_normal.y <= -0.85f) continue;
+                Vec3 plane_normal = Norm(Cross(Sub(b, a), Sub(c, a)));
+                if (Dot(plane_normal, delta) < 0.0f)
+                    plane_normal = Scale(plane_normal, -1.0f);
+                const float pushout = radius - sh.dist;
+                if (pushout < 0.0f || (found && pushout <= candidate.pushout)) continue;
+                candidate = WallHit{
+                    .hit=true,
+                    .point=ActorLocalToWorldPoint(sh.closest, view),
+                    .normal=ActorLocalToWorldVector(local_normal, view),
+                    .plane_normal=ActorLocalToWorldVector(plane_normal, view),
+                    .pushout=pushout,.face_id=stable_face,
+                    .owner_id=0x40000000 | ai,.owner_velocity=view.velocity};
+                found = true;
+            }
+            if (found) InsertOrderedWallHit(room, point, radius, candidate,
+                                             out_hits, max_hits, state.count);
         }
-
-        const float pushout = radius - sh.dist;
-        if (pushout < 0.0f) continue;
-
-        OwnerInfo owner = ResolveOwner(mesh, room, fid);
-        out_hits[count++] = WallHit{
-            .hit = true,
-            .point = sh.closest,
-            .normal = normal,
-            .plane_normal = pn,
-            .pushout = pushout,
-            .face_id = fid,
-            .owner_id = owner.id,
-            .owner_velocity = owner.velocity,
-        };
     }
-    return count;
+    return state.count;
 }
 
-// Distance from `p` to the infinite plane through (a,b,c), signed against the
-// triangle's geometric normal oriented toward `p` (the sign is resolved by the
-// caller picking the face orientation toward the query point, matching the
-// existing `QueryWallsMesh` sign-flip). Returns an unsigned distance.
-static Vec3 PlaneProject(
-    const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& p)
-{
-    using namespace physics;
-    const Vec3 n = physics::Norm(physics::Cross(physics::Sub(b, a), physics::Sub(c, a)));
-    // Signed distance from p to the plane.
-    const float d = physics::Dot(n, physics::Sub(p, a));
-    // Closest point on the plane to p.
-    return { p.x - n.x * d, p.y - n.y * d, p.z - n.z * d };
-}
-
-// OG SolidWallCheck parity (plane-based). For each candidate triangle that is a
-// near-vertical face (|plane_normal.y| < 0.35), compute the face plane, project
-// the query point onto it at the query's own level, and record the face-plane
-// normal as the stable contact normal. Unlike the sphere query, this does NOT
-// return a centre-relative diagonal normal at seams/edges.
+// OG World.SolidWallCheck intersects each triangle with the probe's horizontal
+// plane, then chooses a finite segment contact. CMSH winding is the authored
+// solid-sidedness contract: a build must emit outward triangles. Never flip
+// normals according to a query point; malformed bake orientation is an asset bug.
 static int QueryWallsFacePlaneMesh(const Room& room, const physics::CollMesh& mesh,
                                     const Vec3& point, float radius,
                                     WallHit* out_hits, int max_hits,
                                     CollisionQueryDiagnostics* diagnostics,
-                                    bool orient_to_point) {
+                                    bool /*orient_to_point*/) {
     using namespace physics;
+    const float query_radius = radius + std::max(1e-5f, radius * 1e-6f);
     physics::AABB q = {
-        { point.x - radius, point.y - radius, point.z - radius },
-        { point.x + radius, point.y + radius, point.z + radius },
+        { point.x - query_radius, point.y - query_radius, point.z - query_radius },
+        { point.x + query_radius, point.y + query_radius, point.z + query_radius },
     };
-    int candidates[256];
+    if (out_hits == nullptr || max_hits <= 0) return 0;
     uint32_t nodes = 0;
     uint32_t* nodes_ptr = room.query_counters ? &nodes : nullptr;
-    int n = OverlapAabbMesh(mesh, q, candidates, 256, nodes_ptr);
-    if (room.query_counters) {
-        ++room.query_counters->overlap_queries;
-        room.query_counters->bvh_nodes_touched += nodes;
-    }
+    struct QueryState {
+        const Room* room;
+        const physics::CollMesh* mesh;
+        const Vec3* point;
+        float radius;
+        WallHit* out_hits;
+        int max_hits;
+        CollisionQueryDiagnostics* diagnostics;
+        int count;
+    } state{&room, &mesh, &point, radius, out_hits, max_hits, diagnostics, 0};
 
-    int count = 0;
-    for (int i = 0; i < n && count < max_hits; ++i) {
-        int fid = candidates[i];
+    const auto visit = [](int fid, void* user_data) -> bool {
+        QueryState& state = *static_cast<QueryState*>(user_data);
+        const Room& room = *state.room;
+        const physics::CollMesh& mesh = *state.mesh;
+        const Vec3& point = *state.point;
+        const float radius = state.radius;
+        WallHit* out_hits = state.out_hits;
+        const int max_hits = state.max_hits;
+        CollisionQueryDiagnostics* diagnostics = state.diagnostics;
         const CollTriangle& ct = mesh.triangles[fid];
-        if (!(ct.material & MAT_SOLID)) continue;
+        if (IsDynamicProxyTriangle(mesh, fid,
+                                   const_cast<Room*>(&room))) return true;
+        if (!(ct.material & MAT_SOLID)) return true;
 
         const Vec3& a = mesh.world_verts[ct.i0];
         const Vec3& b = mesh.world_verts[ct.i1];
         const Vec3& c = mesh.world_verts[ct.i2];
 
-        // Face plane normal (baked winding can be reversed — see
-        // .agents/common-mistakes/og-map-polygon-winding.md). The normal is
-        // ALWAYS oriented toward the query point (the flip) — the popout
-        // pushes the body along the direction from the closest point to the
-        // body (OG: pushout = (radius - dist) * diff.Normalized(),
-        // World.cs:527), so a body behind the plane is pushed to radius on
-        // the side it is on, never through the face. `orient_to_point` now
-        // selects ONLY the grip/entry front-side gate (Inc 4) — the popout
-        // (false) must handle bodies behind the plane with no side gate.
-        Vec3 pn = physics::Norm(physics::Cross(physics::Sub(b, a), physics::Sub(c, a)));
-        const Vec3 to_p = physics::Sub(point, a);
-        const float signed_dist = physics::Dot(pn, to_p);
-        if (signed_dist < 0.0f) {
-            pn = {-pn.x, -pn.y, -pn.z};
-        }
+        const Vec3 raw = Cross(Sub(b, a), Sub(c, a));
+        if (Len2(raw) <= 1e-12f) return true;
+        const Vec3 pn = Norm(raw);
+        // OG general wall queries exclude exactly horizontal faces only.
+        // ClimbNormalCheck (.35) belongs to the climb caller after ranking.
+        if (std::fabs(pn.y) >= 1.0f) return true;
+        const float plane_distance = Dot(pn, Sub(point, a));
+        if (plane_distance < 0.0f || plane_distance > radius) return true;
+        // One-way platforms support descending feet only, never wall grip.
+        if (ct.material & MAT_ONEWAY) return true;
 
-        // OG ClimbNormalCheck: only near-vertical faces are walls. |Y| < 0.35.
-        if (std::fabs(pn.y) >= 0.35f) continue;
-
-        // Geometry-bounds (hoisted: reused by the front-side gate below AND
-        // the hit-emission geometry bound).
-        const Vec3 vmin = {std::min(a.x, std::min(b.x, c.x)),
-                           std::min(a.y, std::min(b.y, c.y)),
-                           std::min(a.z, std::min(b.z, c.z))};
-        const Vec3 vmax = {std::max(a.x, std::max(b.x, c.x)),
-                           std::max(a.y, std::max(b.y, c.y)),
-                           std::max(a.z, std::max(b.z, c.z))};
-
-        // ── Inc 4 (controls-physics-port): winding-independent front-side
-        // gate for the grip/entry path (orient_to_point=true). The OLD gate
-        // (`orient_to_point && signed_dist < 0 → continue`) read the RAW
-        // winding normal to decide "in front of the wall" — but the baked
-        // collision winding is REVERSED (raw normals point INTO walls), so
-        // every real-map wall had signed_dist < 0 at the player's approach
-        // and the grab NEVER fired (device: 0 [climb] START lines). The
-        // front side is now decided WITHOUT the winding:
-        //   (a) Height band: the face's vertical extent must overlap the
-        //       player's body band. Grip callers probe at the WAIST
-        //       (ClimbWaistPoint = feet + 3); the +Y-up body spans
-        //       [point.y - 3, point.y + 7] (half_height 10 up from feet).
-        //       Faces entirely above the head or below the feet (eaves /
-        //       overhangs / window ledges beyond reach) are not grab targets
-        //       no matter which way the triangle winds.
-        //   (b) Overhead clearance: the "under an overhang from behind"
-        //       auto-latch guard — if ANY solid hangs within kHeadClear above
-        //       the waist, the player is under a roof/eave/ledge and the
-        //       face is an overhang lip, not a wall she can climb. Measured
-        //       on the real baked map: 0% of wall-adjacent sample waists have
-        //       solid within 6 units above, so this rejects nothing legit.
-        //   The intent gates (climb_held, cooldown, facing-dot >= 0.5,
-        //   into-wall input) stay — they are the winding-independent
-        //   "deliberate approach" enforcement (auto-latch without Z stays
-        //   impossible). The popout path (orient_to_point=false) is
-        //   untouched (OG pushout semantics are load-bearing for the
-        //   step-down snap and the climb anchor).
-        if (orient_to_point) {
-            constexpr float kBandBelow = 3.0f;   // waist (feet+3) → feet
-            constexpr float kBandAbove = 7.0f;   // waist → head (feet+10)
-            constexpr float kBandSkin = 2.0f;    // airborne/reach grace
-            if (vmin.y > point.y + kBandAbove + kBandSkin) continue;
-            if (vmax.y < point.y - kBandBelow - kBandSkin) continue;
-
-            constexpr float kHeadClear = 8.0f;   // covers the head (waist+7)
-            const physics::RayHit ceil_hit = physics::RaycastMeshVertical(
-                mesh, point, 1.0f, kHeadClear,
-                physics::BackfaceCull::Ignore, nullptr);
-            if (ceil_hit.hit) continue;
-        }
-
-        // Closest point on the face plane to the query point, at the query's own
-        // level. pushout = radius - plane distance (UNSIGNED — OG semantics:
-        // the body is pushed along the oriented normal by (radius - dist), so
-        // a body behind the plane is pushed to radius on the side it is on).
-        const Vec3 closest = PlaneProject(a, b, c, point);
-        const Vec3 delta = physics::Sub(point, closest);
-        const float dist = std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
-        const float pushout = radius - dist;
-        if (pushout < 0.0f) continue;
-
-        // Geometry-bound the hit to the triangle's actual vertex extents. The
-        // plane query projects onto the face's INFINITE plane, so a probe
-        // beyond the wall's vertical top or an open vertical edge (a triangle
-        // BOUNDARY, not geometry) would otherwise still "hit" and phantom-
-        // grab → instant-release pump (climb-parity-3/inc5 device gate:
-        // START+release grip_lost every frame at pos=(5.0,50.3,35.4) where the
-        // nearest face ends above/beside the waist). OG's ClimbCheckAt misses
-        // against ACTUAL geometry — a face ends at its triangle vertices.
-        // Same bounding LedgeHopMiss applies (player_controller.cpp); keeping
-        // a small tangent skin so the pushout-tangent boundary still grabs.
-        {
-            constexpr float kSkin = 0.5f;
-            if (closest.x < vmin.x - kSkin || closest.x > vmax.x + kSkin) continue;
-            if (closest.y < vmin.y - kSkin || closest.y > vmax.y + kSkin) continue;
-            if (closest.z < vmin.z - kSkin || closest.z > vmax.z + kSkin) continue;
-        }
+        Vec3 closest;
+        if (!ClosestTriangleHorizontalSlice(point, a, b, c, closest)) return true;
+        const Vec3 delta = Sub(point, closest);
+        const float distance2 = Len2(delta);
+        if (distance2 > radius * radius) return true;
+        const float dist = std::sqrt(distance2);
+        const float pushout = std::max(0.0f, radius - dist);
 
         if (diagnostics) ++diagnostics->wall_candidate_hits;
         OwnerInfo owner = ResolveOwner(mesh, room, fid);
-        out_hits[count++] = WallHit{
+        const WallHit candidate = WallHit{
             .hit = true,
             .point = closest,
-            .normal = pn,
+            .normal = dist > 1e-6f ? Scale(delta, 1.0f / dist) : pn,
             .plane_normal = pn,
             .pushout = pushout,
             .face_id = fid,
             .owner_id = owner.id,
             .owner_velocity = owner.velocity,
         };
+        // OG emits one hit per authored face, after selecting that face's
+        // closest fan triangle. New CMSH files preserve this group in
+        // source_face_id; legacy files (zero) retain geometric fan merging.
+        int same_face = -1;
+        for (int j = 0; j < state.count; ++j) {
+            const int previous_id = out_hits[j].face_id;
+            const uint16_t previous_source_face = previous_id >= 0 &&
+                previous_id < static_cast<int>(mesh.header->triangle_count)
+                ? mesh.triangles[previous_id].source_face_id : 0;
+            const bool same_authored_face = ct.source_face_id != 0 &&
+                previous_source_face == ct.source_face_id;
+            const bool same_legacy_plane = ct.source_face_id == 0 &&
+                previous_source_face == 0 &&
+                Dot(out_hits[j].plane_normal, pn) > .99999f &&
+                std::fabs(Dot(pn, Sub(out_hits[j].point, closest))) < .001f;
+            if (same_authored_face || same_legacy_plane) {
+                same_face = j;
+                break;
+            }
+        }
+        if (same_face >= 0) {
+            if (candidate.pushout > out_hits[same_face].pushout ||
+                (candidate.pushout == out_hits[same_face].pushout &&
+                 candidate.face_id < out_hits[same_face].face_id))
+                out_hits[same_face] = candidate;
+            return true;
+        }
+
+        // BVH order is spatial. Restore OG GridPartition's first shared-cell,
+        // solid insertion, then source face order before its StackList8 cap.
+        const WallQueryOrder order_key =
+            MakeRoomWallQueryOrder(room, fid, point, radius);
+        int insert_at = state.count;
+        while (insert_at > 0) {
+            const int previous_id = out_hits[insert_at - 1].face_id;
+            const WallQueryOrder previous_key =
+                MakeRoomWallQueryOrder(room, previous_id, point, radius);
+            if (!WallQueryOrderBefore(order_key, previous_key)) break;
+            if (insert_at < max_hits)
+                out_hits[insert_at] = out_hits[insert_at - 1];
+            --insert_at;
+        }
+        if (insert_at < max_hits) {
+            out_hits[insert_at] = candidate;
+            if (state.count < max_hits) ++state.count;
+        }
+        return true;
+    };
+    VisitOverlappingTriangles(mesh, q, visit, &state, nodes_ptr);
+    if (room.query_counters) {
+        ++room.query_counters->overlap_queries;
+        room.query_counters->bvh_nodes_touched += nodes;
+    }
+    return state.count;
+}
+
+static int QueryDynamicWallsFacePlane(const Room& room, const Vec3& point,
+                                      float radius, WallHit* out_hits,
+                                      int max_hits, int initial_count,
+                                      CollisionQueryDiagnostics* diagnostics) {
+    const DynamicSolidGeometry* geometry = room.dynamic_solids;
+    if (!geometry || !room.coll_mesh || !out_hits || max_hits <= 0)
+        return initial_count;
+    int count = initial_count;
+    const DynamicSolidSpec* actors = geometry->Actors();
+    const DynamicSolidView* views = geometry->Views();
+    const DynamicSolidFace* faces = geometry->Faces();
+    const DynamicSolidVertex* vertices = geometry->Vertices();
+    const float query_radius = radius + std::max(1e-5f, radius * 1e-6f);
+    for (uint16_t actor_index = 0; actor_index < geometry->ActorCount(); ++actor_index) {
+        const DynamicSolidSpec& actor = actors[actor_index];
+        const DynamicSolidView& view = views[actor_index];
+        if (!view.collidable) continue;
+        if (point.x + query_radius < view.bounds.min.x ||
+            point.x - query_radius > view.bounds.max.x ||
+            point.y + query_radius < view.bounds.min.y ||
+            point.y - query_radius > view.bounds.max.y ||
+            point.z + query_radius < view.bounds.min.z ||
+            point.z - query_radius > view.bounds.max.z) continue;
+        const Vec3 local_point = WorldToActorLocalPoint(point, view);
+        for (uint32_t fi = actor.dsol_first_face;
+             fi < actor.dsol_first_face + actor.dsol_face_count; ++fi) {
+            const DynamicSolidFace& face = faces[fi];
+            if (!(face.collision_material & physics::MAT_SOLID) ||
+                (face.collision_material & physics::MAT_ONEWAY) ||
+                face.cms_source_face_id == 0) continue;
+            const int stable_face_id = face.collision_face_id == 0xFFFFu
+                ? -1 : static_cast<int>(face.collision_face_id);
+            if (stable_face_id < 0) continue;
+
+            WallHit candidate{};
+            bool face_hit = false;
+            for (uint32_t fan = 1; fan + 1 < face.vertex_count; ++fan) {
+                const Vec3& a = vertices[face.first_vertex].position;
+                const Vec3& b = vertices[face.first_vertex + fan].position;
+                const Vec3& c = vertices[face.first_vertex + fan + 1].position;
+                const Vec3 raw = physics::Cross(physics::Sub(b, a),
+                                                physics::Sub(c, a));
+                if (physics::Len2(raw) <= 1e-12f) continue;
+                const Vec3 local_normal = physics::Norm(raw);
+                if (std::fabs(local_normal.y) >= 1.0f) continue;
+                const float plane_distance = physics::Dot(
+                    local_normal, physics::Sub(local_point, a));
+                if (plane_distance < 0.0f || plane_distance > radius)
+                    continue;
+                Vec3 closest;
+                if (!physics::ClosestTriangleHorizontalSlice(
+                        local_point, a, b, c, closest)) continue;
+                const Vec3 delta = physics::Sub(local_point, closest);
+                const float distance2 = physics::Len2(delta);
+                if (distance2 > radius * radius) continue;
+                const float distance = std::sqrt(distance2);
+                const float pushout = std::max(0.0f, radius - distance);
+                if (face_hit && pushout <= candidate.pushout) continue;
+                const Vec3 plane_normal = ActorLocalToWorldVector(local_normal, view);
+                const Vec3 contact_normal = distance > 1e-6f
+                    ? ActorLocalToWorldVector(physics::Scale(delta, 1.0f / distance), view)
+                    : plane_normal;
+                candidate = WallHit{
+                    .hit = true,
+                    .point = ActorLocalToWorldPoint(closest, view),
+                    .normal = contact_normal,
+                    .plane_normal = plane_normal,
+                    .pushout = pushout,
+                    .face_id = stable_face_id,
+                    .owner_id = 0x40000000 | actor_index,
+                    .owner_velocity = view.velocity,
+                };
+                face_hit = true;
+            }
+            if (!face_hit) continue;
+            if (diagnostics) ++diagnostics->wall_candidate_hits;
+
+            WallQueryOrder key;
+            const AABB& bounds = view.bounds;
+            if (!TryOgWallBoundsOrder(bounds.min.x, -bounds.max.z,
+                                      bounds.max.x, -bounds.min.z,
+                                      view.reinsert_ordinal,
+                                      face.cms_source_face_id,
+                                      point, radius, key)) continue;
+            key.face_id = candidate.face_id;
+            int insert_at = count;
+            while (insert_at > 0) {
+                const WallHit& previous = out_hits[insert_at - 1];
+                const WallQueryOrder previous_key =
+                    MakeRoomWallQueryOrder(room, previous.face_id, point, radius);
+                if (!WallQueryOrderBefore(key, previous_key)) break;
+                if (insert_at < max_hits)
+                    out_hits[insert_at] = out_hits[insert_at - 1];
+                --insert_at;
+            }
+            if (insert_at < max_hits) {
+                out_hits[insert_at] = candidate;
+                if (count < max_hits) ++count;
+            }
+        }
     }
     return count;
 }
@@ -463,6 +1036,92 @@ GroundHit RaycastRoomSource(const Room& room, const Vec3& origin, const Vec3& di
         }
     }
 
+    return best;
+}
+
+physics::SweepSphereHit SweepSphereRoom(const Room& room, const Vec3& origin,
+                                        const Vec3& direction, float radius,
+                                        float max_distance) {
+    using namespace physics;
+    SweepSphereHit best;
+    if (!room.coll_mesh || max_distance < 0.0f || radius < 0.0f) return best;
+    uint32_t nodes = 0;
+    best = SweepSphereMesh(*room.coll_mesh, origin, direction, radius,
+                           max_distance,
+                           room.query_counters ? &nodes : nullptr,
+                           IncludeStaticTriangle, const_cast<Room*>(&room));
+    if (room.query_counters) {
+        ++room.query_counters->sphere_sweeps;
+        room.query_counters->bvh_nodes_touched += nodes;
+    }
+
+    const DynamicSolidGeometry* geometry = room.dynamic_solids;
+    if (!geometry) return best;
+    const DynamicSolidSpec* actors = geometry->Actors();
+    const DynamicSolidView* views = geometry->Views();
+    const DynamicSolidFace* faces = geometry->Faces();
+    const DynamicSolidVertex* vertices = geometry->Vertices();
+    const Vec3 end = AddScaled(origin, direction, max_distance);
+    const madeline_cube::AABB swept_bounds{
+        {std::fmin(origin.x, end.x) - radius,
+         std::fmin(origin.y, end.y) - radius,
+         std::fmin(origin.z, end.z) - radius},
+        {std::fmax(origin.x, end.x) + radius,
+         std::fmax(origin.y, end.y) + radius,
+         std::fmax(origin.z, end.z) + radius}};
+    for (uint16_t actor_index = 0; actor_index < geometry->ActorCount(); ++actor_index) {
+        const DynamicSolidView& view = views[actor_index];
+        if (!view.collidable) continue;
+        if (!view.bounds.Intersects(swept_bounds)) continue;
+        const Vec3 local_origin = WorldToActorLocalPoint(origin, view);
+        const Vec3 local_direction = WorldToActorLocalVector(direction, view);
+        const DynamicSolidSpec& actor = actors[actor_index];
+        for (uint32_t fi = actor.dsol_first_face;
+             fi < actor.dsol_first_face + actor.dsol_face_count; ++fi) {
+            const DynamicSolidFace& face = faces[fi];
+            if (!(face.collision_material & MAT_SOLID) ||
+                face.cms_source_face_id == 0) continue;
+            const int stable_face_id = face.collision_face_id == 0xFFFFu
+                ? -1 : static_cast<int>(face.collision_face_id);
+            if (stable_face_id < 0) continue;
+            for (uint32_t fan = 1; fan + 1 < face.vertex_count; ++fan) {
+                const Vec3& a = vertices[face.first_vertex].position;
+                const Vec3& b = vertices[face.first_vertex + fan].position;
+                const Vec3& c = vertices[face.first_vertex + fan + 1].position;
+                float hit_distance = -1.0f;
+                SphereTriHit sphere_hit = SphereTriangle(local_origin, radius,
+                                                         a, b, c);
+                if (sphere_hit.hit) {
+                    hit_distance = 0.0f;
+                } else if (max_distance > 0.0f) {
+                    for (int sample = 1; sample <= 8; ++sample) {
+                        const float distance =
+                            (static_cast<float>(sample) / 8.0f) * max_distance;
+                        const Vec3 center = AddScaled(local_origin, local_direction,
+                                                      distance);
+                        sphere_hit = SphereTriangle(center, radius, a, b, c);
+                        if (sphere_hit.hit) {
+                            hit_distance = distance;
+                            break;
+                        }
+                    }
+                }
+                if (hit_distance < 0.0f) continue;
+                const float t = max_distance > 0.0f
+                    ? hit_distance / max_distance : 0.0f;
+                if (best.hit && (t > best.t ||
+                    (t == best.t && stable_face_id >= best.face_id))) continue;
+                best = SweepSphereHit{
+                    .hit = true,
+                    .t = t,
+                    .point = ActorLocalToWorldPoint(sphere_hit.closest, view),
+                    .normal = ActorLocalToWorldVector(sphere_hit.normal, view),
+                    .face_id = stable_face_id,
+                    .material = face.collision_material,
+                };
+            }
+        }
+    }
     return best;
 }
 
@@ -709,24 +1368,48 @@ int QueryWallsFacePlane(const Room& room, const Vec3& point, float radius,
         count = QueryWallsFacePlaneMesh(room, *room.coll_mesh, point, radius,
                                         out_hits, max_hits, diagnostics,
                                         orient_to_point);
-        if (count >= max_hits) return count;
     }
 
-    // Dynamic colliders (moving platforms): fall back to the sphere path so
-    // riders on moving boxes still resolve wall contact.
-    if (room.collider_count > 0) {
-        WallHit sphere_hits[kMaxWallHits];
-        const int sphere_count = QueryWalls(room, point, radius, sphere_hits, kMaxWallHits);
-        for (int i = 0; i < sphere_count && count < max_hits; ++i) {
-            bool duplicate = false;
-            for (int j = 0; j < count; ++j) {
-                if (out_hits[j].face_id == sphere_hits[i].face_id) {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (duplicate) continue;
-            out_hits[count++] = sphere_hits[i];
+    // Dynamic DSOL faces share the same finite horizontal slice and are
+    // merged into the bounded result using live OG grid-cell/insertion order.
+    count = QueryDynamicWallsFacePlane(room, point, radius, out_hits,
+                                       max_hits, count, diagnostics);
+    if (count >= max_hits) return count;
+
+    // Dynamic AABBs use the same horizontal slice contract. Do not mix the
+    // static sphere contact family into this plane/ranking query.
+    for (int i = 0; i < room.collider_count && count < max_hits; ++i) {
+        const Collider& c = room.colliders[i];
+        if (!c.solid || c.type != ColliderType::Box ||
+            (room.coll_mesh && IsStaticCollider(c)) ||
+            point.y < c.bounds.min.y || point.y > c.bounds.max.y) continue;
+        const Vec3 normals[4] = {{-1,0,0},{1,0,0},{0,0,-1},{0,0,1}};
+        const Vec3 plane_points[4] = {
+            {c.bounds.min.x,point.y,c.bounds.min.z},
+            {c.bounds.max.x,point.y,c.bounds.min.z},
+            {c.bounds.min.x,point.y,c.bounds.min.z},
+            {c.bounds.min.x,point.y,c.bounds.max.z},
+        };
+        for (int f = 0; f < 4 && count < max_hits; ++f) {
+            const Vec3 pn = normals[f];
+            const float distance = physics::Dot(pn,physics::Sub(point,plane_points[f]));
+            if (distance < 0 || distance > radius) continue;
+            Vec3 closest = {std::clamp(point.x,c.bounds.min.x,c.bounds.max.x),
+                            point.y,std::clamp(point.z,c.bounds.min.z,c.bounds.max.z)};
+            if (f < 2) closest.x = f == 0 ? c.bounds.min.x : c.bounds.max.x;
+            else closest.z = f == 2 ? c.bounds.min.z : c.bounds.max.z;
+            const Vec3 delta = physics::Sub(point,closest);
+            const float d2 = physics::Dot(delta,delta);
+            if (d2 > radius*radius) continue;
+            const float d = std::sqrt(d2);
+            const MovingSurface* surface = FindMovingSurface(room,c.owner_id);
+            out_hits[count++] = WallHit{
+                .hit=true,.point=closest,
+                .normal=d>1e-6f ? physics::Scale(delta,1/d) : pn,
+                .plane_normal=pn,.pushout=radius-d,
+                .face_id=c.face_id>=0 ? c.face_id : i,.owner_id=c.owner_id,
+                .owner_velocity=surface ? surface->rider_velocity : c.velocity,
+            };
             if (diagnostics) ++diagnostics->wall_candidate_hits;
         }
     }
@@ -752,13 +1435,12 @@ WallHit QueryWallClosestToFace(const Room& room, const Vec3& point, float radius
 
 // OG SolidWallCheckNearest parity (World.cs:556-571): the plane-projected wall
 // with the LARGEST pushout (most overlap). Reuses the unified plane query
-// (QueryWallsFacePlane) so the OG near-vertical gate + geometry bounding stay
+// (QueryWallsFacePlane) so authored sidedness + finite geometry bounding stay
 // single-sourced (M3: no near-duplicate wall family).
 WallHit QueryWallPushout(const Room& room, const Vec3& point, float radius) {
     WallHit hits[kMaxWallHits];
-    // orient_to_point=false: TRUE normal + SIGNED pushout. The popout must
-    // push a body OUT of the wall along the wall's own normal — a body behind
-    // the plane (embedded) is pushed through to the front, not deeper in.
+    // General authored front-side wall hits; positional response uses the
+    // finite horizontal slice direction and impact response the plane normal.
     const int count = QueryWallsFacePlane(room, point, radius, hits, kMaxWallHits,
                                           nullptr, false);
     if (count == 0) return WallHit{};
@@ -783,8 +1465,8 @@ static bool ClimbNormalCheck(const Vec3& n) {
 
 WallHit QueryClimbWall(const Room& room, const Vec3& point, float radius, const Vec3& prefer_dir) {
     WallHit hits[kMaxWallHits];
-    // orient_to_point=true: normal oriented toward the query point (the grip
-    // wants the front-facing normal for the facing gate) + unsigned pushout.
+    // Authored front-side candidates rank first; the selected face is then
+    // gated by ClimbNormalCheck, exactly as the OG caller does.
     const int count = QueryWallsFacePlane(room, point, radius, hits, kMaxWallHits,
                                           nullptr, true);
     if (count == 0) return WallHit{};
@@ -799,12 +1481,15 @@ WallHit QueryClimbWall(const Room& room, const Vec3& point, float radius, const 
         const float dot = (hits[i].plane_normal.x * prefer_dir.x) +
                           (hits[i].plane_normal.y * prefer_dir.y) +
                           (hits[i].plane_normal.z * prefer_dir.z);
+        // OG ranks polygon faces after choosing their nearest fan triangle.
+        // CMSH emits triangles separately: equivalent coplanar normals must
+        // choose the closest finite slice before the normal-ranking tie.
         if (dot > best_dot) {
             best = hits[i];
             best_dot = dot;
         }
     }
-    // QueryWallsFacePlaneMesh already gates |pn.y| < 0.35 for every returned
+    // Apply the climb gate only after the general query has selected its
     // hit; re-check so the wrapper's contract holds even if the inner query
     // ever loosens (OG ClimbNormalCheck parity on the returned NORMAL).
     if (!ClimbNormalCheck(best.plane_normal)) return WallHit{};
@@ -817,59 +1502,16 @@ bool QueryClimbWallPresent(const Room& room, const Vec3& point, float radius, co
 
 bool QueryWallRay(const Room& room, const Vec3& origin, const Vec3& direction,
                   float max_distance, WallHit* out_hit) {
-    if (!room.coll_mesh) {
-        // Dynamic-collider rooms (no static mesh) are not supported for climb
-        // corner rays — OG corners run on static Solids/meshes.
-        return false;
-    }
-    using namespace physics;
-    // BackfaceCull::Ignore: inverted-winding baked faces must be found
-    // (see .agents/common-mistakes/og-map-polygon-winding.md); the orientation
-    // check below supplies the cull discrimination instead.
-    uint32_t nodes = 0;
-    const RayHit h = RaycastMesh(*room.coll_mesh, origin, direction, max_distance,
-                                 BackfaceCull::Ignore, room.query_counters ? &nodes : nullptr);
-    if (room.query_counters) {
-        ++room.query_counters->raycasts;
-        room.query_counters->bvh_nodes_touched += nodes;
-    }
-    if (!h.hit) return false;
-
-    // Face-plane normal oriented toward the ray origin (baked winding can be
-    // reversed — same fix as QueryWallsMesh/QueryWallsFacePlaneMesh).
-    Vec3 pn;
-    {
-        const CollTriangle& ct = room.coll_mesh->triangles[h.face_id];
-        const Vec3& a = room.coll_mesh->world_verts[ct.i0];
-        Vec3 vn = Norm(Cross(Sub(room.coll_mesh->world_verts[ct.i1], a),
-                             Sub(room.coll_mesh->world_verts[ct.i2], a)));
-        const Vec3 to_origin = Sub(origin, a);
-        if (Dot(vn, to_origin) < 0.0f) {
-            vn = {-vn.x, -vn.y, -vn.z};
-        }
-        pn = vn;
-    }
-
-    // OG ClimbNormalCheck on the ray hit: slopes are not walls.
-    if (!ClimbNormalCheck(pn)) return false;
-
-    // Orientation: the hit must face the ray origin side (skip backfaces the
-    // Ignore policy let through, i.e. leave outward geometry).
-    if ((pn.x * direction.x) + (pn.y * direction.y) + (pn.z * direction.z) >= 0.0f) return false;
-
-    if (out_hit) {
-        const OwnerInfo owner = ResolveOwner(*room.coll_mesh, room, h.face_id);
-        *out_hit = WallHit{
-            .hit = true,
-            .point = h.point,
-            .normal = pn,
-            .plane_normal = pn,
-            .pushout = 0.0f,  // rays do not carry penetration depth
-            .face_id = h.face_id,
-            .owner_id = owner.id,
-            .owner_velocity = owner.velocity,
-        };
-    }
+    if (out_hit) *out_hit = {};
+    const GroundHit hit = RaycastRoomSource(room,origin,direction,max_distance,
+                                             BackfacePolicy::Ignore);
+    if (!hit.hit) return false;
+    // General solid ray: callers decide whether the authored normal is climbable.
+    if (out_hit) *out_hit = WallHit{
+        .hit=true,.point=hit.point,.normal=hit.normal,.plane_normal=hit.normal,
+        .pushout=0,.face_id=hit.face_id,.owner_id=hit.owner_id,
+        .owner_velocity=hit.owner_velocity,
+    };
     return true;
 }
 
@@ -947,6 +1589,15 @@ void WorldCollision::Reset() {
         physics::FreeCollMesh(mesh_);
         mesh_ = nullptr;
     }
+}
+
+void WorldCollision::Swap(WorldCollision& other) {
+    physics::CollMesh* mesh = mesh_;
+    mesh_ = other.mesh_;
+    other.mesh_ = mesh;
+    const CollisionQueryCounters counters = counters_;
+    counters_ = other.counters_;
+    other.counters_ = counters;
 }
 
 static Room MakeCounterRoom(const physics::CollMesh* mesh, CollisionQueryCounters* counters) {

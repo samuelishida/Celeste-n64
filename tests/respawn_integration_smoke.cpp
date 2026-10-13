@@ -44,7 +44,7 @@ int main() {
         player.movement_state = PlayerMovementState::Dashing;
         player.dash_time_remaining = 0.5f;
         player.dash_reset_cooldown_remaining = 0.5f;
-        player.air_dash_available = false;
+        player.dashes = 0;
         player.platform_carry.stored_velocity = {10.0f, 0.0f, 0.0f};
         player.platform_carry.time_remaining = 0.25f;
 
@@ -62,7 +62,7 @@ int main() {
         assert(ApproxEq(player.velocity.z, 0.0f));
         assert(player.grounded);  // mover resolved this, not the respawn
         assert(player.movement_state == PlayerMovementState::Normal);
-        assert(player.air_dash_available);
+        assert(player.dashes == 1);
         assert(ApproxEq(player.dash_time_remaining, 0.0f));
         assert(ApproxEq(player.dash_reset_cooldown_remaining, 0.0f));
         assert(ApproxEq(player.platform_carry.time_remaining, 0.0f));
@@ -102,7 +102,7 @@ int main() {
         assert(did);
         assert(ApproxEq(player.position.y, 2.0f));
         assert(!player.grounded);
-        assert(player.air_dash_available);
+        assert(player.dashes == 1);
     }
 
     return 0;

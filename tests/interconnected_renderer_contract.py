@@ -57,8 +57,8 @@ def test_render_origins_keep_coords_in_range():
     d = tempfile.mkdtemp(prefix="inc8-render-")
     try:
         report = bake(d)
-        from mappack_format import read_mappack_v2_binary
-        pack = read_mappack_v2_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
+        from mappack_format import read_mappack_binary
+        pack = read_mappack_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
         assert len(pack.rooms) > 0
         for r in pack.rooms:
             # The renderer subtracts the render origin, so local coords are
@@ -99,8 +99,8 @@ def test_absolute_coords_would_overflow():
         # The global collision mesh's quantized AABB is in int16 range (it is
         # quantized), but the raw world coords of the map exceed ±1024.
         # We verify the map's world extent exceeds the renderer's safe range.
-        from mappack_format import read_mappack_v2_binary
-        pack = read_mappack_v2_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
+        from mappack_format import read_mappack_binary
+        pack = read_mappack_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
         # Compute the world extent from all room AABBs.
         min_x = min(r.world_aabb_min[0] for r in pack.rooms)
         max_x = max(r.world_aabb_max[0] for r in pack.rooms)

@@ -84,6 +84,7 @@ struct V2SpawnSpec {
     Vec3 position = {0.0f, 0.0f, 0.0f};
     char name[kNameLen] = {};
     char classname[kClassLen] = {};
+    uint8_t actor_flags = 0;  // MPP3 bit 0 = double refill
 };
 
 struct V2RoomSpec {
@@ -105,11 +106,44 @@ struct V2RoomSpec {
     int cell_iz = 0;
 };
 
+enum HazardKind : uint8_t {
+    kHazardDeathBlock = 1,
+    kHazardSpikeBlock = 2,
+};
+
+struct HazardVolumeSpec {
+    uint8_t kind = 0;
+    uint32_t source_id = 0;
+    AABB bounds;
+    // SpikeBlock direction before OG's SolidRayCast flip test.
+    Vec3 spike_direction = {0.0f, 0.0f, 0.0f};
+};
+
+struct DynamicSolidSpec {
+    uint32_t source_id = 0;
+    uint16_t solid_id = 0;
+    uint8_t kind = 0;
+    uint8_t flags = 0;
+    Vec3 position = {0.0f, 0.0f, 0.0f};
+    float yaw_radians = 0.0f;
+    uint16_t cms_first_source_face_id = 0;
+    uint16_t cms_face_count = 0;
+    uint32_t dsol_first_face = 0;
+    uint32_t dsol_face_count = 0;
+    uint32_t dsol_first_vertex = 0;
+    uint32_t dsol_vertex_count = 0;
+    uint32_t target_source_id = 0xFFFFFFFFu;
+    Vec3 target_position = {0.0f, 0.0f, 0.0f};
+};
+
 struct MapSpecV2 {
     static constexpr int kMaxRooms = 64;
     static constexpr int kShaLen = 64;
     static constexpr int kIdLen = 16;
     static constexpr int kPathLen = 64;
+    static constexpr int kMaxHazards = 512;
+    static constexpr int kMaxDynamicSolids = 256;
+    static constexpr int kDsolPathLen = 64;
 
     V2RoomSpec rooms[kMaxRooms];
     int room_count = 0;
@@ -127,10 +161,22 @@ struct MapSpecV2 {
     uint32_t global_bvh_node_count = 0;
 
     char start_room_id[kIdLen] = {};
+    HazardVolumeSpec hazards[kMaxHazards];
+    int hazard_count = 0;
+    // Runtime-only diagnostic: number of OG SpikeBlock.Added direction flips.
+    int spike_direction_flip_count = 0;
+    char dsol_path[kDsolPathLen] = {};
+    uint32_t dsol_crc32 = 0;
+    uint32_t dsol_size = 0;
+    DynamicSolidSpec dynamic_solids[kMaxDynamicSolids];
+    int dynamic_solid_count = 0;
 
     const V2RoomSpec* FindRoom(const char* id) const;
     // Find the Start spawn record (kind == kSpawnStart). Returns null if none.
     const V2SpawnSpec* FindStartSpawn() const;
+    // Normalize supported actor spawns across all rooms. Returns -1 rather
+    // than truncating when the caller's bounded output is too small.
+    int AllActorSpawns(ActorSpawn* out, int max_out) const;
 
     // streaming-experience Inc 2: the largest per-room .lvl file size in the
     // pack. The async staging pool is sized from this (never assumed), so a
@@ -143,7 +189,8 @@ struct MapSpecV2 {
     }
 };
 
-// Load a baked map-pack v2 binary manifest. Returns false on failure.
+// Load a baked MPP2/MPP3/MPP4/MPP5 binary manifest. MPP2 spawn flags normalize to 0.
+// Returns false on malformed or unsupported input.
 bool LoadMapPackV2(const char* path, MapSpecV2& out);
 
 }  // namespace madeline_cube

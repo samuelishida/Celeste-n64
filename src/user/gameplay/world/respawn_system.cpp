@@ -5,11 +5,17 @@ namespace madeline_cube {
 RespawnSystem::RespawnSystem(MovementConfig config) : config_(config) {}
 
 void RespawnSystem::ResetState(PlayerState& player, const Vec3& checkpoint) const {
+    player.animation = {};
+    player.model_scale = {1.0f, 1.0f, 1.0f};
+    player.world_hitstop_remaining = 0.0f;
+    player.world_hitstop_request = 0.0f;
+    player.dash_active_remaining = 0.0f;
     player.position = checkpoint;
     player.prev_position = checkpoint;
     player.velocity = {};
     player.grounded = false;
-    player.air_dash_available = true;
+    player.dashes = 1;
+    player.dash_refill_flash_remaining = 0.0f;
     player.dash_time_remaining = 0.0f;
     player.dash_cooldown_remaining = 0.0f;
     player.dash_reset_cooldown_remaining = 0.0f;

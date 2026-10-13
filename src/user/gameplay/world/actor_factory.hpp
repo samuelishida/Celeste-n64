@@ -5,5 +5,5 @@
 #include "gameplay/world/actor_world.hpp"
 #include "gameplay/world/world.hpp"
 namespace madeline_cube {
-ActorId SpawnActor(ActorWorld& world, const ActorSpawn& spawn, StrawberryActor& strawberry, RefillActor& refill, SpringActor& spring);
+ActorId SpawnActor(ActorWorld& world, const ActorSpawn& spawn);
 }

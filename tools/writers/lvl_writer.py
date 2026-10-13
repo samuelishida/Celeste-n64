@@ -22,6 +22,7 @@ from ogmap_lib import (
     extract_atmosphere, build_material_manifest,
     Brush, FaceDef, Vec3,
 )
+from ogmap_lib.brush_geom import outward_face_normal
 from lvl_format import LvlFile, Face as LvlFace, Vertex as LvlVertex, Entity as LvlEntity
 from entity_ids import id_of
 
@@ -69,7 +70,7 @@ def build_lvl_faces(parsed_map: ParsedMap, manifest: List[str], scale: float, lv
                 polygon = compute_face_polygon(faces, face_idx)
                 if len(polygon) < 3:
                     continue
-                polygon = sort_vertices_ccw(polygon, face["normal"])
+                polygon = sort_vertices_ccw(polygon, outward_face_normal(face))
                 polygon = dedupe_polygon_vertices(polygon)
                 if len(polygon) < 3:
                     continue
@@ -98,7 +99,7 @@ def build_lvl_faces(parsed_map: ParsedMap, manifest: List[str], scale: float, lv
                     vertex_start=vert_start,
                     vertex_count=len(game_verts),
                     material_id=mat_id,
-                    normal=transform_normal(face["normal"]),
+                    normal=transform_normal(outward_face_normal(face)),
                     flags=flags,
                 ))
                 vert_start += len(game_verts)

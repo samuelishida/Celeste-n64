@@ -1,20 +1,18 @@
 #pragma once
 
-#include "gameplay/actor/refill_actor.hpp"
-#include "gameplay/actor/spring_actor.hpp"
-#include "gameplay/actor/strawberry_actor.hpp"
 #include "gameplay/world/actor_world.hpp"
 #include "gameplay/world/world.hpp"
 
 namespace madeline_cube {
 
-// Spawns actors for every non-PlayerSpawn entity in room.spawns[].
+// Spawns normalized actor records into unique ActorWorld-owned instances.
+int DispatchActorSpawns(const ActorSpawn* spawns, int spawn_count,
+                        ActorWorld& world);
+
+// Translates legacy LVL entities, then spawns every supported record.
 // placeholder_id in spawns holds the raw classname_id from the baked level;
-// this function translates classname_id → actor and calls ActorWorld::Add.
-// Unknown classname_ids are logged once and skipped.
-void DispatchLevelEntities(const Room& room, ActorWorld& world,
-                           StrawberryActor& strawberry,
-                           RefillActor& refill,
-                           SpringActor& spring);
+// this function translates classname_id → actor. Unknown ids are logged and
+// skipped; a zero return from SpawnActor is reported as capacity/flag failure.
+int DispatchLevelEntities(const Room& room, ActorWorld& world);
 
 }  // namespace madeline_cube

@@ -113,6 +113,15 @@ def compute_face_polygon(
     return polygon
 
 
+def outward_face_normal(face: Dict) -> Vec3:
+    """Source plane normals face the kept brush interior; surfaces face out.
+
+    Keep inward planes for Sutherland-Hodgman clipping and negate only at the
+    emission boundary. This is independent of camera/player/query position.
+    """
+    return tuple(-component for component in face["normal"])
+
+
 def sort_vertices_ccw(
     vertices: List[Vec3],
     normal: Vec3

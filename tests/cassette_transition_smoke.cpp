@@ -26,12 +26,26 @@ int main(int argc, char** argv) {
 
     assert(actor.target_level_path != nullptr);
     assert(std::strncmp(actor.target_level_path, "rom:/lvl/first-room.lvl", 32) == 0);
+    assert(actor.pickup_radius == CassetteActor::kPickupRadius);
     printf("PASS: cassette actor wired with target level\n");
 
     // 3. Simulate pickup.
-    bool picked_up = actor.Step(0.016f, room.cassette);
+    actor.Update(0.016f);
+    assert(actor.SpinYawRadians() > 0.0f);
+    bool picked_up = actor.TryPickup(room.cassette);
     assert(picked_up == true);
     assert(actor.collected == true);
+    assert(actor.active);  // actor still occupies its source-ordered update slot
+    const float collected_yaw = actor.SpinYawRadians();
+    actor.Update(0.016f);
+    assert(actor.SpinYawRadians() > collected_yaw);
+
+    CassetteActor radius_actor;
+    radius_actor.InitAt({0.0f, 0.0f, 0.0f});
+    assert(radius_actor.TryPickup({0.0f, 1.9f, 0.0f}));
+    CassetteActor outside_radius_actor;
+    outside_radius_actor.InitAt({0.0f, 0.0f, 0.0f});
+    assert(!outside_radius_actor.TryPickup({0.0f, 2.1f, 0.0f}));
     printf("PASS: cassette pickup detected\n");
 
     // 4. Verify the target is preserved after pickup (for scene to read).

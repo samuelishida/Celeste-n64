@@ -14,7 +14,7 @@ namespace madeline_cube::physics {
 
 struct CollHeader {
     char     magic[4];              // "CMSH"
-    uint16_t version;               // 1
+    uint16_t version;               // 1 or 2
     uint16_t flags;                 // bit0 = has_bvh
     int16_t  aabb_min[3];           // quantized mesh AABB
     int16_t  aabb_max[3];
@@ -28,6 +28,7 @@ struct CollHeader {
     uint32_t triangle_offset;
     uint32_t bvh_offset;
     uint32_t surface_link_offset;
+    uint32_t solid_grid_count;      // v2: records immediately follow surface links
 };
 
 struct CollVertex   { int16_t pos[3]; };       // 6 B
@@ -36,7 +37,7 @@ struct CollTriangle {                           // 12 B
     uint16_t i0, i1, i2;
     uint16_t material;    // bit0=solid bit1=oneway bit2=death bit3=climbable bit4=ice
     uint16_t face_id;     // == array index
-    uint16_t pad;         // always 0
+    uint16_t source_face_id; // 1-based authored polygon group; 0 = legacy/no provenance
 };
 
 struct CollBvhNode {                            // 16 B
@@ -47,6 +48,18 @@ struct CollBvhNode {                            // 16 B
 };
 
 struct CollSurfaceLink { uint16_t face_id; uint16_t owner_id; };  // 4 B
+
+struct CollSolidGridRecord {              // 24 B, CMSH v2 only
+    uint16_t solid_id;                     // OG static SolidGrid insertion ordinal
+    uint16_t first_source_face_id;         // inclusive, source-face ids are ordered by OG face order
+    uint16_t last_source_face_id;          // inclusive
+    uint16_t reserved;
+    float min_x, min_y, max_x, max_y;      // OG query plane coordinates (port X, -port Z)
+};
+
+static_assert(sizeof(CollHeader) == 72, "CMSH header layout changed");
+static_assert(sizeof(CollTriangle) == 12, "CMSH triangle layout changed");
+static_assert(sizeof(CollSolidGridRecord) == 24, "CMSH v2 record layout changed");
 
 static constexpr uint16_t INVALID_OWNER = 0xFFFF;
 
@@ -67,6 +80,7 @@ struct CollMesh {
     const CollTriangle*    triangles;
     const CollBvhNode*     bvh_nodes;
     const CollSurfaceLink* surface_links;
+    const CollSolidGridRecord* solid_grid = nullptr;
     // Pre-dequantized float vertices — allocated at load, freed by FreeCollMesh.
     // world_verts[i] == DequantVert(mesh, vertices[i]) for all i.
     Vec3* world_verts = nullptr;
@@ -78,9 +92,13 @@ struct CollMesh {
     size_t UsedBytes() const {
         size_t bytes = 0;
         if (_buffer != nullptr && header != nullptr) {
-            bytes += header->surface_link_offset +
-                     static_cast<size_t>(header->surface_link_count) *
-                         sizeof(CollSurfaceLink);
+            const size_t after_links = header->surface_link_offset +
+                static_cast<size_t>(header->surface_link_count) * sizeof(CollSurfaceLink);
+            bytes += header->version >= 2
+                ? ((after_links + 7u) & ~static_cast<size_t>(7u))
+                : after_links;
+            bytes += static_cast<size_t>(header->solid_grid_count) *
+                     sizeof(CollSolidGridRecord);
         }
         if (world_verts != nullptr && header != nullptr) {
             bytes += static_cast<size_t>(header->vertex_count) * sizeof(Vec3);
@@ -122,14 +140,22 @@ struct SweepSphereHit {
     uint16_t material = 0;
 };
 
+using TriangleFilter = bool (*)(const CollMesh& mesh, int triangle_index,
+                                void* user_data);
+
 // Raycast from 'origin' in direction 'dir' (NOT normalized; t is in [0, max_t]).
-// Returns nearest hit with t <= max_t.
+// Returns nearest hit with t <= max_t; exact ties choose lowest stable face_id.
 // 'out_nodes_touched' is optional; when non-null it receives the number of BVH
 // nodes visited during traversal.
 RayHit RaycastMesh(const CollMesh& mesh,
                    Vec3 origin, Vec3 dir, float max_t,
                    BackfaceCull cull = BackfaceCull::Ignore,
                    uint32_t* out_nodes_touched = nullptr);
+RayHit RaycastMeshFiltered(const CollMesh& mesh,
+                           Vec3 origin, Vec3 dir, float max_t,
+                           BackfaceCull cull, TriangleFilter filter,
+                           void* user_data,
+                           uint32_t* out_nodes_touched = nullptr);
 
 // Axis-aligned vertical raycast fast path for floor/ceiling queries.
 // Direction must be exactly +Y or -Y.  Avoids the generic slab setup and
@@ -140,13 +166,15 @@ RayHit RaycastMeshVertical(const CollMesh& mesh,
                            uint32_t* out_nodes_touched = nullptr);
 
 // Sweep sphere of 'radius' from 'origin' along 'dir' (dir is normalised, distance <= max_dist).
-// Returns nearest hit.
+// Returns nearest hit; exact ties choose lowest stable face_id.
 // 'out_nodes_touched' is optional; when non-null it receives the number of BVH
 // nodes visited during traversal.
 SweepSphereHit SweepSphereMesh(const CollMesh& mesh,
                                 const Vec3& origin, const Vec3& dir,
                                 float radius, float max_dist,
-                                uint32_t* out_nodes_touched = nullptr);
+                                uint32_t* out_nodes_touched = nullptr,
+                                TriangleFilter filter = nullptr,
+                                void* user_data = nullptr);
 
 // Returns face_ids of all triangles whose AABB overlaps 'query'.
 // Writes at most 'max_out' face_ids to 'out_face_ids'. Returns count written.
@@ -156,9 +184,40 @@ int OverlapAabbMesh(const CollMesh& mesh, const AABB& query,
                     int* out_face_ids, int max_out,
                     uint32_t* out_nodes_touched = nullptr);
 
+// Visit every triangle in every BVH leaf overlapping query without a fixed
+// candidate buffer. Return visited count; visitor may return false to stop.
+int VisitOverlappingTriangles(const CollMesh& mesh, const AABB& query,
+                              bool (*visitor)(int face_id, void* user_data),
+                              void* user_data,
+                              uint32_t* out_nodes_touched = nullptr);
+
 // Binary search over sorted SurfaceLink[].
 // Returns INVALID_OWNER if face_id is not a moving surface.
 uint16_t SurfaceOwnerOf(const CollMesh& mesh, int face_id);
+
+// CMSH v2 lookup: returns OG static-solid metadata owning this triangle's
+// authored face, or nullptr for legacy/unmodeled actor geometry.
+const CollSolidGridRecord* SolidGridRecordOf(const CollMesh& mesh, int face_id);
+// Find lowest stable triangle id belonging to an authored face. Returns -1
+// when provenance is absent. Fan triangles remain individually addressable.
+inline int SourceFaceTriangleOf(const CollMesh& mesh, uint16_t source_face_id) {
+    if (!mesh.header || !mesh.triangles || source_face_id == 0) return -1;
+    int best = -1;
+    for (uint32_t i = 0; i < mesh.header->triangle_count; ++i) {
+        const CollTriangle& triangle = mesh.triangles[i];
+        if (triangle.source_face_id != source_face_id) continue;
+        const int stable_id = static_cast<int>(triangle.face_id);
+        if (best < 0 || stable_id < best) best = stable_id;
+    }
+    return best;
+}
+inline uint16_t SourceFaceMaterialOf(const CollMesh& mesh,
+                                    uint16_t source_face_id) {
+    const int triangle_id = SourceFaceTriangleOf(mesh, source_face_id);
+    return triangle_id >= 0 &&
+        static_cast<uint32_t>(triangle_id) < mesh.header->triangle_count
+        ? mesh.triangles[triangle_id].material : 0;
+}
 
 // ---------------------------------------------------------------------------
 // Internal: dequantize a quantized int16 position to world space

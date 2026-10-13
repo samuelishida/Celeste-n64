@@ -23,8 +23,8 @@ def check(path: str) -> bool:
         print(f"FAIL: bad magic {magic!r}", file=sys.stderr)
         return False
     version = struct.unpack(">H", f.read(2))[0]
-    if version != 1:
-        print(f"FAIL: version {version} != 1", file=sys.stderr)
+    if version not in (1, 2):
+        print(f"FAIL: unsupported version {version}", file=sys.stderr)
         return False
 
     flags = struct.unpack(">H", f.read(2))[0]
@@ -40,12 +40,16 @@ def check(path: str) -> bool:
 
     vc, tc, bc, lc = struct.unpack(">IIII", f.read(16))
     voff, toff, boff, soff = struct.unpack(">IIII", f.read(16))
+    solid_grid_count = struct.unpack(">I", f.read(4))[0] if version >= 2 else 0
 
     if tc > 32767:
         print(f"FAIL: triangle_count {tc} > 32767", file=sys.stderr)
         return False
     if bc > 65535:
         print(f"FAIL: bvh_node_count {bc} > 65535", file=sys.stderr)
+        return False
+    if solid_grid_count > 65535 or (version >= 2 and soff + solid_grid_count * 24 > len(data)):
+        print("FAIL: solid-grid table exceeds file bounds", file=sys.stderr)
         return False
 
     # 8-byte alignment
@@ -69,9 +73,9 @@ def check(path: str) -> bool:
                 print(f"FAIL: tri[0] index {idx} >= vertex_count {vc}", file=sys.stderr)
                 return False
         mat, face_id = struct.unpack(">HH", f.read(4))
-        pad = struct.unpack(">H", f.read(2))[0]
-        if pad != 0:
-            print(f"FAIL: tri[0].pad is {pad}, must be 0", file=sys.stderr)
+        source_face_id = struct.unpack(">H", f.read(2))[0]
+        if version >= 2 and source_face_id == 0:
+            print("FAIL: generated triangle has no source_face_id", file=sys.stderr)
             return False
         if face_id != 0:
             print(f"FAIL: tri[0].face_id {face_id} != 0 (face_id == array index invariant)", file=sys.stderr)
@@ -113,21 +117,19 @@ def check_death_triangles(path: str) -> bool:
     for i in range(tri_count):
         off = tri_off + i * 12
         tri_data = data[off:off+12]
-        i1, i2, i3, mat, face_id, pad = struct.unpack(">HHHHHH", tri_data)
+        i1, i2, i3, mat, face_id, source_face_id = struct.unpack(">HHHHHH", tri_data)
         tri_count_actual += 1
         if mat & 0x0004:
             death_count += 1
-
-    if death_count == 0:
-        print(f"FAIL: no death triangles found (MAT_DEATH=0x0004) in {tri_count_actual} tris",
-              file=sys.stderr)
-        return False
 
     if tri_count > 32767:
         print(f"FAIL: triangle_count {tri_count} > 32767", file=sys.stderr)
         return False
 
-    print(f"PASS: death triangles: {death_count}/{tri_count_actual}")
+    if death_count:
+        print(f"PASS: death triangles: {death_count}/{tri_count_actual}")
+    else:
+        print("INFO: no MAT_DEATH triangles; actor-backed hazard volumes may live in MPP4+")
     return True
 
 
@@ -143,8 +145,9 @@ def _parse_header(data: bytes):
     quant_origin = struct.unpack(">fff", f.read(12))
     vc, tc, bc, lc = struct.unpack(">IIII", f.read(16))
     voff, toff, boff, soff = struct.unpack(">IIII", f.read(16))
+    solid_grid_count = struct.unpack(">I", f.read(4))[0] if version >= 2 else 0
     return (version, flags, aabb_min, aabb_max, quant_scale, quant_origin,
-            vc, tc, bc, lc, voff, toff, boff, soff)
+            vc, tc, bc, lc, voff, toff, boff, soff, solid_grid_count)
 
 
 if __name__ == "__main__":

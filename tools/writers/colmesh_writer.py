@@ -24,6 +24,8 @@ from ogmap_lib import (
     fan_triangulate, transform_point, transform_normal, Brush,
 )
 
+from ogmap_lib.brush_geom import outward_face_normal
+
 # ── Constants (matching colmesh_bake.py) ────────────────────────────
 
 INT16_MAX = 32767
@@ -53,6 +55,7 @@ def generate_triangles(parsed_map: ParsedMap, scale: float) -> Tuple[List[Vec3],
     all_verts: List[Vec3] = []
     all_tris: List[ColmeshTriangle] = []
     skipped = 0
+    next_source_face_id = 1
 
     for ent in entities:
         cd = classify_entity(ent)
@@ -85,10 +88,14 @@ def generate_triangles(parsed_map: ParsedMap, scale: float) -> Tuple[List[Vec3],
                 polygon = compute_face_polygon(faces, face_idx)
                 if len(polygon) < 3:
                     continue
-                polygon = sort_vertices_ccw(polygon, face["normal"])
+                polygon = sort_vertices_ccw(polygon, outward_face_normal(face))
                 polygon = dedupe_polygon_vertices(polygon)
                 if len(polygon) < 3:
                     continue
+                if next_source_face_id > 0xFFFF:
+                    raise ValueError("source face group count exceeds CMSH uint16 limit")
+                source_face_id = next_source_face_id
+                next_source_face_id += 1
 
                 # Transform to game space
                 game_verts = [transform_point(v, scale) for v in polygon]
@@ -108,6 +115,7 @@ def generate_triangles(parsed_map: ParsedMap, scale: float) -> Tuple[List[Vec3],
                         base_idx + i2_rel,
                         material,
                         0,  # placeholder face_id
+                        source_face_id,
                     ))
 
     return all_verts, all_tris
@@ -276,8 +284,8 @@ def write_colmesh(
     # Rebuild triangle array in flat order, updating face_ids
     reordered_tris: List[ColmeshTriangle] = []
     for new_idx, raw_tri in enumerate(flat_tris):
-        i0, i1, i2, mat, _ = raw_tri
-        reordered_tris.append((i0, i1, i2, mat, new_idx))
+        i0, i1, i2, mat, _, source_face_id = raw_tri
+        reordered_tris.append((i0, i1, i2, mat, new_idx, source_face_id))
 
     # Compute quantized AABB
     qxs = [q[0] for q in qverts]
@@ -324,8 +332,9 @@ def write_colmesh(
         # Triangles (12 bytes each: uint16 x6)
         f.seek(off_tris)
         for tri in reordered_tris:
-            i0, i1, i2, mat, fid = tri
-            f.write(struct.pack('>HHHHHH', i0, i1, i2, mat & 0xFFFF, fid & 0xFFFF, 0))
+            i0, i1, i2, mat, fid, source_face_id = tri
+            f.write(struct.pack('>HHHHHH', i0, i1, i2, mat & 0xFFFF,
+                                fid & 0xFFFF, source_face_id & 0xFFFF))
 
         # BVH nodes (16 bytes each)
         f.seek(off_bvh)

@@ -64,8 +64,8 @@ def test_seam_equivalence():
     d = tempfile.mkdtemp(prefix="inc4-seam-")
     try:
         bake(d)
-        from mappack_format import read_mappack_v2_binary
-        pack = read_mappack_v2_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
+        from mappack_format import read_mappack_binary
+        pack = read_mappack_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
         assert len(pack.rooms) > 0
 
         # Use the manifest's actual chunk_size/scale, not hardcoded values.
@@ -117,8 +117,8 @@ def test_manifest_carries_chunk_size_scale():
     d = tempfile.mkdtemp(prefix="inc4-manifest-")
     try:
         bake(d)
-        from mappack_format import read_mappack_v2_binary
-        pack = read_mappack_v2_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
+        from mappack_format import read_mappack_binary
+        pack = read_mappack_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
         assert abs(pack.chunk_size - CHUNK_SIZE) < 1e-3, pack.chunk_size
         assert abs(pack.scale - SCALE) < 1e-6, pack.scale
         print(f"PASS: manifest carries chunk_size={pack.chunk_size} scale={pack.scale}")

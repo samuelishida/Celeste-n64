@@ -29,8 +29,17 @@ public:
 
     virtual void Init() {}
     virtual void Update(float delta_seconds) {}
+    // OG World dispatches every actor Update before beginning its second
+    // insertion-ordered LateUpdate pass. Actors without late work keep default.
+    virtual void LateUpdate(float delta_seconds) { (void)delta_seconds; }
     virtual void OnCollect() {}  // Called when player touches this actor
     virtual bool IsCollectible() const { return false; }
+    // Some hidden actors (notably refills) still own cooldown timers.
+    virtual bool UpdatesWhenInactive() const { return false; }
+    // Source Actor.LocalBounds as center offset + half extents. Virtual
+    // metadata keeps the bounded 80-byte inline actor slots compact.
+    virtual Vec3 UpdateBoundsOffset() const { return {}; }
+    virtual Vec3 UpdateBoundsHalfExtent() const { return {}; }
 
     // Exact type of this actor instance, set by each concrete class's
     // constructor. Non-virtual on purpose: the id is fixed at construction
@@ -38,6 +47,7 @@ public:
     uint16_t TypeId() const { return type_id_; }
 
     Vec3 position{};
+    bool update_off_screen = false;
     bool active = true;
     bool collected = false;
     float pickup_radius = 1.0f;

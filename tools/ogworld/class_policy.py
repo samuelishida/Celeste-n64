@@ -26,7 +26,7 @@ RENDER_ACTOR = "actor"       # actor-owned geometry (not baked into room mesh)
 RENDER_NONE = "none"         # invisible (triggers, spawn points)
 
 # Dynamic-class handling.
-DYNAMIC_STATIC_PROXY = "static-proxy"   # static collision proxy for now
+DYNAMIC_STATIC_PROXY = "static-proxy"   # static collision proxy; actor render mesh
 DYNAMIC_ACTOR_OWNED = "actor-owned"     # actor-owned collision (future)
 
 
@@ -68,8 +68,9 @@ MAT_CLIMBABLE = 0x0008
 
 
 def _solid(classname, flags=MAT_SOLID, **kw):
+    render_mode = kw.pop("render_mode", RENDER_STATIC)
     return ClassPolicy(classname=classname, collision_mode=COLLISION_SOLID,
-                       render_mode=RENDER_STATIC, material_flags=flags, **kw)
+                       render_mode=render_mode, material_flags=flags, **kw)
 
 
 def _visual(classname, **kw):
@@ -86,39 +87,53 @@ def _none(classname, **kw):
 # appear here (or in SKIPPED_CLASSES). Dynamic classes are labeled.
 CLASS_POLICIES: Dict[str, ClassPolicy] = {
     "worldspawn": _solid("worldspawn"),
-    "SpikeBlock": _solid("SpikeBlock", MAT_SOLID | MAT_DEATH, face_filter="upward"),
-    # DeathBlock is an invisible kill volume: it contributes global collision
-    # (death) but is NOT rendered, so it is not duplicated into dozens of
-    # visual cells. It remains global collision/trigger metadata.
+    # OG SpikeBlock is an actor-backed AABB trigger, not a Solid. Keep source
+    # brush geometry visible as a temporary proxy, but never use its faces as
+    # collision or kill surfaces; MPP4 carries the actor volume + direction.
+    "SpikeBlock": ClassPolicy(
+        classname="SpikeBlock",
+        collision_mode=COLLISION_NONE,
+        render_mode=RENDER_STATIC,
+        material_flags=0,
+        note="actor-backed AABB hazard; static brush remains visual proxy only",
+    ),
+    # DeathBlock is an invisible actor-backed AABB trigger, not collision.
     "DeathBlock": ClassPolicy(
         classname="DeathBlock",
-        collision_mode=COLLISION_SOLID,
+        collision_mode=COLLISION_NONE,
         render_mode=RENDER_NONE,
-        material_flags=MAT_SOLID | MAT_DEATH,
-        face_filter="upward",
-        note="invisible kill volume; collision-only, not rendered",
+        material_flags=0,
+        note="invisible actor-backed AABB kill volume",
     ),
     "Decoration": _visual("Decoration"),
     "FloatingDecoration": _visual("FloatingDecoration"),
     "StaticProp": _visual("StaticProp"),
-    # Dynamic classes: static collision proxy for this collision-first
-    # milestone. Their dynamic behavior is called out in the report.
-    "TrafficBlock": _solid("TrafficBlock", dynamic=DYNAMIC_STATIC_PROXY,
-                           note="moving platform; static proxy for now"),
-    "FallingBlock": _solid("FallingBlock", dynamic=DYNAMIC_STATIC_PROXY,
-                           note="falls when stood on; static proxy for now"),
-    "FloatyBlock": _solid("FloatyBlock", dynamic=DYNAMIC_STATIC_PROXY,
-                          note="floats; static proxy for now"),
-    "MovingBlock": _solid("MovingBlock", dynamic=DYNAMIC_STATIC_PROXY,
-                          note="moves; static proxy for now"),
-    "GateBlock": _solid("GateBlock", dynamic=DYNAMIC_STATIC_PROXY,
-                        note="gate; static proxy for now"),
-    "CassetteBlock": _solid("CassetteBlock", dynamic=DYNAMIC_STATIC_PROXY,
-                            note="cassette block; static proxy for now"),
-    "BreakBlock": _solid("BreakBlock", dynamic=DYNAMIC_STATIC_PROXY,
-                         note="breakable; static proxy for now"),
-    "DoubleDashPuzzleBlock": _solid("DoubleDashPuzzleBlock", dynamic=DYNAMIC_STATIC_PROXY,
-                                    note="puzzle block; static proxy for now"),
+    # Dynamic classes keep initial collision geometry in the global CMSH, but
+    # render only from actor-local DSOL so no frozen visual duplicate remains.
+    "TrafficBlock": _solid("TrafficBlock", render_mode=RENDER_ACTOR,
+                           dynamic=DYNAMIC_STATIC_PROXY,
+                           note="moving actor; actor-local render and static collision proxy"),
+    "FallingBlock": _solid("FallingBlock", render_mode=RENDER_ACTOR,
+                           dynamic=DYNAMIC_STATIC_PROXY,
+                           note="falling actor; actor-local render and static collision proxy"),
+    "FloatyBlock": _solid("FloatyBlock", render_mode=RENDER_ACTOR,
+                          dynamic=DYNAMIC_STATIC_PROXY,
+                          note="floating actor; actor-local render and static collision proxy"),
+    "MovingBlock": _solid("MovingBlock", render_mode=RENDER_ACTOR,
+                          dynamic=DYNAMIC_STATIC_PROXY,
+                          note="moving actor; actor-local render and static collision proxy"),
+    "GateBlock": _solid("GateBlock", render_mode=RENDER_ACTOR,
+                        dynamic=DYNAMIC_STATIC_PROXY,
+                        note="gate actor; actor-local render and static collision proxy"),
+    "CassetteBlock": _solid("CassetteBlock", render_mode=RENDER_ACTOR,
+                            dynamic=DYNAMIC_STATIC_PROXY,
+                            note="cassette actor; actor-local render and static collision proxy"),
+    "BreakBlock": _solid("BreakBlock", render_mode=RENDER_ACTOR,
+                         dynamic=DYNAMIC_STATIC_PROXY,
+                         note="breakable actor; actor-local render and static collision proxy"),
+    "DoubleDashPuzzleBlock": _solid("DoubleDashPuzzleBlock", render_mode=RENDER_ACTOR,
+                                    dynamic=DYNAMIC_STATIC_PROXY,
+                                    note="puzzle actor; actor-local render and static collision proxy"),
     # Point entities (no brushes) — policy for completeness.
     "PlayerSpawn": _none("PlayerSpawn"),
     "Strawberry": _none("Strawberry"),
@@ -136,7 +151,9 @@ CLASS_POLICIES: Dict[str, ClassPolicy] = {
     "Granny": _none("Granny"),
     "Theo": _none("Theo"),
     "Badeline": _none("Badeline"),
-    "func_group": _none("func_group"),
+    # TrenchBroom group/layer entities can own brush children. OG recursively
+    # collects those brushes into the static-solid set under worldspawn.
+    "func_group": _solid("func_group", note="child brushes join static world solids"),
 }
 
 
@@ -144,7 +161,6 @@ CLASS_POLICIES: Dict[str, ClassPolicy] = {
 # reported, not silently dropped.
 SKIPPED_CLASSES: Dict[str, str] = {
     "Node": "pathfinding node, no geometry",
-    "func_group": "TrenchBroom layer container, no geometry",
     "StaticProp": "visual-only point entity, no collision",
     "Coin": "needs coin runtime (future)",
     "Feather": "needs feather runtime (future)",

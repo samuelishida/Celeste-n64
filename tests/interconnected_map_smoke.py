@@ -97,8 +97,8 @@ def test_spawn_records():
     d = tempfile.mkdtemp(prefix="inc5-spawn-")
     try:
         bake(d)
-        from mappack_format import read_mappack_v2_binary
-        pack = read_mappack_v2_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
+        from mappack_format import read_mappack_v3_binary
+        pack = read_mappack_v3_binary(str(Path(d) / "staging" / "forsyken-city.mappack"))
         kinds = Counter(s.kind for r in pack.rooms for s in r.spawns)
         classes = Counter(s.classname for r in pack.rooms for s in r.spawns)
         assert kinds[0] == EXPECTED_START, f"start count {kinds[0]}"
@@ -106,6 +106,12 @@ def test_spawn_records():
         assert classes["Strawberry"] == EXPECTED_STRAWBERRIES
         assert classes["Cassette"] == EXPECTED_CASSETTES
         assert classes["Refill"] == EXPECTED_REFILLS
+        double_refills = [s for r in pack.rooms for s in r.spawns
+                          if s.classname == "Refill" and s.actor_flags == 1]
+        assert len(double_refills) == 3, f"double refill count {len(double_refills)}"
+        normal_refills = [s for r in pack.rooms for s in r.spawns
+                          if s.classname == "Refill" and s.actor_flags == 0]
+        assert len(normal_refills) == EXPECTED_REFILLS - 3
         assert classes["Spring"] == EXPECTED_SPRINGS
         # Exactly one Start.
         starts = [s for r in pack.rooms for s in r.spawns if s.kind == 0]
@@ -128,6 +134,7 @@ def test_dynamic_proxy_counts():
         assert "FallingBlock" in dynamic
         assert "MovingBlock" in dynamic
         assert "FloatyBlock" in dynamic
+        assert all(summary[name]["render_mode"] == "actor" for name in dynamic)
         # DeathBlock is collision-only (not rendered).
         assert summary["DeathBlock"]["render_mode"] == "none"
         print(f"PASS: dynamic-proxy classes labeled: {sorted(dynamic)}")
@@ -140,10 +147,10 @@ def test_artifact_hashes():
     d = tempfile.mkdtemp(prefix="inc5-hash-")
     try:
         bake(d)
-        from mappack_format import read_mappack_v2_binary
+        from mappack_format import read_mappack_binary
         from artifact_hash import artifact_hash
         staging = Path(d) / "staging"
-        pack = read_mappack_v2_binary(str(staging / "forsyken-city.mappack"))
+        pack = read_mappack_binary(str(staging / "forsyken-city.mappack"))
         # Global colmesh hash.
         gname = pack.global_colmesh_path.rsplit("/", 1)[-1]
         gh = artifact_hash(str(staging / gname))

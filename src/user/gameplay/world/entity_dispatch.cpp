@@ -30,10 +30,37 @@ static uint16_t ClassnameToPlaceholder(uint16_t classname_id) {
 
 }  // namespace
 
-void DispatchLevelEntities(const Room& room, ActorWorld& world,
-                           StrawberryActor& strawberry,
-                           RefillActor& refill,
-                           SpringActor& spring) {
+int DispatchActorSpawns(const ActorSpawn* spawns, int spawn_count,
+                        ActorWorld& world) {
+    if (!spawns || spawn_count <= 0) return 0;
+    int dispatched = 0;
+    for (int i = 0; i < spawn_count; ++i) {
+        const ActorSpawn& spawn = spawns[i];
+        if (spawn.placeholder_id != 2 && spawn.placeholder_id != 3 &&
+            spawn.placeholder_id != 7) {
+            ED_LOG("[dispatch] unknown placeholder=%u source=%lu — skipped\n",
+                   spawn.placeholder_id, static_cast<unsigned long>(spawn.source_id));
+            continue;
+        }
+        const ActorId id = SpawnActor(world, spawn);
+        if (!id) {
+            ED_LOG("[dispatch] spawn FAILED placeholder=%u source=%lu (capacity/flags)\n",
+                   spawn.placeholder_id, static_cast<unsigned long>(spawn.source_id));
+            continue;
+        }
+        ++dispatched;
+    }
+    return dispatched;
+}
+
+int DispatchLevelEntities(const Room& room, ActorWorld& world) {
+    if (room.spawn_count > Room::kMaxSpawns) {
+        ED_LOG("[dispatch] room spawn_count=%d exceeds cap=%d — aborted\n",
+               room.spawn_count, Room::kMaxSpawns);
+        return 0;
+    }
+    ActorSpawn translated_spawns[Room::kMaxSpawns];
+    int translated_count = 0;
     for (int i = 0; i < room.spawn_count; ++i) {
         ActorSpawn translated = room.spawns[i];
         translated.placeholder_id = ClassnameToPlaceholder(room.spawns[i].placeholder_id);
@@ -46,14 +73,9 @@ void DispatchLevelEntities(const Room& room, ActorWorld& world,
                    static_cast<double>(translated.position.z));
             continue;
         }
-
-        SpawnActor(world, translated, strawberry, refill, spring);
-        ED_LOG("[dispatch] spawned classname_id=%u ph=%u at (%.2f,%.2f,%.2f)\n",
-               room.spawns[i].placeholder_id, translated.placeholder_id,
-               static_cast<double>(translated.position.x),
-               static_cast<double>(translated.position.y),
-               static_cast<double>(translated.position.z));
+        translated_spawns[translated_count++] = translated;
     }
+    return DispatchActorSpawns(translated_spawns, translated_count, world);
 }
 
 }  // namespace madeline_cube

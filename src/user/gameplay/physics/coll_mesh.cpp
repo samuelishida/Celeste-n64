@@ -62,6 +62,7 @@ static void SwapHeader(CollHeader* h) {
     h->triangle_offset      = BE32(h->triangle_offset);
     h->bvh_offset           = BE32(h->bvh_offset);
     h->surface_link_offset  = BE32(h->surface_link_offset);
+    h->solid_grid_count     = BE32(h->solid_grid_count);
 }
 
 static void SwapVertices(CollVertex* verts, uint32_t count) {
@@ -77,7 +78,7 @@ static void SwapTriangles(CollTriangle* tris, uint32_t count) {
         tris[i].i2       = BE16(tris[i].i2);
         tris[i].material = BE16(tris[i].material);
         tris[i].face_id  = BE16(tris[i].face_id);
-        // pad stays 0 — no swap needed
+        tris[i].source_face_id = BE16(tris[i].source_face_id);
     }
 }
 
@@ -97,6 +98,19 @@ static void SwapSurfaceLinks(CollSurfaceLink* links, uint32_t count) {
     }
 }
 
+static void SwapSolidGrid(CollSolidGridRecord* records, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        records[i].solid_id = BE16(records[i].solid_id);
+        records[i].first_source_face_id = BE16(records[i].first_source_face_id);
+        records[i].last_source_face_id = BE16(records[i].last_source_face_id);
+        records[i].reserved = BE16(records[i].reserved);
+        records[i].min_x = BEf(records[i].min_x);
+        records[i].min_y = BEf(records[i].min_y);
+        records[i].max_x = BEf(records[i].max_x);
+        records[i].max_y = BEf(records[i].max_y);
+    }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -112,7 +126,8 @@ static CollMesh* ParseCollMeshBuffer(void* buf, size_t file_size) {
 
     SwapHeader(hdr);
 
-    if (hdr->version != 1) { free(buf); return nullptr; }
+    if (hdr->version != 1 && hdr->version != 2) { free(buf); return nullptr; }
+    if (hdr->version == 1 && hdr->solid_grid_count != 0) { free(buf); return nullptr; }
     if (!(hdr->quant_scale > 0.f))  { free(buf); return nullptr; }
     // BVH leaf count_or_zero and left_or_first are uint16_t; max usable triangles = 32767.
     if (hdr->triangle_count > 32767) { free(buf); return nullptr; }
@@ -128,6 +143,17 @@ static CollMesh* ParseCollMeshBuffer(void* buf, size_t file_size) {
             !offset_ok(hdr->triangle_offset,     hdr->triangle_count,     sizeof(CollTriangle)) ||
             !offset_ok(hdr->bvh_offset,          hdr->bvh_node_count,     sizeof(CollBvhNode)) ||
             !offset_ok(hdr->surface_link_offset, hdr->surface_link_count, sizeof(CollSurfaceLink))) {
+            free(buf);
+            return nullptr;
+        }
+        const uint64_t after_links =
+            static_cast<uint64_t>(hdr->surface_link_offset) +
+            static_cast<uint64_t>(hdr->surface_link_count) * sizeof(CollSurfaceLink);
+        const uint64_t solid_grid_offset = hdr->version >= 2
+            ? ((after_links + 7u) & ~uint64_t(7u)) : after_links;
+        const uint64_t solid_grid_end = solid_grid_offset +
+            static_cast<uint64_t>(hdr->solid_grid_count) * sizeof(CollSolidGridRecord);
+        if (solid_grid_end > file_size) {
             free(buf);
             return nullptr;
         }
@@ -153,6 +179,27 @@ static CollMesh* ParseCollMeshBuffer(void* buf, size_t file_size) {
     SwapBvhNodes(  reinterpret_cast<CollBvhNode*> (base + hdr->bvh_offset),       hdr->bvh_node_count);
     SwapSurfaceLinks(reinterpret_cast<CollSurfaceLink*>(base + hdr->surface_link_offset),
                      hdr->surface_link_count);
+    const uint64_t after_links = static_cast<uint64_t>(hdr->surface_link_offset) +
+        static_cast<uint64_t>(hdr->surface_link_count) * sizeof(CollSurfaceLink);
+    const uint32_t solid_grid_offset = static_cast<uint32_t>(hdr->version >= 2
+        ? ((after_links + 7u) & ~uint64_t(7u)) : after_links);
+    auto* solid_grid = reinterpret_cast<CollSolidGridRecord*>(base + solid_grid_offset);
+    SwapSolidGrid(solid_grid, hdr->solid_grid_count);
+
+    // Source-face ranges are ordered, disjoint, and own finite 2D bounds.
+    for (uint32_t i = 0; i < hdr->solid_grid_count; ++i) {
+        const CollSolidGridRecord& r = solid_grid[i];
+        if (r.first_source_face_id == 0 ||
+            r.first_source_face_id > r.last_source_face_id ||
+            r.min_x > r.max_x || r.min_y > r.max_y ||
+            !std::isfinite(r.min_x) || !std::isfinite(r.min_y) ||
+            !std::isfinite(r.max_x) || !std::isfinite(r.max_y) ||
+            (i > 0 && (solid_grid[i - 1].solid_id >= r.solid_id ||
+                       solid_grid[i - 1].last_source_face_id >= r.first_source_face_id))) {
+            free(buf);
+            return nullptr;
+        }
+    }
 
     // Validate BVH leaf triangle ranges after byte-swapping so the host loader
     // sees the same values the runtime will query.
@@ -176,6 +223,7 @@ static CollMesh* ParseCollMeshBuffer(void* buf, size_t file_size) {
     mesh->triangles    = reinterpret_cast<const CollTriangle*>(base + hdr->triangle_offset);
     mesh->bvh_nodes    = reinterpret_cast<const CollBvhNode*> (base + hdr->bvh_offset);
     mesh->surface_links= reinterpret_cast<const CollSurfaceLink*>(base + hdr->surface_link_offset);
+    mesh->solid_grid   = solid_grid;
     mesh->_buffer      = buf;
 
     // Pre-dequantize all vertices so hot-path queries avoid float multiply per vertex.
@@ -278,6 +326,7 @@ template <typename LeafVisitor>
 RayHit RaycastMeshGeneric(const CollMesh& mesh,
                           Vec3 origin, Vec3 dir, float max_t,
                           BackfaceCull cull, LeafVisitor visitor,
+                          TriangleFilter filter, void* user_data,
                           uint32_t* out_nodes_touched)
 {
     if (mesh.header->bvh_node_count == 0) return {};
@@ -311,7 +360,8 @@ RayHit RaycastMeshGeneric(const CollMesh& mesh,
         if (node.count_or_zero > 0) {
             int first = node.left_or_first;
             int count = node.count_or_zero;
-            if (visitor(mesh, origin, p1, dir, cull, first, count, max_t, best, best_world_t, best_t)) {
+            if (visitor(mesh, origin, p1, dir, cull, first, count, max_t,
+                        best, best_world_t, best_t, filter, user_data)) {
                 // best updated by visitor
             }
         } else {
@@ -329,19 +379,21 @@ RayHit RaycastMeshGeneric(const CollMesh& mesh,
 }
 
 inline bool RaycastLeafTriangles(const CollMesh& mesh,
-                                 const Vec3& origin, const Vec3& p1, const Vec3& dir,
+                                 const Vec3& origin, const Vec3& p1, const Vec3& /*dir*/,
                                  BackfaceCull cull,
                                  int first, int count, float max_t,
-                                 RayHit& best, float& best_world_t, float& best_t)
+                                 RayHit& best, float& best_world_t, float& best_t,
+                                 TriangleFilter filter, void* user_data)
 {
     bool updated = false;
     for (int ti = first; ti < first + count; ++ti) {
+        if (filter && !filter(mesh, ti, user_data)) continue;
         const CollTriangle& ct = mesh.triangles[ti];
         const Vec3& a = mesh.world_verts[ct.i0];
         const Vec3& b = mesh.world_verts[ct.i1];
         const Vec3& c = mesh.world_verts[ct.i2];
         TriHit h = SegmentTriangle(origin, p1, a, b, c, cull);
-        if (h.hit && h.t < best_t) {
+        if (h.hit && (h.t < best_t || (h.t == best_t && ct.face_id < best.face_id))) {
             // The segment length is |dir| * max_t, so h.t * max_t is world distance.
             best_world_t = h.t * max_t;
             best_t         = h.t;
@@ -351,8 +403,6 @@ inline bool RaycastLeafTriangles(const CollMesh& mesh,
             Vec3 n = h.normal;
             float len = std::sqrt(n.x*n.x + n.y*n.y + n.z*n.z);
             if (len > 1e-7f) { n.x /= len; n.y /= len; n.z /= len; }
-            float nd = n.x*dir.x + n.y*dir.y + n.z*dir.z;
-            if (nd > 0.f) { n.x = -n.x; n.y = -n.y; n.z = -n.z; }
             best.normal    = n;
             best.face_id   = (int)ct.face_id;
             best.material  = ct.material;
@@ -370,7 +420,18 @@ RayHit RaycastMesh(const CollMesh& mesh,
                    uint32_t* out_nodes_touched)
 {
     return RaycastMeshGeneric(mesh, origin, dir, max_t, cull,
-                              RaycastLeafTriangles, out_nodes_touched);
+                              RaycastLeafTriangles, nullptr, nullptr,
+                              out_nodes_touched);
+}
+
+RayHit RaycastMeshFiltered(const CollMesh& mesh,
+                           Vec3 origin, Vec3 dir, float max_t,
+                           BackfaceCull cull, TriangleFilter filter,
+                           void* user_data, uint32_t* out_nodes_touched)
+{
+    return RaycastMeshGeneric(mesh, origin, dir, max_t, cull,
+                              RaycastLeafTriangles, filter, user_data,
+                              out_nodes_touched);
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +479,9 @@ RayHit RaycastMeshVertical(const CollMesh& mesh,
             int count = node.count_or_zero;
             Vec3 p1 = { origin.x, p1_y, origin.z };
             Vec3 dir = { 0.0f, dir_y, 0.0f };
-            RaycastLeafTriangles(mesh, origin, p1, dir, cull, first, count, max_t, best, best_world_t, best_t);
+            RaycastLeafTriangles(mesh, origin, p1, dir, cull, first, count,
+                                 max_t, best, best_world_t, best_t,
+                                 nullptr, nullptr);
         } else {
             uint16_t right_child = (uint16_t)(idx + node.left_or_first);
             uint16_t left_child  = (uint16_t)(idx + 1);
@@ -440,7 +503,8 @@ RayHit RaycastMeshVertical(const CollMesh& mesh,
 SweepSphereHit SweepSphereMesh(const CollMesh& mesh,
                                 const Vec3& origin, const Vec3& dir,
                                 float radius, float max_dist,
-                                uint32_t* out_nodes_touched)
+                                uint32_t* out_nodes_touched,
+                                TriangleFilter filter, void* user_data)
 {
     if (mesh.header->bvh_node_count == 0) return {};
 
@@ -482,6 +546,7 @@ SweepSphereHit SweepSphereMesh(const CollMesh& mesh,
             int first = node.left_or_first;
             int count = node.count_or_zero;
             for (int ti = first; ti < first + count; ++ti) {
+                if (filter && !filter(mesh, ti, user_data)) continue;
                 const CollTriangle& ct = mesh.triangles[ti];
                 if (!(ct.material & MAT_SOLID)) continue;   // non-solid = skip
 
@@ -493,7 +558,7 @@ SweepSphereHit SweepSphereMesh(const CollMesh& mesh,
                 // Simplified sweep: 8 linear samples along the path.
                 // Sufficient for motion steps < sphere radius; not an analytic TOI.
                 SphereTriHit sh0 = SphereTriangle(origin, radius, a, b, c);
-                if (sh0.hit) {
+                if (sh0.hit && (!best.hit || best_t > 0.0f || ct.face_id < best.face_id)) {
                     best_t         = 0.f;
                     best.hit       = true;
                     best.t         = 0.f;
@@ -505,12 +570,12 @@ SweepSphereHit SweepSphereMesh(const CollMesh& mesh,
                 }
                 for (int s = 1; s <= 8; ++s) {
                     float ft = (float)s / 8.f * max_dist;
-                    if (ft >= best_t) break;
+                    if (ft > best_t) break;
                     Vec3 centre = { origin.x + dir.x * ft,
                                     origin.y + dir.y * ft,
                                     origin.z + dir.z * ft };
                     SphereTriHit sh = SphereTriangle(centre, radius, a, b, c);
-                    if (sh.hit && ft < best_t) {
+                    if (sh.hit && (ft < best_t || (ft == best_t && ct.face_id < best.face_id))) {
                         best_t         = ft;
                         best.hit       = true;
                         best.t         = ft / max_dist;
@@ -583,6 +648,45 @@ int OverlapAabbMesh(const CollMesh& mesh, const AABB& query,
     return count;
 }
 
+int VisitOverlappingTriangles(const CollMesh& mesh, const AABB& query,
+                              bool (*visitor)(int face_id, void* user_data),
+                              void* user_data,
+                              uint32_t* out_nodes_touched)
+{
+    if (mesh.header->bvh_node_count == 0 || visitor == nullptr) return 0;
+
+    int visited = 0;
+    uint16_t stack[64];
+    int top = 0;
+    stack[top++] = 0;
+
+    while (top > 0) {
+        const uint16_t idx = stack[--top];
+        const CollBvhNode& node = mesh.bvh_nodes[idx];
+        if (out_nodes_touched) ++(*out_nodes_touched);
+        const AABB aabb = DequantAabb(mesh, node.aabb_min, node.aabb_max);
+        if (!AABBOverlap(aabb, query)) continue;
+
+        if (node.count_or_zero > 0) {
+            const int first = node.left_or_first;
+            const int count = node.count_or_zero;
+            for (int ti = first; ti < first + count; ++ti) {
+                ++visited;
+                if (!visitor(ti, user_data)) return visited;
+            }
+        } else {
+            const uint16_t right_child = static_cast<uint16_t>(idx + node.left_or_first);
+            const uint16_t left_child = static_cast<uint16_t>(idx + 1);
+            if (top + 2 <= 64 && right_child < mesh.header->bvh_node_count &&
+                left_child < mesh.header->bvh_node_count) {
+                stack[top++] = right_child;
+                stack[top++] = left_child;
+            }
+        }
+    }
+    return visited;
+}
+
 // ---------------------------------------------------------------------------
 // SurfaceOwnerOf
 // ---------------------------------------------------------------------------
@@ -599,6 +703,23 @@ uint16_t SurfaceOwnerOf(const CollMesh& mesh, int face_id) {
         else                hi = mid - 1;
     }
     return INVALID_OWNER;
+}
+
+const CollSolidGridRecord* SolidGridRecordOf(const CollMesh& mesh, int face_id) {
+    if (!mesh.solid_grid || !mesh.header || face_id < 0 ||
+        static_cast<uint32_t>(face_id) >= mesh.header->triangle_count)
+        return nullptr;
+    const uint16_t source_face_id = mesh.triangles[face_id].source_face_id;
+    if (source_face_id == 0) return nullptr;
+    int lo = 0, hi = static_cast<int>(mesh.header->solid_grid_count) - 1;
+    while (lo <= hi) {
+        const int mid = lo + (hi - lo) / 2;
+        const CollSolidGridRecord& r = mesh.solid_grid[mid];
+        if (source_face_id < r.first_source_face_id) hi = mid - 1;
+        else if (source_face_id > r.last_source_face_id) lo = mid + 1;
+        else return &r;
+    }
+    return nullptr;
 }
 
 }  // namespace madeline_cube::physics

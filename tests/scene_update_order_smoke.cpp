@@ -56,13 +56,14 @@ PlayerState RunScenePlayerTick(
     AdvanceMovingSurfaces(room, delta_seconds);
 
     // 2. timers/input
+    controller.BeginMoveTick(p);
     PlayerController::StepContext step = controller.TimerInputPhase(p, input, camera_forward, delta_seconds);
 
     // 3. state phase (velocity edits)
     controller.StatePhase(p, input, step, delta_seconds);
 
     // 4. MovePhase: single mover (SweepMove + Popout + ray ground) + contact
-    controller.MovePhase(p, delta_seconds, &room);
+    controller.MovePhase(p, delta_seconds, &room, &step);
 
     // 5. respawn (mover-delegated)
     const bool did_respawn = respawn.Step(p, checkpoint, room, mover);
@@ -114,10 +115,11 @@ int main() {
 
         // Reference: controller isolated against the same start.
         PlayerState ref = start;
+        controller.BeginMoveTick(ref);
         PlayerController::StepContext step =
             controller.TimerInputPhase(ref, {}, {0.0f, 0.0f, 1.0f}, kDt);
         controller.StatePhase(ref, {}, step, kDt);
-        controller.MovePhase(ref, kDt, &room);
+        controller.MovePhase(ref, kDt, &room, &step);
 
         assert(ApproxEq(after_scene.position.x, ref.position.x));
         assert(ApproxEq(after_scene.position.y, ref.position.y));
@@ -125,6 +127,22 @@ int main() {
         assert(after_scene.grounded == ref.grounded);
         // Mover is the single owner of the resting y: stays on the floor.
         assert(ApproxEq(after_scene.position.y, kHalfHeight, 0.01f));
+    }
+
+    // Split source phases leave support/coyote state untouched during
+    // Player.Update. Late contact resolves it only after intervening actors.
+    {
+        PlayerState split;
+        split.position = {0.0f, kHalfHeight, 0.0f};
+        split.grounded = false;
+        split.contact.was_grounded = false;
+        controller.MoveUpdatePhase(split, kDt, &room);
+        assert(!split.grounded);
+        assert(!split.contact.was_grounded);
+        controller.LateMoveContactPhase(split, kDt, &room);
+        assert(split.grounded);
+        assert(split.contact.was_grounded);
+        assert(split.coyote_time_remaining > 0.0f);
     }
 
     // --- Falling from above: one frame of fall stays above the floor and the

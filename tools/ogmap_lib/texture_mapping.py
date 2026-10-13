@@ -12,7 +12,8 @@ from . import Vec3, vdot, vcross, vnormalize
 def compute_uv(
     point: Vec3,
     face: Dict,
-    scale: float = 0.2
+    scale: float = 0.2,
+    uv_scale: Tuple[float, float] = (1.0, 1.0),
 ) -> Tuple[float, float]:
     """Compute UV coordinates from Quake face parameters.
 
@@ -91,4 +92,4 @@ def compute_uv(
     u = vdot(point, axis_u) / scale_u + shift_u
     v = vdot(point, axis_v) / scale_v + shift_v
 
-    return (u, v)
+    return (u * uv_scale[0], v * uv_scale[1])

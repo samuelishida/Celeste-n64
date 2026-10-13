@@ -22,6 +22,9 @@
 #include <string>
 
 #include "gameplay/world/map_runtime.hpp"
+#include "gameplay/world/actor_world.hpp"
+#include "gameplay/world/entity_dispatch.hpp"
+#include "gameplay/actor/refill_actor.hpp"
 
 using namespace madeline_cube;
 
@@ -34,6 +37,81 @@ int main(int argc, char** argv) {
     assert(rt.Init(mappack_path, build_dir));
     assert(rt.HasMap());
     assert(rt.HasGlobalCollision());
+    if (rt.Spec().dynamic_solid_count > 0) {
+        assert(rt.Spec().dynamic_solid_count == 118);
+        assert(rt.DynamicGeometry().IsLoaded());
+        assert(rt.DynamicGeometry().ActorCount() == 118);
+        assert(rt.DynamicGeometry().FaceCount() == 853);
+        assert(rt.DynamicGeometry().VertexCount() == 3519);
+    }
+    const physics::CollMesh* initial_mesh_identity = rt.GlobalCollision().Mesh();
+    const std::string initial_room_id = rt.ActiveRoomId();
+    assert(!rt.Init("/tmp/missing-dynamic-solid-test.mappack", build_dir));
+    assert(rt.HasMap() && rt.HasGlobalCollision());
+    assert(rt.GlobalCollision().Mesh() == initial_mesh_identity);
+    assert(initial_room_id == rt.ActiveRoomId());
+    if (rt.Spec().hazard_count > 0) {
+        int spikes = 0, death_blocks = 0;
+        for (int i = 0; i < rt.Spec().hazard_count; ++i) {
+            const HazardVolumeSpec& hazard = rt.Spec().hazards[i];
+            if (hazard.kind == kHazardDeathBlock) {
+                ++death_blocks;
+                assert(hazard.spike_direction.x == 0.0f &&
+                       hazard.spike_direction.y == 0.0f &&
+                       hazard.spike_direction.z == 0.0f);
+            } else {
+                assert(hazard.kind == kHazardSpikeBlock);
+                ++spikes;
+                const Vec3& direction = hazard.spike_direction;
+                const float length2 = direction.x * direction.x +
+                    direction.y * direction.y + direction.z * direction.z;
+                assert(std::fabs(length2 - 1.0f) < 1.0e-4f);
+                assert(std::fabs(direction.x) < 1.0e-4f ||
+                       std::fabs(direction.x) > 0.999f);
+            }
+        }
+        assert(spikes == 98 && death_blocks == 5);
+        assert(rt.Spec().spike_direction_flip_count == 35);
+        std::printf("PASS: actor-backed hazards %d spikes, %d death volumes\n",
+                    spikes, death_blocks);
+    }
+    ActorWorld actor_world;
+    RefillActor* tracked_refill = nullptr;
+    Vec3 start_floor_probe{};
+    Vec3 start_floor_point{};
+    const physics::CollMesh* global_mesh_identity = rt.GlobalCollision().Mesh();
+
+    // Supported actors are enumerated map-wide once, not rebuilt per cell.
+    {
+        ActorSpawn actors[ActorWorld::kMaxActors] = {};
+        const int count = rt.AllActorSpawns(actors, ActorWorld::kMaxActors);
+        assert(count == 34);  // 20 strawberries + 8 refills + 6 springs
+        int strawberries = 0, refills = 0, springs = 0;
+        for (int i = 0; i < count; ++i) {
+            if (actors[i].placeholder_id == 2) ++strawberries;
+            else if (actors[i].placeholder_id == 3) ++refills;
+            else if (actors[i].placeholder_id == 7) ++springs;
+            else assert(false && "unexpected supported actor kind");
+            for (int j = i + 1; j < count; ++j)
+                assert(actors[i].source_id != actors[j].source_id);
+        }
+        assert(strawberries == 20 && refills == 8 && springs == 6);
+        assert(rt.AllActorSpawns(actors, 33) == -1);
+
+        ActorSpawn all_actors[ActorWorld::kMaxActors] = {};
+        const int all_count = rt.AllActorSpawns(
+            all_actors, ActorWorld::kMaxActors);
+        assert(all_count == 34);
+        assert(DispatchActorSpawns(all_actors, all_count, actor_world) == all_count);
+        actor_world.ResolvePending();
+        assert(actor_world.Count() == all_count);
+        actor_world.ForEachType<RefillActor>([&](RefillActor& refill) {
+            if (!tracked_refill) tracked_refill = &refill;
+        });
+        assert(tracked_refill != nullptr);
+        tracked_refill->OnCollect();
+        assert(tracked_refill->collected && !tracked_refill->active);
+    }
 
     // 1. Start room is active and has the Start spawn.
     const char* start_id = rt.Spec().start_room_id;
@@ -48,10 +126,11 @@ int main(int argc, char** argv) {
 
     // 2. Global collision is queryable (floor probe above the Start position).
     {
-        Vec3 above = {start->position.x, start->position.y + 5.0f, start->position.z};
-        GroundHit floor = rt.GlobalCollision().QueryFloor(above, 20.0f);
+        start_floor_probe = {start->position.x, start->position.y + 5.0f, start->position.z};
+        GroundHit floor = rt.GlobalCollision().QueryFloor(start_floor_probe, 20.0f);
         assert(floor.hit);
-        assert(std::fabs(floor.point.y - 12.8f) < 0.5f);
+        assert(std::fabs(floor.point.y - start->position.y) < 0.5f);
+        start_floor_point = floor.point;
         printf("PASS: global collision floor hit at y=%.2f\n", floor.point.y);
     }
 
@@ -97,11 +176,20 @@ int main(int argc, char** argv) {
         assert(rt.CommitActive(new_id));
         assert(std::strncmp(rt.ActiveRoomId(), nb_id, 16) == 0);
         assert(player_pos.x == pos_in_nb.x && player_vel.x == 2.0f);
+        RefillActor* retained_refill = nullptr;
+        actor_world.ForEachType<RefillActor>([&](RefillActor& refill) {
+            if (refill.source_id == tracked_refill->source_id)
+                retained_refill = &refill;
+        });
+        assert(retained_refill == tracked_refill);
+        assert(retained_refill->collected && !retained_refill->active);
         printf("PASS: transitioned to %s, player pos/vel preserved\n", nb_id);
 
-        // Global collision still valid after the swap (same mesh identity).
-        GroundHit floor2 = rt.GlobalCollision().QueryFloor(player_pos, 20.0f);
-        assert(floor2.hit);
+        // Global collision remains the same mesh and answers same known probe
+        // after visual-room swap. Neighbor-cell centers may contain no floor.
+        assert(rt.GlobalCollision().Mesh() == global_mesh_identity);
+        GroundHit floor2 = rt.GlobalCollision().QueryFloor(start_floor_probe, 20.0f);
+        assert(floor2.hit && std::fabs(floor2.point.y - start_floor_point.y) < 0.01f);
         printf("PASS: global collision still queryable after transition\n");
     }
 
@@ -116,12 +204,24 @@ int main(int argc, char** argv) {
                old_id);
     }
 
-    // 6. FindSpawnByName finds the AnchorB anchor.
+    // 6. FindSpawnByName finds an authored anchor by its manifest name.
     {
-        const V2SpawnSpec* anchor = rt.FindSpawnByName("AnchorB");
+        const V2SpawnSpec* expected = nullptr;
+        for (int r = 0; r < rt.Spec().room_count && !expected; ++r) {
+            for (int s = 0; s < rt.Spec().rooms[r].spawn_count; ++s) {
+                const V2SpawnSpec& spawn = rt.Spec().rooms[r].spawns[s];
+                if (spawn.kind == kSpawnAnchor) {
+                    expected = &spawn;
+                    break;
+                }
+            }
+        }
+        assert(expected != nullptr);
+        const V2SpawnSpec* anchor = rt.FindSpawnByName(expected->name);
         assert(anchor != nullptr);
         assert(anchor->kind == kSpawnAnchor);
-        printf("PASS: FindSpawnByName(AnchorB) found anchor\n");
+        assert(anchor->source_id == expected->source_id);
+        printf("PASS: FindSpawnByName(%s) found anchor\n", anchor->name);
     }
 
     rt.Reset();

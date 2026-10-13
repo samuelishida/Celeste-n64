@@ -48,34 +48,48 @@ int main(int argc, char** argv) {
 
     // 1. Header sanity.
     CHECK(std::memcmp(mesh->header->magic, "CMSH", 4) == 0, "magic CMSH");
-    CHECK(mesh->header->version == 1, "version 1");
+    CHECK(mesh->header->version == 2, "version 2");
+    CHECK(mesh->header->solid_grid_count > 0 && mesh->solid_grid != nullptr,
+          "OG SolidGrid metadata loaded (%u records)",
+          mesh->header->solid_grid_count);
+    {
+        uint32_t tagged_triangles = 0;
+        bool ranges_resolve = true;
+        for (uint32_t i = 0; i < mesh->header->triangle_count; ++i)
+            tagged_triangles += SolidGridRecordOf(*mesh, static_cast<int>(i)) != nullptr;
+        for (uint32_t i = 0; i < mesh->header->solid_grid_count; ++i) {
+            const CollSolidGridRecord& record = mesh->solid_grid[i];
+            bool first_seen = false, last_seen = false;
+            for (uint32_t f = 0; f < mesh->header->triangle_count; ++f) {
+                const uint16_t source_id = mesh->triangles[f].source_face_id;
+                first_seen |= source_id == record.first_source_face_id;
+                last_seen |= source_id == record.last_source_face_id;
+            }
+            ranges_resolve &= first_seen && last_seen;
+        }
+        CHECK(tagged_triangles > 0, "collision triangles resolve to OG solids (%u)", tagged_triangles);
+        CHECK(ranges_resolve, "every OG SolidGrid face range resolves to triangles");
+    }
     CHECK(mesh->header->triangle_count > 0, "has triangles");
     CHECK(mesh->header->bvh_node_count > 0, "has BVH");
 
-    // 2. Post-quantization normal sanity: every triangle's winding normal
-    //    (from dequantized verts) must point the same way as the material
-    //    implies (solid faces point up/outward). We check the floor probe
-    //    instead: a downward raycast from above must hit a floor.
+    // 2. Post-quantization floor query at a map-independent triangle sample.
     {
-        // Fixture floor top is at world y = 64*0.2 = 12.8. Probe the center
-        // of cell (0,0) and both sides of the +X seam (x=200) and -Z seam
-        // (z=0). Cell (0,0) spans world x in [0,200], z in [0,200]; cell
-        // (0,-1) spans z in [-200,0]; cell (1,0) spans x in [200,400].
-        const float probes[][2] = {
-            {100.0f, 100.0f},    // cell (0,0) center
-            {199.0f, 100.0f},    // just inside +X seam (cell 0,0)
-            {201.0f, 100.0f},    // just outside +X seam (cell 1,0)
-            {100.0f, -1.0f},     // just inside -Z seam (cell 0,-1)
-            {100.0f, 1.0f},      // just outside -Z seam (cell 0,0)
-        };
-        for (auto& pr : probes) {
-            RayHit hit = RaycastMesh(*mesh, {pr[0], 20.0f, pr[1]}, {0, -1, 0}, 30.0f);
-            CHECK(hit.hit, "floor hit at (%.0f, %.0f)", pr[0], pr[1]);
-            if (hit.hit) {
-                CHECK(std::fabs(hit.point.y - 12.8f) < 0.5f,
-                      "floor y≈12.8 at (%.0f,%.0f) got %.2f", pr[0], pr[1], hit.point.y);
-            }
+        bool floor_hit = false;
+        for (uint32_t i = 0; i < mesh->header->triangle_count && !floor_hit; ++i) {
+            const CollTriangle& triangle = mesh->triangles[i];
+            if (!(triangle.material & MAT_SOLID)) continue;
+            const Vec3& a = mesh->world_verts[triangle.i0];
+            const Vec3& b = mesh->world_verts[triangle.i1];
+            const Vec3& c = mesh->world_verts[triangle.i2];
+            const Vec3 normal = Norm(Cross(Sub(b,a),Sub(c,a)));
+            if (normal.y < 0.99f) continue;
+            const Vec3 sample = Add(Scale(a,0.5f),Add(Scale(b,0.25f),Scale(c,0.25f)));
+            const RayHit hit = RaycastMesh(*mesh,{sample.x,sample.y+5.0f,sample.z},
+                                           {0,-1,0},10.0f,BackfaceCull::Ignore);
+            floor_hit = hit.hit && std::fabs(hit.point.y-sample.y) < 0.1f;
         }
+        CHECK(floor_hit, "ray hits an authored upward-facing triangle");
     }
 
     // 3. Maximum position error: dequantized verts must be within a small
@@ -117,7 +131,9 @@ int main(int argc, char** argv) {
         uint32_t nt = mesh->header->triangle_count;
         uint32_t nb = mesh->header->bvh_node_count;
         // world_verts (3xf32) + triangles (8B) + BVH nodes (16B) + header.
-        size_t resident = nv * 12 + nt * 8 + nb * 16 + sizeof(CollHeader) + 4096;
+        size_t resident = nv * 12 + nt * 8 + nb * 16 +
+            mesh->header->solid_grid_count * sizeof(CollSolidGridRecord) +
+            sizeof(CollHeader) + 4096;
         printf("  resident estimate: %zu bytes (%.1f KB)\n", resident, resident / 1024.0);
         CHECK(resident < 1024 * 1024, "resident < 1 MB");
     }

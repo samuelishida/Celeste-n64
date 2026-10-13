@@ -201,8 +201,8 @@ MAT_DEATH = 0x0004
 MAT_CLIMBABLE = 0x0008
 MAT_ICE = 0x0010
 
-# Colmesh triangle type: (i0, i1, i2, material_flags, face_id)
-ColmeshTriangle = Tuple[int, int, int, int, int]
+# Colmesh triangle type: (i0, i1, i2, material_flags, face_id, source_face_id)
+ColmeshTriangle = Tuple[int, int, int, int, int, int]
 
 
 def material_class_to_flags(mc: MaterialClass) -> int:
@@ -398,7 +398,8 @@ def transform_normal(n: Vec3) -> Vec3:
 
 def is_upward_face(face: FaceDef) -> bool:
     """Return True if the face's game-space normal points upward (y > 0.3)."""
-    n = transform_normal(face["normal"])
+    # Parsed clipping planes point inward; exposed surface normal points out.
+    n = transform_normal(tuple(-v for v in face["normal"]))
     return n[1] > 0.3
 
 

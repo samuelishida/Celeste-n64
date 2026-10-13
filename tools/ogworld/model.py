@@ -31,6 +31,18 @@ MAT_DEATH = 0x0004
 MAT_CLIMBABLE = 0x0008
 MAT_ICE = 0x0010
 
+DYNAMIC_SOLID_KIND = {
+    "TrafficBlock": 1,
+    "FallingBlock": 2,
+    "FloatyBlock": 3,
+    "MovingBlock": 4,
+    "GateBlock": 5,
+    "CassetteBlock": 6,
+    "BreakBlock": 7,
+    "DoubleDashPuzzleBlock": 8,
+}
+DYNAMIC_SOLID_MISSING_TARGET = 0xFFFFFFFF
+
 
 @dataclass(frozen=True)
 class SourceFace:
@@ -58,6 +70,10 @@ class SourceFace:
     rotation: float = 0.0
     scale_u: float = 1.0
     scale_v: float = 1.0
+    # Per-axis source->conditioned texture scale.  Kept on source identity so
+    # clipped polygons recompute identical UVs in every visual cell.
+    uv_scale_u: float = 1.0
+    uv_scale_v: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -70,6 +86,11 @@ class SourceBrush:
     entity_index: int
     brush_index: int
     classname: str
+    # OG Solid actors collect all brushes on an entity into one local solid,
+    # then apply entity origin/yaw through Actor.Matrix at initial load.
+    entity_origin: Vec3 = (0.0, 0.0, 0.0)
+    has_entity_origin: bool = False
+    entity_angle_degrees: int = 0
     planes: Tuple[dict, ...] = ()
     faces: Tuple[SourceFace, ...] = ()
     valid: bool = True
@@ -99,6 +120,10 @@ class WorldPolygon:
     classname: str
     texture: str
     src_face: Optional["SourceFace"] = None
+    # For actor-owned Solid faces, exact OG LocalVertices-space geometry
+    # before the final actor Position/Facing transform.
+    actor_local_verts: Tuple[Vec3, ...] = ()
+    actor_local_normal: Optional[Vec3] = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +140,8 @@ class CollisionTriangle:
     entity_index: int
     brush_index: int
     face_index: int
+    og_solid_id: int = -1
+    og_face_order: int = -1
 
 
 @dataclass(frozen=True)
@@ -134,6 +161,41 @@ class SpawnRecord:
     name: str
     classname: str
     properties: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class HazardRecord:
+    """OG actor-backed hazard volume in world-space coordinates.
+
+    Bounds reproduce Map.LoadActor's UseSolidsAsBounds + Actor.WorldBounds.
+    Spike direction is its pre-SolidRayCast candidate; runtime applies OG's
+    10-unit static-solid flip test against the loaded collision world.
+    """
+    kind: str                    # "death" | "spike"
+    source_id: int
+    bounds_min: Vec3
+    bounds_max: Vec3
+    spike_direction: Vec3 = (0.0, 0.0, 0.0)
+
+
+@dataclass(frozen=True)
+class DynamicSolidRecord:
+    """Source-derived actor-owned Solid record for MPP5 + DSOL."""
+    source_id: int
+    classname: str
+    kind: int
+    position: Vec3 = (0.0, 0.0, 0.0)
+    yaw_degrees: int = 0
+    flags: int = 0
+    target_source_id: int = DYNAMIC_SOLID_MISSING_TARGET
+    target_position: Vec3 = (0.0, 0.0, 0.0)
+    solid_id: int = 0xFFFF
+    cms_first_source_face_id: int = 0
+    cms_face_count: int = 0
+    dsol_first_face: int = 0
+    dsol_face_count: int = 0
+    dsol_first_vertex: int = 0
+    dsol_vertex_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -167,7 +229,10 @@ class WorldBuild:
     collision_tris: List[CollisionTriangle] = field(default_factory=list)
     chunks: Dict[CellKey, ChunkInput] = field(default_factory=dict)
     spawns: List[SpawnRecord] = field(default_factory=list)
+    hazards: List[HazardRecord] = field(default_factory=list)
+    dynamic_solids: List[DynamicSolidRecord] = field(default_factory=list)
     texture_manifest: List[str] = field(default_factory=list)
+    texture_profiles: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     source_sha256: str = ""
     source_path: str = ""
     scale: float = 0.2

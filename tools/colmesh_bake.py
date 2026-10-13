@@ -60,7 +60,8 @@ def material_flags(tex_name: str) -> int:
 def triangulate_lvl(lvl, manifest_path: str = None) -> tuple:
     """Return (positions, triangles, visual_only_skipped) where:
        positions: list of (x,y,z) float tuples
-       triangles: list of (i0,i1,i2, material_uint16, face_id_uint16) tuples
+       triangles: list of (i0,i1,i2, material_uint16, face_id_uint16,
+                           source_face_id_uint16) tuples
     """
     # Material IDs in .lvl faces are remapped to manifest-order indices
     # by bake_map.py.  Read the .manifest sidecar to get the correct
@@ -105,7 +106,7 @@ def triangulate_lvl(lvl, manifest_path: str = None) -> tuple:
             i1 = indices[k]
             i2 = indices[k + 1]
             tri_face_id = len(triangles)  # face_id == triangle array index
-            triangles.append((i0, i1, i2, mat, tri_face_id))
+            triangles.append((i0, i1, i2, mat, tri_face_id, face_id + 1))
         face_id += 1
 
     return positions, triangles, visual_only_skipped
@@ -271,7 +272,7 @@ def write_colmesh(out_path: str, positions, triangles, bvh_nodes,
 
     # Sizes
     VERT_SIZE  = 6   # int16[3]
-    TRI_SIZE   = 12  # uint16 i0,i1,i2, material, face_id, pad
+    TRI_SIZE   = 12  # uint16 i0,i1,i2, material, face_id, source_face_id
     NODE_SIZE  = 16  # int16[6], uint16[2]
     LINK_SIZE  = 4   # uint16 face_id, owner_id
 
@@ -310,8 +311,9 @@ def write_colmesh(out_path: str, positions, triangles, bvh_nodes,
         # Triangles
         assert f.tell() == triangle_offset, f"tri offset mismatch: {f.tell()} vs {triangle_offset}"
         for tri in triangles:
-            i0, i1, i2, mat, face_id = tri
-            f.write(struct.pack(">HHHHHxx", i0, i1, i2, mat, face_id))  # xx = 2 pad bytes = 0
+            i0, i1, i2, mat, face_id, source_face_id = tri
+            f.write(struct.pack(">HHHHHH", i0, i1, i2, mat, face_id,
+                                source_face_id))
         while f.tell() % 8 != 0:
             f.write(b'\x00')
 
@@ -374,8 +376,8 @@ def main():
     # Update face_id to equal new array position (face_id == array_index invariant).
     reordered_tris = []
     for new_idx, tri in enumerate(sorted_tris):
-        i0, i1, i2, mat, _old_face_id = tri
-        reordered_tris.append((i0, i1, i2, mat, new_idx))
+        i0, i1, i2, mat, _old_face_id, source_face_id = tri
+        reordered_tris.append((i0, i1, i2, mat, new_idx, source_face_id))
 
     assert len(reordered_tris) == len(triangles), "sorted tri count mismatch"
 
