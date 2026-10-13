@@ -123,29 +123,6 @@ def _point_in_tri2d(p, a, b, c):
     return not (has_neg and has_pos)
 
 
-def _convex_hull2d(pts):
-    """Andrew's monotone chain; returns the hull in CCW order."""
-    pts = sorted(set(pts))
-    if len(pts) < 3:
-        return pts
-
-    def cross(o, a, b):
-        return ((a[0] - o[0]) * (b[1] - o[1]) -
-                (a[1] - o[1]) * (b[0] - o[0]))
-
-    lower = []
-    for p in pts:
-        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
-            lower.pop()
-        lower.append(p)
-    upper = []
-    for p in reversed(pts):
-        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
-            upper.pop()
-        upper.append(p)
-    return lower[:-1] + upper[:-1]
-
-
 # ── Outline + fan ─────────────────────────────────────────────────────────
 
 def _outline_of_group(group, quant: float = QUANT):
@@ -153,8 +130,8 @@ def _outline_of_group(group, quant: float = QUANT):
 
     Returns `(ring2d, (u, v, origin))` where `ring2d` is a CCW list of 2D
     points on the group's plane (quantized to `quant`), or None if the outline
-    is non-simple (multiple loops / self-intersecting) — the caller falls
-    back to a convex hull.
+    is non-simple (multiple loops / self-intersecting) — the caller preserves
+    source polygons instead of filling gaps with an invented hull.
     """
     n = group[0].normal
     u, v = _plane_basis(n)
@@ -230,7 +207,7 @@ def _fan_polygon(ring2d):
     """Ear-clip a CCW 2D ring into triangles.
 
     Returns a list of `(i0, i1, i2)` index triples into `ring2d`, or None if
-    the ring is non-simple (caller falls back to a convex hull).
+    ear clipping cannot preserve the ring (caller triangulates source faces).
     """
     pts = list(ring2d)
     n = len(pts)
@@ -281,40 +258,33 @@ def _group_triangles(group):
     """Fan a coplanar group into 3D triangles.
 
     Returns a list of `(tri3d, material_id)` where `tri3d` is a 3-tuple of
-    3D points. Uses the union outline + ear-clipping, with a convex-hull
-    fallback for non-simple outlines.
+    3D points. Uses the union outline + ear-clipping when it is simple.
+    Disconnected outlines and holes fall back to the original convex faces;
+    a convex hull would invent surfaces across empty space.
     """
     mat = group[0].material_id
-    n = group[0].normal
-    u, v = _plane_basis(n)
-    origin = group[0].verts[0]
+
+    def source_face_triangles():
+        triangles = []
+        for poly in group:
+            if len(poly.verts) < 3:
+                continue
+            # Source WorldPolygons are convex, so a fan preserves their exact
+            # covered region even when the coplanar union has multiple loops.
+            for i in range(1, len(poly.verts) - 1):
+                tri = (poly.verts[0], poly.verts[i], poly.verts[i + 1])
+                if _tri_area(*tri) > 1e-6:
+                    triangles.append((tri, poly.material_id))
+        return triangles
 
     outline = _outline_of_group(group)
     if outline is None:
-        # Convex-hull fallback over all the group's vertices.
-        pts2d = [_to2d(p, u, v, origin) for poly in group for p in poly.verts]
-        hull = _convex_hull2d(pts2d)
-        if len(hull) < 3:
-            return []
-        tris = []
-        for i in range(1, len(hull) - 1):
-            tris.append((_from2d(hull[0][0], hull[0][1], u, v, origin),
-                         _from2d(hull[i][0], hull[i][1], u, v, origin),
-                         _from2d(hull[i + 1][0], hull[i + 1][1], u, v, origin)))
-        return [(t, mat) for t in tris]
+        return source_face_triangles()
 
     ring2d, (u2, v2, origin2) = outline
     tris2d = _fan_polygon(ring2d)
     if tris2d is None:
-        hull = _convex_hull2d(ring2d)
-        if len(hull) < 3:
-            return []
-        tris = []
-        for i in range(1, len(hull) - 1):
-            tris.append((_from2d(hull[0][0], hull[0][1], u2, v2, origin2),
-                         _from2d(hull[i][0], hull[i][1], u2, v2, origin2),
-                         _from2d(hull[i + 1][0], hull[i + 1][1], u2, v2, origin2)))
-        return [(t, mat) for t in tris]
+        return source_face_triangles()
 
     tris = []
     for (i0, i1, i2) in tris2d:
@@ -379,6 +349,14 @@ def _quantize(triangles):
         if len(set(idxs)) == 3:
             faces.append((tuple(idxs), mat))
             face_groups.append(gi)
+    non_degenerate = [
+        (face, group)
+        for face, group in zip(faces, face_groups)
+        if _tri_area(*(verts[i] for i in face[0])) > 1e-6
+    ]
+    if len(non_degenerate) != len(faces):
+        faces = [face for face, _ in non_degenerate]
+        face_groups = [group for _, group in non_degenerate]
     return verts, faces, face_groups
 
 

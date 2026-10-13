@@ -155,10 +155,12 @@ def test_bake_geometry_equivalence():
         from lvl_format import LvlFile
         staging = Path(d) / "staging"
         dlods = sorted(staging.glob("*_distant.dlod"))
-        # Near LVLs (the decimator's source geometry): <chunk>.lvl (not
-        # *_distant.lvl, which Inc 5 removed).
-        lvls = sorted(p for p in staging.glob("*.lvl")
-                      if not p.name.endswith("_distant.lvl"))
+        # Near LVLs with geometry (the decimator's source geometry). Spawn-only
+        # rooms may have an empty LVL and correctly emit no distant mesh.
+        lvls = sorted(
+            p for p in staging.glob("*.lvl")
+            if not p.name.endswith("_distant.lvl") and LvlFile.read(str(p)).faces
+        )
         assert len(dlods) > 0, "no .dlod files emitted"
         assert len(dlods) == len(lvls), "dlod/lvl count mismatch"
 

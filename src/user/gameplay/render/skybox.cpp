@@ -6,17 +6,18 @@
 #include <t3d/t3d.h>
 #include <t3d/t3dmath.h>
 
+#include "gameplay/render/skybox_math.hpp"
+
 namespace madeline_cube {
 
-// A simple skybox: a large cube centered on the camera, drawn with a
-// rotation-only transform (arch.md §29) so it never moves with the camera.
-// The cube is 8 vertices (12 triangles), flat-colored.
+// A simple skybox: a camera-relative cube (the view is camera-at-origin),
+// rotation-only and flat-colored. Keep its corners inside the near pass far
+// plane; an oversized skybox gets clipped into screen-spanning wedges.
 void Skybox::Init(const char* sprite_path_or_null) {
     Free();
     (void)sprite_path_or_null;  // textured dome is future work
 
-    // Build a cube of half-extent 1 (scaled up by the matrix to sit behind
-    // the world). Vertices in local space; the matrix scales + rotates.
+    // Build a unit cube; the model matrix scales it to a safe near-pass size.
     static const float kHalf = 1.0f;
     const float c[8][3] = {
         {-kHalf, -kHalf, -kHalf}, { kHalf, -kHalf, -kHalf},
@@ -34,8 +35,8 @@ void Skybox::Init(const char* sprite_path_or_null) {
         {4,5,1,0},  // -Y
     };
 
-    // 36 vertices -> 18 pairs.
-    pair_count_ = 18;
+    // 36 vertices -> 18 pairs: two independent triangles per face.
+    pair_count_ = kSkyboxFaceCount * kSkyboxVerticesPerFace / 2;
     verts_ = static_cast<T3DVertPacked*>(
         malloc_uncached(sizeof(T3DVertPacked) * pair_count_));
     if (!verts_) { pair_count_ = 0; return; }
@@ -43,7 +44,7 @@ void Skybox::Init(const char* sprite_path_or_null) {
     T3DVec3 n = {{0, 0, 1}};
     uint16_t norm = t3d_vert_pack_normal(&n);
     int vi = 0;
-    for (int f = 0; f < 6; ++f) {
+    for (int f = 0; f < kSkyboxFaceCount; ++f) {
         for (int t = 0; t < 2; ++t) {
             int idx[3];
             if (t == 0) { idx[0]=faces[f][0]; idx[1]=faces[f][1]; idx[2]=faces[f][2]; }
@@ -70,9 +71,9 @@ void Skybox::Init(const char* sprite_path_or_null) {
     matrix_fp_ = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
     T3DMat4 m;
     t3d_mat4_identity(&m);
-    // Scale the unit cube to a large sky dome radius (e.g. 2000 units) so it
-    // sits behind the distant world. Rotation-only: no translation.
-    t3d_mat4_scale(&m, 2000.0f, 2000.0f, 2000.0f);
+    // The near camera far plane is 800; 350-unit half extent keeps every cube
+    // corner within it. Rotation-only: no translation.
+    t3d_mat4_scale(&m, kSkyboxHalfExtent, kSkyboxHalfExtent, kSkyboxHalfExtent);
     t3d_mat4_to_fixed(matrix_fp_, &m);
     debugf("[skybox] initialized\n");
 }
@@ -85,7 +86,9 @@ void Skybox::Free() {
 
 void Skybox::Draw(const CameraDesc& cam) {
     if (!verts_ || !matrix_fp_) return;
-    (void)cam;
+    // The screen clear is already sky-blue; skip this cube if a caller narrows
+    // the far plane so it cannot fit without clipping into a large wedge.
+    if (!SkyboxFitsFarPlane(cam.far)) return;
 
     // Draw with Z off (sky sits behind everything) and a flat combiner.
     rdpq_sync_pipe();
@@ -96,10 +99,11 @@ void Skybox::Draw(const CameraDesc& cam) {
 
     t3d_matrix_push(matrix_fp_);
     t3d_vert_load(verts_, 0, pair_count_ * 2);
-    for (int f = 0; f < 6; ++f) {
-        int base = f * 6;
-        t3d_tri_draw(base, base + 1, base + 2);
-        t3d_tri_draw(base, base + 2, base + 3);
+    for (int f = 0; f < kSkyboxFaceCount; ++f) {
+        for (int triangle_index = 0; triangle_index < 2; ++triangle_index) {
+            const SkyboxTriangle triangle = SkyboxTriangleForFace(f, triangle_index);
+            t3d_tri_draw(triangle.a, triangle.b, triangle.c);
+        }
     }
     t3d_tri_sync();
     t3d_matrix_pop(1);

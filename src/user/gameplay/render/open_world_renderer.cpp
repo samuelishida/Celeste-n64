@@ -1,8 +1,13 @@
 #include "gameplay/render/open_world_renderer.hpp"
 
 #include <t3d/t3d.h>
+#include <rdpq.h>
+#include <rdpq_mode.h>
 
 #include "gameplay/render/distant_tier_renderer.hpp"  // render-distance Inc 4
+#include "gameplay/world/dynamic_solid_geometry.hpp"
+#include "gameplay/render/dynamic_solid_renderer.hpp"
+#include "gameplay/render/material_catalog.hpp"
 #include "gameplay/render/skybox.hpp"
 #include "gameplay/render/tile_streamer.hpp"
 #include "gameplay/world/mappack_loader.hpp"
@@ -14,6 +19,7 @@ OpenWorldRenderer::OpenWorldRenderer()
     : tile_streamer_(new TileStreamer()),
       skybox_(new Skybox()),
       distant_tier_(new DistantTierRenderer()),
+      dynamic_solid_renderer_(new DynamicSolidRenderer()),
       profiler_(60) {
     skybox_->Init(nullptr);  // flat-colored dome (textured skybox is future work)
     // The renderer's profiler is SILENT: rom_main is the single report path and
@@ -27,6 +33,7 @@ OpenWorldRenderer::OpenWorldRenderer()
 }
 
 OpenWorldRenderer::~OpenWorldRenderer() {
+    delete dynamic_solid_renderer_;
     delete distant_tier_;
     delete skybox_;
     delete tile_streamer_;
@@ -64,27 +71,48 @@ void OpenWorldRenderer::RenderHighPriority(const CameraDesc& cam) {
     tile_streamer_->DrawHighPriority(cam);
 }
 
-void OpenWorldRenderer::Render(const CameraDesc& cam) {
-    // Single near pass: draw the skybox first, then the resident ring, then the
-    // distant horizon (render-distance Inc 4). The viewport is attached once
-    // per frame by the caller; NO mid-frame projection switching (the distant
-    // tier uses the SAME camera as the near pass — the historical z-split
-    // corruption root cause is removed by design).
-    skybox_->Draw(cam);
+void OpenWorldRenderer::Render(const CameraDesc& near_cam,
+                               const CameraDesc& distant_cam,
+                               const Vec3* player_position) {
+    // Caller attached a dedicated sky viewport using near clip planes; the
+    // sky cube must not be clipped by distant.near (>350u). All viewports have
+    // independent matrix buffers, so no projection is rewritten in flight.
+    skybox_->Draw(near_cam);
+    if (kEnableDistantTier && distant_tier_ && distant_viewport_) {
+        profiler_.BeginPhase(n64::FrameProfiler::kPhaseDistant);
+        t3d_viewport_attach(static_cast<T3DViewport*>(distant_viewport_));
+        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(
+            T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
+        rdpq_mode_mipmap(MIPMAP_NONE, 0);
+        rdpq_mode_combiner(
+            RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
+        distant_tier_->Draw(distant_cam, &counters_, *tile_streamer_);
+        profiler_.EndPhase(n64::FrameProfiler::kPhaseDistant);
+    }
+
+    // Never compare Z values produced by different projections. Horizon is a
+    // background fill; clear depth before drawing detailed near geometry.
+    if (near_viewport_) {
+        t3d_viewport_attach(static_cast<T3DViewport*>(near_viewport_));
+        t3d_screen_clear_depth();
+    }
 
     profiler_.BeginPhase(n64::FrameProfiler::kPhaseHighPriority);
-    RenderHighPriority(cam);
+    RenderHighPriority(near_cam);
+    if (dynamic_solids_ && dynamic_solid_renderer_) {
+        dynamic_solid_renderer_->Draw(*dynamic_solids_, material_catalog_, near_cam,
+                                      &counters_, player_position);
+    }
     profiler_.EndPhase(n64::FrameProfiler::kPhaseHighPriority);
-
-    // Distant tier: fills the horizon beyond the near ring. Same camera, Z-on,
-    // flat-color decimated geometry. Gated by kEnableDistantTier (default OFF
-    // — the merged approach regressed perf).
-    if (kEnableDistantTier && distant_tier_) distant_tier_->Draw(cam);
 }
 
 void OpenWorldRenderer::LoadDistantTier(const MapSpecV2& spec,
                                         const char* build_dir) {
     if (distant_tier_) distant_tier_->LoadAll(spec, build_dir);
+}
+
+void OpenWorldRenderer::SetFog(const FogParams& fog) {
+    if (distant_tier_) distant_tier_->SetFog(fog);
 }
 
 void OpenWorldRenderer::BeginFrame() {
@@ -137,7 +165,22 @@ void OpenWorldRenderer::UpdateCamera(const CameraDesc& near_cam, float dt) {
 }
 
 void OpenWorldRenderer::SetMaterialCatalog(const MaterialCatalog* catalog) {
+    material_catalog_ = catalog;
     tile_streamer_->SetMaterialCatalog(catalog);
+}
+
+bool OpenWorldRenderer::SetDynamicSolids(const DynamicSolidGeometry* geometry) {
+    if (!geometry) {
+        if (dynamic_solid_renderer_) dynamic_solid_renderer_->Free();
+        dynamic_solids_ = nullptr;
+        return true;
+    }
+    if (!dynamic_solid_renderer_ || !dynamic_solid_renderer_->Prepare(*geometry)) {
+        dynamic_solids_ = nullptr;
+        return false;
+    }
+    dynamic_solids_ = geometry;
+    return true;
 }
 
 }  // namespace madeline_cube

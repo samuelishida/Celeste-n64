@@ -8,6 +8,7 @@
 //   g++ -std=c++17 -Isrc/user tests/skybox_transform.cpp
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 
 #include "gameplay/render/skybox_math.hpp"
 
@@ -23,6 +24,22 @@ static void expect(bool cond, const char* what) {
 }
 
 int main() {
+    for (int face = 0; face < kSkyboxFaceCount; ++face) {
+        const auto first = SkyboxTriangleForFace(face, 0);
+        const auto second = SkyboxTriangleForFace(face, 1);
+        const int low = face * kSkyboxVerticesPerFace;
+        const int high = low + kSkyboxVerticesPerFace;
+        for (int index : {first.a, first.b, first.c, second.a, second.b, second.c}) {
+            expect(index >= low && index < high, "skybox face triangle stays in its vertex range");
+        }
+        expect(first.a == low && first.b == low + 1 && first.c == low + 2,
+               "skybox first triangle matches emitted vertices");
+        expect(second.a == low + 3 && second.b == low + 4 && second.c == low + 5,
+               "skybox second triangle uses its three emitted vertices");
+    }
+    expect(SkyboxFitsFarPlane(800.0f), "skybox corners fit near-pass far plane");
+    expect(!SkyboxFitsFarPlane(600.0f), "skybox fit check rejects too-short far plane");
+
     // The skybox transform is rotation-only: it must be valid (zero
     // translation) for any camera position/target.
     expect(ValidateSkyboxTransform({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -1.0f}),

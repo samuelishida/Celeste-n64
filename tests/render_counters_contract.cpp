@@ -2,7 +2,7 @@
 // no N64 deps). Asserts (Inc 1 / D6):
 //   (a) `RenderCounters` zero-initializes (all fields 0);
 //   (b) field names match the `RenderCounts` budget semantics (near_batches,
-//       texture_uploads, vert_loads, syncs);
+//       distant_cells/faces, texture_uploads, vert_loads, syncs);
 //   (c) `BudgetsExceeded` uses the matching budget caps.
 //
 // Build:
@@ -27,7 +27,9 @@ int main() {
     // (a) RenderCounters zero-initializes.
     {
         const RenderCounters c;
-        expect(c.near_batches == 0 && c.texture_uploads == 0 &&
+        expect(c.near_batches == 0 && c.near_material_groups == 0 &&
+                   c.distant_cells == 0 &&
+                   c.distant_faces == 0 && c.texture_uploads == 0 &&
                    c.vert_loads == 0 && c.syncs == 0,
                "(a) RenderCounters zero-initializes");
     }
@@ -37,10 +39,15 @@ int main() {
     {
         RenderCounters c;
         c.near_batches = 2;
+        c.near_material_groups = 7;
+        c.distant_cells = 6;
+        c.distant_faces = 80;
         c.texture_uploads = 3;
         c.vert_loads = 4;
         c.syncs = 5;
-        expect(c.near_batches == 2 && c.texture_uploads == 3 &&
+        expect(c.near_batches == 2 && c.near_material_groups == 7 &&
+                   c.distant_cells == 6 &&
+                   c.distant_faces == 80 && c.texture_uploads == 3 &&
                    c.vert_loads == 4 && c.syncs == 5,
                "(b) counters hold assigned values");
     }

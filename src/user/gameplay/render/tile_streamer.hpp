@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 
 #include "gameplay/math_types.hpp"
 #include "gameplay/render/pass_camera_math.hpp"
@@ -32,47 +33,26 @@ struct RendererPools;
 // cost is too high.
 inline constexpr bool kEnableTextures = true;
 
-// Near-pass cone-cull gate (n64-optimization Inc 3). When true,
-// `TileStreamer::UpdateCamera` runs the `CellAabbInNearCone` AABB-cone test
-// per resident cell and draws only the cells inside the (margined) camera
-// cone; when false, every resident cell is force-drawn (the current
-// behavior). Defaults OFF: with a 3×3 resident ring the cone is the only
-// effective cull (the ring cells are all within far), and the screen-edge
-// pop risk is the exact artifact class previously reverted (forward-wedge
-// rationale, AGENTS.md). The cone width is controlled by `kCullMargin`
-// (lod_math.hpp, 1.15f, hardcoded inside the predicate); widen it ±0.05 and
-// re-test a full 360° orbit if a cell's AABB barely clips the cone corner.
-// Rollback is a clean flag flip.
-inline constexpr bool kEnableNearCulling = false;  // render-distance Inc 3: left OFF — house-scene A/B showed ~0 win (all 9 cells in-cone) and no-pop could not be verified with the forward-only autowalk; scene-dependent
-
 // ── Resident-pool constants ──────────────────────────────────────────
-// `kMaxRing` is the DRAWN-ring capacity: the center cell + its up-to-8 ring
-// neighbors (Chebyshev distance 1 in the 2D XZ grid) — exactly the 3×3 that is
-// drawn each frame. This is the same `kMaxVisibleCells` budget the plan caps
-// the near pass at. It stays 9 (the drawn set is UNCHANGED by the preload
-// ring; see `kMaxResident`).
+// `kMaxRing` is the always-resident core: center + up to eight Cheb-1 neighbors.
 constexpr int kMaxRing = 9;
 
-// streaming-experience Inc 3: the RESIDENT-pool capacity — the 5×5 ring
-// (Chebyshev distance 2) that is PRELOADED but not drawn. Preloaded-but-not-
-// drawn cells exist purely to be READY before they enter the 3×3 drawn ring;
-// they never render (the drawn mask is exactly the 3×3). Growing the resident
-// pool from 9 to 25 means a 1-step move keeps 12 overlapping residents instead
-// of 6 (fewer parses per transition) and late loads happen one whole cell
-// away from the drawn boundary (more reveal runway).
-constexpr int kMaxResident = 25;
+// The near camera reaches 800u while cells are 240u wide. Keep four
+// camera-forward Cheb-2 cells resident and drawable to close visible gaps.
+constexpr int kMaxResident = 13;
 
-// Resolve the near-pass resident set. The center cell is always loaded, plus
-// all Chebyshev-1 neighbors (the 3×3 ring) that exist in the manifest. The
-// 9-cell budget exactly matches `kMaxRing`, so no neighbor is dropped due to
-// capacity. The camera direction is used only to prioritize the sort order
-// (forward cells are placed first), not to cull side/back cells; this avoids
-// the screen-edge gaps caused by an aggressive forward half-space cut.
+// Textured near pass is active in this ROM. Reserve only a tiny placeholder
+// for the inactive legacy flat-renderer pool; diagnostic flat builds restore
+// full capacity automatically.
+inline constexpr int kFlatRendererPoolCapacity =
+    kEnableTextures ? 1 : kMaxResident + 1;
+
+// Resolve near-pass residency. Center and every available Cheb-1 neighbor
+// form the protected 3×3 core, then capacity goes to forward Cheb-2 cells.
 //
-// `camera_dir` is the normalized world-space XZ forward direction. It is used
-// as a tie-breaker; pass a zero-length vector to disable prioritization. The
-// legacy `ResolveDistanceRing` alias does exactly that. `out[0]` is the center;
-// map-edge cells simply have fewer neighbors. Returns 1..kMaxRing.
+// `camera_dir` is normalized world-space XZ forward. It ranks cells within a
+// Chebyshev ring; pass zero to disable prioritization. `out[0]` is center;
+// map-edge cells return fewer entries. Production capacity is thirteen.
 // Host-safe — no N64 types.
 inline int ResolveForwardWedge(const MapSpecV2& spec, const V2RoomSpec& center,
                                const Vec3& camera_dir,
@@ -124,8 +104,8 @@ inline int ResolveForwardWedge(const MapSpecV2& spec, const V2RoomSpec& center,
     }
 
     // Sort by cheb ascending, then by dot descending so forward cells are placed
-    // first. Because the 3×3 ring fits in kMaxRing, the sort only affects order,
-    // not coverage.
+    // first. This preserves the complete core ring before spending the bounded
+    // resident budget on forward Cheb-2 coverage.
     for (int a = 1; a < candidate_count; ++a) {
         const Candidate key = candidates[a];
         int b = a - 1;
@@ -144,12 +124,50 @@ inline int ResolveForwardWedge(const MapSpecV2& spec, const V2RoomSpec& center,
     return n;
 }
 
+// Camera-heading sectors keep the four outer preload cells useful while the
+// player orbits in place. Eight 45-degree sectors, with a 7.5-degree switch
+// hysteresis, prevent rapid residency churn at sector boundaries.
+inline int CameraHeadingSector(const Vec3& direction) {
+    if (direction.x * direction.x + direction.z * direction.z < 1e-8f)
+        return -1;
+    const float angle = std::atan2(direction.z, direction.x);
+    int sector = static_cast<int>(std::floor(angle / (kLodPi * 0.25f) + 0.5f));
+    sector = (sector % 8 + 8) % 8;
+    return sector;
+}
+
+inline bool CameraDirectionConfirmsSector(const Vec3& direction, int sector) {
+    if (sector < 0 || sector >= 8) return false;
+    const float length2 = direction.x * direction.x + direction.z * direction.z;
+    if (length2 < 1e-8f) return false;
+    static constexpr float kSectorCenter[8][2] = {
+        {1.0f, 0.0f}, {0.70710678f, 0.70710678f},
+        {0.0f, 1.0f}, {-0.70710678f, 0.70710678f},
+        {-1.0f, 0.0f}, {-0.70710678f, -0.70710678f},
+        {0.0f, -1.0f}, {0.70710678f, -0.70710678f},
+    };
+    const float inv_length = 1.0f / std::sqrt(length2);
+    const float alignment = direction.x * inv_length * kSectorCenter[sector][0] +
+                            direction.z * inv_length * kSectorCenter[sector][1];
+    return alignment >= 0.96592583f;  // cos(15 degrees)
+}
+
 // Backward-compatible alias: the old 3×3 Chebyshev distance-1 ring, with no
 // camera-direction prioritization. Existing tests continue to work.
 inline int ResolveDistanceRing(const MapSpecV2& spec, const V2RoomSpec& center,
                                const V2RoomSpec* out[], int out_capacity) {
     return ResolveForwardWedge(spec, center, Vec3{0.0f, 0.0f, 0.0f}, out,
                                out_capacity, /*max_cheb=*/1);
+}
+
+// Membership in protected Cheb-1 core ring. Core cells are protected from
+// eviction and eligible for detailed near rendering.
+inline bool IsCoreCell(const V2RoomSpec& cell, const V2RoomSpec& center) {
+    const int dx = cell.cell_ix - center.cell_ix;
+    const int dz = cell.cell_iz - center.cell_iz;
+    const int ax = dx < 0 ? -dx : dx;
+    const int az = dz < 0 ? -dz : dz;
+    return (ax > az ? ax : az) <= 1;
 }
 
 // Resolve the visible tile set from a top-view frustum projection. Projects
@@ -209,6 +227,17 @@ struct ResidentSet {
         return -1;
     }
 
+    // Index of the resident occupying this world-grid cell, or -1 if absent.
+    int IndexOfCell(int cell_ix, int cell_iz) const {
+        for (int i = 0; i < count; ++i) {
+            if (spec[i] && spec[i]->cell_ix == cell_ix &&
+                spec[i]->cell_iz == cell_iz) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     // Mark a resident as used at `frame`. No-op if not resident.
     void Touch(const V2RoomSpec* s, uint32_t frame) {
         const int i = IndexOf(s);
@@ -216,23 +245,15 @@ struct ResidentSet {
     }
 
     // Index of the least-recently-used resident that is NOT the center and
-    // NOT in the drawn 3×3 (Chebyshev distance ≤ 1 from the center), or -1 if
-    // every resident is drawn/center (nothing evictable). streaming-experience
-    // Inc 3: the drawn 3×3 must never be evicted (it is what is on screen);
-    // only preloaded outer (cheb=2) cells are evictable.
+    // NOT in protected core ring (Chebyshev distance ≤ 1), or -1 if every
+    // resident is protected. Only preloaded outer (cheb=2) cells are evictable.
     int EvictCandidate(const V2RoomSpec* center) const {
         int best = -1;
         uint32_t best_frame = UINT32_MAX;
         for (int i = 0; i < count; ++i) {
             if (spec[i] == center) continue;  // never evict the center
-            if (center) {
-                const int dx = spec[i]->cell_ix - center->cell_ix;
-                const int dz = spec[i]->cell_iz - center->cell_iz;
-                const int ax = dx < 0 ? -dx : dx;
-                const int az = dz < 0 ? -dz : dz;
-                const int cheb = ax > az ? ax : az;
-                if (cheb <= 1) continue;  // never evict the drawn 3×3
-            }
+            if (center && IsCoreCell(*spec[i], *center))
+                continue;  // never evict the core ring
             if (last_used[i] < best_frame) {
                 best_frame = last_used[i];
                 best = i;
@@ -245,25 +266,51 @@ struct ResidentSet {
     bool OverCapacity() const { return count > capacity; }
 };
 
-// Per-frame visibility mask for the resident pool. Host-safe: a small fixed-size
-// bitmask so `TileStreamer` can resolve visibility once per frame and both the
-// orchestrator (distant skip) and `DrawHighPriority` reuse the same decision.
+// Near geometry owns a resident cell only after its detailed renderer is
+// ready. Pending cells remain eligible for DLOD during asynchronous loading.
+template <typename IsReady>
+inline bool IsReadyResidentCell(const ResidentSet& residents, int cell_ix,
+                                int cell_iz, IsReady is_ready) {
+    const int slot = residents.IndexOfCell(cell_ix, cell_iz);
+    return slot >= 0 && is_ready(slot);
+}
+
+// Per-frame near-pass draw mask. Residency stays bounded at 13 cells, while
+// only AABBs intersecting the conservative 3D camera frustum are submitted.
+// DLOD uses the same predicate/margin and yields only to READY cells in this
+// mask, so culling removes work without dropping visible coverage.
 struct ResidentVisibility {
-    // `visible[i]` is true iff `set.spec[i]` is inside the camera frustum this
-    // frame. The mask is recomputed every frame by `TileStreamer::UpdateCamera`.
-    // streaming-experience Inc 3: sized to the RESIDENT pool (kMaxResident);
-    // the mask's meaning becomes "drawn this frame" (the 3×3 = cheb≤1), NOT
-    // "frustum-visible" (see the .cpp).
+    // `visible[i]` is true iff resident i intersects the current near frustum.
     bool visible[kMaxResident] = {};
 
     void Clear() {
         for (int i = 0; i < kMaxResident; ++i) visible[i] = false;
     }
 
-    void Set(int i, bool v) {
-        if (i >= 0 && i < kMaxResident) visible[i] = v;
-    }
 };
+
+inline void ResolveResidentFrustumMask(ResidentVisibility& visibility,
+                                      const ResidentSet& residents,
+                                      const CameraDesc& cam) {
+    visibility.Clear();
+    for (int i = 0; i < residents.count && i < kMaxResident; ++i) {
+        const V2RoomSpec* room = residents.spec[i];
+        if (!room) continue;
+        visibility.visible[i] = CellAabbInFrustum3D(
+            cam.pos, cam.target, cam.up, cam.fov_deg, 4.0f / 3.0f,
+            cam.near, cam.far, room->world_aabb, kCullMargin);
+    }
+}
+
+template <typename IsReady>
+inline bool IsDrawnReadyResidentCell(const ResidentSet& residents,
+                                     const ResidentVisibility& visibility,
+                                     int cell_ix, int cell_iz,
+                                     IsReady is_ready) {
+    const int slot = residents.IndexOfCell(cell_ix, cell_iz);
+    return slot >= 0 && slot < kMaxResident && visibility.visible[slot] &&
+           is_ready(slot);
+}
 
 // streaming-memory-opt Inc 4: per-frame (material, cell, first_run, run_count)
 // triple for the global near-pass material grouping. The near pass is fully
@@ -364,9 +411,8 @@ inline RingDiffResult ResolveRingDiff(const ResidentSet& old_set,
 struct PendingLoadQueue {
     // Host-safe (the slots are POD). Device-only in effect. 128 is a hard
     // bound, not a per-frame budget: the pump still issues one DMA and parses
-    // one cell per frame, so a full 25-cell boot backlog drains over ~25–50
-    // frames. 128 comfortably holds the whole 5×5 ring plus the per-settle
-    // re-enqueue backlog; slots are 20 B each (3.2 KB stack, host test only).
+    // one cell per frame, so a 9-cell boot backlog drains over ~9–18 frames.
+    // Slots are 20 B each (2.5 KB stack, host test only).
     static constexpr int kMaxPending = 128;
     static constexpr uint32_t kPendingTimeoutFrames = 180;  // ~6 s at 30 fps
 
@@ -454,18 +500,6 @@ struct PendingLoadQueue {
     }
 };
 
-// streaming-experience Inc 3: is `cell` in the DRAWN 3×3 centered on `center`
-// (Chebyshev distance ≤ 1 in the 2D XZ grid)? The drawn set is exactly the
-// 3×3 — preloaded outer (cheb=2) cells are resident but never drawn. Host-safe.
-inline bool IsDrawnCell(const V2RoomSpec& cell, const V2RoomSpec& center) {
-    const int dx = cell.cell_ix - center.cell_ix;
-    const int dz = cell.cell_iz - center.cell_iz;
-    const int ax = dx < 0 ? -dx : dx;
-    const int az = dz < 0 ? -dz : dz;
-    const int cheb = ax > az ? ax : az;
-    return cheb <= 1;
-}
-
 // Render-only near-pass tile streamer (Inc 3). Owns a bounded resident pool
 // of `LvlRoomRenderer` instances (the near ring) and stream/evicts cells as
 // the camera moves, never evicting the center. Gameplay stays active-only.
@@ -479,9 +513,8 @@ public:
     bool SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
                    const char* build_dir = nullptr);
 
-    // Same as SetCenter but uses the camera direction to load a forward wedge
-    // instead of a fixed 3×3 square. `camera_dir` is a normalized world-space
-    // XZ forward vector; pass `{0,0,0}` to fall back to the square ring.
+    // Same as SetCenter but uses camera direction to prioritize load order
+    // within the Cheb-1 ring. `camera_dir` is normalized world-space XZ forward.
     bool SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
                    const Vec3& camera_dir, const char* build_dir = nullptr);
 
@@ -521,9 +554,8 @@ public:
     // given the preload ring).
     void PumpAsyncLoads();
 
-    // Per-frame resident visibility resolution. `cam` describes the near
-    // camera so the AABB-cone test can be applied to decide which residents
-    // are on-screen. Returns true if visibility was resolved. `dt` is the
+    // Per-frame resident draw-mask update. All occupied slots become
+    // detailed draws; `cam` drives outer preload re-ranking. `dt` is the
     // frame delta in seconds (streaming-experience Inc 4: ages the reveal
     // animation); defaults to the locked 30 fps frame time.
     bool UpdateCamera(const CameraDesc& cam, float dt = 1.0f / 30.0f);
@@ -534,6 +566,11 @@ public:
     void DrawHighPriority(const CameraDesc& cam);
 
     int ResidentCount() const { return set_.count; }
+    // True when the cell has a loaded detailed renderer. Pending residents are
+    // false, so distant geometry fills their space until streaming completes.
+    bool IsCellReady(int cell_ix, int cell_iz) const;
+    // True only when the near-pass draw mask will submit its detailed cell.
+    bool IsCellDrawn(int cell_ix, int cell_iz) const;
     // streaming-experience Inc 5: how many cells are in the pending queue
     // (queued or in-flight). Telemetry / regression: with the backlog re-
     // enqueue enabled this drains toward 0 as the pump finishes the ring.
@@ -576,9 +613,9 @@ private:
     // streaming-experience Inc 2: the streaming heap budget, set from the
     // host measurement (`tests/streaming_memory_measure.cpp`): staging
     // `MaxLvlSize()` + margin (~125 KB on the current manifest) + headroom for
-    // 25 resident renderers at the MEASURED max per-cell resident cost
+    // 9 resident renderers at the measured max per-cell resident cost
     // (~70 KB for the 93 KB cell_n01_n02; mean ~6.9 KB) + allocator slack.
-    // Worst-case 25-cell ring ≈ 1.75 MB; the heap grows via sbrk (no project
+    // Worst-case 9-cell ring ≈ 630 KB; the heap grows via sbrk (no project
     // cap — the n64.ld ASSERT bounds the ROM image only), so this is a
     // planning/verification figure, not a hard allocation.
     static constexpr uint32_t kStreamingBudgetBytes = 2 * 1024 * 1024;
@@ -647,6 +684,13 @@ private:
     // Shared implementation of SetCenter with an optional camera direction.
     bool SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center,
                        const Vec3& camera_dir, const char* build_dir);
+
+    // The map spec and center are owned by MapRuntime and remain valid for its
+    // lifetime. Only ROM-backed sets may refresh paths with build_dir=null.
+    const MapSpecV2* resident_spec_ = nullptr;
+    const V2RoomSpec* resident_center_ = nullptr;
+    int resident_heading_sector_ = -1;
+    bool camera_refresh_allowed_ = false;
 };
 
 }  // namespace madeline_cube

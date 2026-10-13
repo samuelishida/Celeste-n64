@@ -54,8 +54,8 @@ public:
     }
 
     // Placement-new a T into a free slot. Returns nullptr (and leaves
-    // *out_index = -1) when the pool is full — capacity = kMaxResident + 1
-    // makes that a programming error, so callers assert.
+    // *out_index = -1) when the pool is full — callers size capacity for the
+    // resident set plus one transient replacement slot, then assert on failure.
     T* Acquire(PoolIndex* out_index) {
         for (size_t i = 0; i < kCapacity; ++i) {
             if (!in_use_[i]) {

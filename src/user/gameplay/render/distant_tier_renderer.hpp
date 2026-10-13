@@ -3,20 +3,18 @@
 #include <cstdint>
 
 #include "gameplay/math_types.hpp"
+#include "gameplay/render/fog_math.hpp"
 #include "gameplay/render/pass_camera_math.hpp"
 
 namespace madeline_cube {
 
 class LvlRoomRenderer;  // N64-only
 class MapSpecV2;        // host-safe fwd
+class TileStreamer;
 
-// render-distance Inc 4: the whole-map horizon tier. Loads every distant
-// cell's baked `.dlod` (heavily decimated, flat-color) once at boot and draws
-// them as the far background using the SAME near-pass camera/projection (NO
-// mid-frame projection switch — that was the historical z-split corruption
-// root cause, removed by design here). Cells inside the resident near ring
-// are skipped (the near pass draws them in full detail). Cheap: 45 × ~1.4 KB
-// decimated cells ≈ tens of faces each.
+// Whole-map horizon tier. Loads one DLOD direction per cell, frustum-culls
+// cells, then draws visible blocks under one shared camera-relative matrix.
+// Cells submitted by the near pass are omitted; all others retain DLOD coverage.
 class DistantTierRenderer {
 public:
     DistantTierRenderer();
@@ -26,16 +24,18 @@ public:
     // Idempotent (first call loads; later calls no-op).
     void LoadAll(const MapSpecV2& spec, const char* build_dir);
 
-    // Mark a cell as near-drawn so the distant tier skips it (avoids the
-    // near/distant overlap on the same cell).
-    void SetNearCell(int cell_ix, int cell_iz);
-
-    // Draw the whole horizon (call within a t3d frame). Uses the same camera
-    // as the near pass — no projection switch.
-    void Draw(const CameraDesc& cam);
+    // Draw visible horizon blocks using distant projection. Caller owns the
+    // viewport attach and pass boundary. A resident owns its cell only when
+    // the near pass will draw it this frame; pending or culled cells keep DLOD.
+    void Draw(const CameraDesc& cam, struct RenderCounters* counters,
+              const TileStreamer& near_streamer);
 
     // Free all distant renderers.
     void FreeAll();
+
+    // Horizon fog (Inc 6): fade the distant tier into atmosphere. Applied
+    // around the DLOD draw; torn down before the near pass.
+    void SetFog(const FogParams& fog);
 
 private:
     struct Impl;

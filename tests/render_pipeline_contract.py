@@ -80,8 +80,8 @@ def test_camera_relative_does_not_overflow_int16():
     d = tempfile.mkdtemp(prefix="inc1-camera-")
     try:
         bake(d)
-        from mappack_format import read_mappack_v2_binary
-        pack = read_mappack_v2_binary(
+        from mappack_format import read_mappack_binary
+        pack = read_mappack_binary(
             str(Path(d) / "staging" / "forsyken-city.mappack"))
         assert len(pack.rooms) > 0, "no rooms in bake"
 

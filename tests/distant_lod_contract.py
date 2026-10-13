@@ -99,8 +99,8 @@ def test_distant_lod_fits_int16_at_max_far():
     d = tempfile.mkdtemp(prefix="inc4-distant-")
     try:
         bake(d)
-        from mappack_format import read_mappack_v2_binary
-        pack = read_mappack_v2_binary(
+        from mappack_format import read_mappack_binary
+        pack = read_mappack_binary(
             str(Path(d) / "staging" / "forsyken-city.mappack"))
         assert len(pack.rooms) > 0, "no rooms in bake"
 

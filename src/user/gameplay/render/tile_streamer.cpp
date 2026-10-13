@@ -9,7 +9,6 @@
 
 #include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/open_world_renderer.hpp"  // RenderCounters (Inc 1 / D7)
-#include "gameplay/render/lod_math.hpp"             // CellAabbInNearCone
 #include "gameplay/debug_flags.hpp"                 // kEnableCompressedCells (memory-opt Inc 2)
 #include "gameplay/render/textured_room_renderer.hpp"
 #include "gameplay/debug_flags.hpp"  // kEnableCellReveal / kRevealDurationSec (Inc 4)
@@ -31,6 +30,11 @@ constexpr size_t kTexSlotBytes = 56 * 1024;
 constexpr size_t kTexScratchBytes = 240 * 1024;
 constexpr size_t kFlatSlotBytes = 44 * 1024;
 constexpr size_t kFlatScratchBytes = 144 * 1024;
+constexpr size_t kInactivePoolBytes = 16;
+constexpr size_t kFlatPoolSlotBytes =
+    kEnableTextures ? kInactivePoolBytes : kFlatSlotBytes;
+constexpr size_t kFlatPoolScratchBytes =
+    kEnableTextures ? kInactivePoolBytes : kFlatScratchBytes;
 
 }  // namespace
 
@@ -39,8 +43,8 @@ constexpr size_t kFlatScratchBytes = 144 * 1024;
 struct RendererPools {
     RendererPool<TexturedRoomRenderer, kMaxResident + 1, kTexSlotBytes,
                  kTexScratchBytes> tex;
-    RendererPool<LvlRoomRenderer, kMaxResident + 1, kFlatSlotBytes,
-                 kFlatScratchBytes> flat;
+    RendererPool<LvlRoomRenderer, kFlatRendererPoolCapacity, kFlatPoolSlotBytes,
+                 kFlatPoolScratchBytes> flat;
 };
 
 namespace {
@@ -61,13 +65,14 @@ TexturedRoomRenderer* AcquireTextured(RendererPools* pools) {
 }
 
 LvlRoomRenderer* AcquireFlat(RendererPools* pools) {
+    if (kEnableTextures) return nullptr;
     PoolIndex idx = -1;
     LvlRoomRenderer* r = pools->flat.Acquire(&idx);
     if (!r) return nullptr;
     r->SetPoolSlot(idx);
-    r->AttachSlotBuffer(pools->flat.SlotBuffer(idx, kFlatSlotBytes),
-                        kFlatSlotBytes, pools->flat.ScratchPtr(),
-                        kFlatScratchBytes);
+    r->AttachSlotBuffer(pools->flat.SlotBuffer(idx, kFlatPoolSlotBytes),
+                        kFlatPoolSlotBytes, pools->flat.ScratchPtr(),
+                        kFlatPoolScratchBytes);
     return r;
 }
 
@@ -99,6 +104,11 @@ TileStreamer::TileStreamer() {
     // memory-opt Inc 4: allocate the renderer pools (PIMPL — the complete
     // renderer types are available here).
     pools_ = new RendererPools();
+    debugf("[streamer-memory] resident_cap=%u tex_pool=%lu flat_pool=%lu total_pool=%lu\n",
+           static_cast<unsigned int>(kMaxResident),
+           static_cast<unsigned long>(sizeof(pools_->tex)),
+           static_cast<unsigned long>(sizeof(pools_->flat)),
+           static_cast<unsigned long>(sizeof(*pools_)));
 }
 
 TileStreamer::~TileStreamer() {
@@ -225,12 +235,8 @@ bool TileStreamer::SetCenter(const MapSpecV2& spec, const V2RoomSpec& center,
 
 bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center,
                                  const Vec3& camera_dir, const char* build_dir) {
-    // Resolve the resident set. streaming-experience Inc 3: the RESIDENT ring
-    // is the 5×5 (Chebyshev distance 2, forward-biased for load order) — the
-    // preload pool. The DRAWN set stays exactly the 3×3 (cheb≤1), resolved in
-    // `UpdateCamera`'s mask pass. With a camera direction we load a forward
-    // wedge (more cells in front, none behind); without one we fall back to
-    // the old square ring for compatibility.
+    // Resolve bounded residency: complete Cheb-1 core plus four
+    // camera-forward Cheb-2 cells. Every READY resident draws; no cone cull.
     const V2RoomSpec* ring[kMaxResident] = {};
     const int count = ResolveForwardWedge(spec, center, camera_dir, ring,
                                            kMaxResident, /*max_cheb=*/2);
@@ -297,15 +303,14 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
     };
     LoadRecord loaded[kMaxResident] = {};
     int loaded_count = 0;
-    const bool async_ok = kEnableTextures && catalog_ && staging_ != nullptr &&
+    const bool async_ok = kEnableTextures && staging_ != nullptr &&
                           !kEnableCompressedCells;  // memory-opt Inc 2: async reads RAW bytes; compressed cells must load via the asset layer (sync)
     // streaming-experience Inc 5: no per-transition load cap — every new ring
     // cell gets its load work in THIS call. The center still loads
     // synchronously (it must be ready before it draws); non-center cells are
     // enqueued into the pending queue (the 128-slot backlog). The pump drains
-    // one DMA + one parse per frame, so a fresh 25-cell boot backlog goes
-    // READY over ~25-50 frames — before the player can reach cells that are
-    // 2 cells out (the reveal runway). Per-frame work stays bounded by the
+    // one DMA + one parse per frame, so a fresh 9-cell boot backlog goes
+    // READY over ~9-18 frames. Per-frame work stays bounded by the
     // pump, not by queue size; the frame-spike the old cap guarded against
     // never existed once the pump was per-frame.
     for (int i = 0; i < diff.load_count; ++i) {
@@ -313,7 +318,7 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
         const bool is_center = (&rs == &center);
         const char* path = LocalizePath(rs.lvl_path, build_dir);
 
-        if (kEnableTextures && catalog_) {
+        if (kEnableTextures) {
             if (is_center) {
                 // Center: synchronous, fatal on failure (reset + false).
                 TexturedRoomRenderer* tr = AcquireTextured(pools_);
@@ -345,8 +350,8 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
                 loaded[loaded_count++] = {&rs, nullptr, tr};
             }
         } else {
-            // Flat-color fallback path (kEnableTextures off / no catalog):
-            // synchronous only (the async split is for the textured renderer).
+            // Legacy flat-renderer path, retained for builds that disable
+            // TexturedRoomRenderer entirely.
             LvlRoomRenderer* r = AcquireFlat(pools_);
             if (!r) { free_all(); return false; }
             if (!r->Load(path, rs.render_origin)) {
@@ -380,6 +385,7 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
     uint32_t old_last_used[kMaxResident] = {};
     float old_reveal_scale[kMaxResident] = {};
     bool old_revealing[kMaxResident] = {};
+    bool old_visible[kMaxResident] = {};
     for (int k = 0; k < set_.count; ++k) {
         old_spec[k] = set_.spec[k];
         old_flat[k] = renderers_[k];
@@ -387,6 +393,7 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
         old_last_used[k] = set_.last_used[k];
         old_reveal_scale[k] = reveal_scale_[k];
         old_revealing[k] = revealing_[k];
+        old_visible[k] = visibility_.visible[k];
     }
 
     int n = 0;
@@ -408,6 +415,7 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
             last_used = old_last_used[old_idx];
             reveal_scale_[n] = old_reveal_scale[old_idx];
             revealing_[n] = old_revealing[old_idx];
+            visibility_.visible[n] = old_visible[old_idx];
         } else {
             // Loaded cell: look up by SPEC POINTER (identity), never by load
             // index — a failed load leaves a null hole that an index probe
@@ -429,6 +437,9 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
             // New cell: reset reveal to fully-revealed (UpdateCamera re-triggers
             // a reveal if it enters the drawn set while still loading).
             ResetReveal(n);
+            // New residents begin drawable; UpdateCamera applies the enter
+            // frustum before the next draw.
+            visibility_.visible[n] = true;
         }
         renderers_[n] = flat;
         textured_renderers_[n] = tex;
@@ -443,9 +454,14 @@ bool TileStreamer::SetCenterImpl(const MapSpecV2& spec, const V2RoomSpec& center
         textured_renderers_[k] = nullptr;
         set_.spec[k] = nullptr;
         set_.last_used[k] = 0;
+        visibility_.visible[k] = false;
         ResetReveal(k);
     }
     set_.count = n;
+    resident_spec_ = &spec;
+    resident_center_ = &center;
+    resident_heading_sector_ = CameraHeadingSector(camera_dir);
+    camera_refresh_allowed_ = (build_dir == nullptr);
     return n > 0;
 }
 
@@ -507,7 +523,7 @@ bool TileStreamer::LoadSync(const V2RoomSpec& spec, const char* build_dir) {
     if (slot < 0) return false;
     if (textured_renderers_[slot] || renderers_[slot]) return true;  // already ready
     const char* path = LocalizePath(spec.lvl_path, build_dir);
-    if (kEnableTextures && catalog_) {
+    if (kEnableTextures) {
         TexturedRoomRenderer* tr = AcquireTextured(pools_);
         if (!tr) return false;
         if (!tr->Load(path, spec.render_origin, catalog_)) {
@@ -538,7 +554,7 @@ void TileStreamer::RequeueResidentLoads() {
     // by the pump, (c) queue-full stragglers from SetCenter. The queue (128
     // slots) is the backlog; the pump drains it one DMA + one parse per
     // frame. Idempotent — Enqueue dedups against every tracked spec.
-    if (!(kEnableTextures && catalog_ && staging_ != nullptr) ||
+    if (!(kEnableTextures && staging_ != nullptr) ||
         kEnableCompressedCells)  // memory-opt Inc 2: no async when compressed
         return;
     for (int i = 0; i < set_.count; ++i) {
@@ -559,7 +575,7 @@ void TileStreamer::PumpAsyncLoads() {
 
     // 0) Backlog re-enqueue (streaming-experience Inc 5): re-offer any
     // resident-but-not-ready-and-not-tracked cells to the pending queue so
-    // the full 5×5 ring always gets a loading shot (boot backlog, parse-fail
+    // the full bounded ring always gets a loading shot (boot backlog, parse-fail
     // retries, queue-full stragglers). Idempotent; O(resident×slots).
     RequeueResidentLoads();
 
@@ -624,14 +640,45 @@ void TileStreamer::PumpAsyncLoads() {
 }
 
 bool TileStreamer::UpdateCamera(const CameraDesc& cam, float dt) {
-    // Per-frame resident visibility. We resolve which loaded resident cells
-    // are actually inside the camera cone and draw only those. The AABB-cone
-    // predicate widens the cone by atan(half_diag/dist) per corner, so a cell
-    // cannot pass through the frustum with all four corners outside.
-    visibility_.Clear();
+    // Re-rank the four outer preload cells when the camera enters a new
+    // 45-degree heading sector. The angular dead band prevents orbit jitter
+    // from repeatedly freeing/reloading cells; the full 3x3 core is preserved
+    // by ResolveForwardWedge and RingDiff.
+    if (camera_refresh_allowed_ && resident_spec_ && resident_center_) {
+        const Vec3 camera_dir = {
+            cam.target.x - cam.pos.x, 0.0f,
+            cam.target.z - cam.pos.z,
+        };
+        const int desired_sector = CameraHeadingSector(camera_dir);
+        const bool accept_sector = desired_sector >= 0 &&
+            desired_sector != resident_heading_sector_ &&
+            (resident_heading_sector_ < 0 ||
+             CameraDirectionConfirmsSector(camera_dir, desired_sector));
+        if (accept_sector) {
+            const V2RoomSpec* desired[kMaxResident] = {};
+            const int desired_count = ResolveForwardWedge(
+                *resident_spec_, *resident_center_, camera_dir, desired,
+                kMaxResident, /*max_cheb=*/2);
+            bool same_members = desired_count == set_.count;
+            for (int i = 0; same_members && i < desired_count; ++i)
+                same_members = set_.IndexOf(desired[i]) >= 0;
+            if (same_members) {
+                resident_heading_sector_ = desired_sector;
+            } else {
+                if (profiler_)
+                    profiler_->BeginPhase(n64::FrameProfiler::kPhaseStreaming);
+                const bool refreshed = SetCenterImpl(
+                    *resident_spec_, *resident_center_, camera_dir,
+                    /*build_dir=*/nullptr);
+                if (profiler_)
+                    profiler_->EndPhase(n64::FrameProfiler::kPhaseStreaming);
+                if (!refreshed) resident_heading_sector_ = desired_sector;
+            }
+        }
+    }
 
-    // First run the over-capacity eviction safety net (currently unreachable
-    // because the wedge never exceeds kMaxRing, but preserved for robustness).
+    // First run the over-capacity eviction safety net (normally unreachable
+    // because the resolver respects kMaxResident).
     evicted_this_frame_ = 0;
     if (set_.OverCapacity()) {
         while (set_.count > set_.capacity) {
@@ -666,60 +713,28 @@ bool TileStreamer::UpdateCamera(const CameraDesc& cam, float dt) {
         }
     }
 
-    // Build the visibility mask. streaming-experience Inc 3: the mask is the
-    // DRAWN set — exactly the 3×3 centered on the active cell (Chebyshev
-    // distance ≤ 1), independent of `kEnableNearCulling`. Preloaded outer
-    // (cheb=2) residents get `visible=false` (never drawn); the center is
-    // always visible (guard). This is the always-on rule that keeps the drawn
-    // boundary at the 3×3 — drawing preloaded cells would move the visible
-    // boundary outward and re-import the screen-edge pop the `kEnableNearCulling`
-    // gate exists to avoid.
-    //
-    // `kEnableNearCulling` (default OFF) gates ONLY the per-cell AABB-cone
-    // cull test (a future feature); it does NOT change the drawn 3×3 mask.
-    const V2RoomSpec* center = (set_.count > 0) ? set_.spec[0] : nullptr;
+    // Cull only AABBs outside the conservative 3D near frustum. DLOD uses the
+    // same plane test and margin, and yields only to READY cells in this mask.
+    // The 13-cell residency envelope remains unchanged for streaming coverage.
+    ResolveResidentFrustumMask(visibility_, set_, cam);
     for (int i = 0; i < set_.count; ++i) {
-        bool visible = true;
-        if (center && i != 0) {
-            visible = IsDrawnCell(*set_.spec[i], *center);
-            if (kEnableNearCulling && visible) {
-                visible = CellAabbInNearCone(cam.pos, cam.target, cam.fov_deg,
-                                             cam.near, cam.far,
-                                             set_.spec[i]->world_aabb);
-            }
-        }
-        visibility_.Set(i, visible);
-
         // streaming-experience Inc 4: reveal state machine. A cell that is
-        // DRAWN while its renderer is still null (a late load) starts revealing
-        // from epsilon; the scale advances toward 1.0 once the renderer is
-        // READY (so the animation is timed to actual appearance). A cell that
-        // is READY+drawn from its first drawn frame (the normal preloaded case)
-        // stays at 1.0 (instant). A cell that leaves the drawn set resets.
-        // Gated by `kEnableCellReveal`; when OFF, all cells stay at 1.0 (the
-        // byte-identical today path).
+        // resident while its renderer is still null (a late load) starts
+        // revealing from epsilon; the scale advances once READY. Gated by
+        // `kEnableCellReveal`; production keeps this OFF to avoid geometry
+        // appearing to deform during streaming.
         if (kEnableCellReveal) {
-            if (visible) {
-                const bool ready = (textured_renderers_[i] != nullptr) ||
-                                   (renderers_[i] != nullptr);
-                if (!ready) {
-                    // Late load: (re)start the reveal at epsilon; it advances
-                    // once the renderer is ready.
-                    revealing_[i] = true;
-                    reveal_scale_[i] = kRevealEpsilon;
-                } else if (revealing_[i]) {
-                    // Geometry present, reveal in progress → advance.
-                    reveal_scale_[i] += dt / kRevealDurationSec;
-                    if (reveal_scale_[i] >= 1.0f) {
-                        reveal_scale_[i] = 1.0f;
-                        revealing_[i] = false;
-                    }
+            const bool ready = (textured_renderers_[i] != nullptr) ||
+                               (renderers_[i] != nullptr);
+            if (!ready) {
+                revealing_[i] = true;
+                reveal_scale_[i] = kRevealEpsilon;
+            } else if (revealing_[i]) {
+                reveal_scale_[i] += dt / kRevealDurationSec;
+                if (reveal_scale_[i] >= 1.0f) {
+                    reveal_scale_[i] = 1.0f;
+                    revealing_[i] = false;
                 }
-                // else: ready & not revealing & scale==1 → instant, leave.
-            } else {
-                // Left the drawn set: reset (fresh on re-entry).
-                revealing_[i] = false;
-                reveal_scale_[i] = 1.0f;
             }
         }
     }
@@ -734,15 +749,30 @@ void TileStreamer::SetCameraPosition(const Vec3& camera_pos) {
     }
 }
 
+bool TileStreamer::IsCellReady(int cell_ix, int cell_iz) const {
+    return IsReadyResidentCell(
+        set_, cell_ix, cell_iz, [this](int slot) {
+            return renderers_[slot] != nullptr ||
+                   textured_renderers_[slot] != nullptr;
+        });
+}
+
+bool TileStreamer::IsCellDrawn(int cell_ix, int cell_iz) const {
+    return IsDrawnReadyResidentCell(
+        set_, visibility_, cell_ix, cell_iz, [this](int slot) {
+            return renderers_[slot] != nullptr ||
+                   textured_renderers_[slot] != nullptr;
+        });
+}
+
 void TileStreamer::DrawLowPriority(const CameraDesc&) {
     // Inc 3: the near subpass is a no-op here (no water/background yet).
     // Inc 5 fills it in.
 }
 
 void TileStreamer::DrawHighPriority(const CameraDesc& cam) {
-    // Draw exactly the resident cells whose AABB intersects the camera cone
-    // (AABB-cone test, no grid-index cut). The mask is built once per frame by
-    // `UpdateCamera`; an AABB-cone test cannot cut mid-cell.
+    // Draw every READY resident in the fixed bounded set. Pending entries are
+    // skipped here and remain DLOD-owned until their renderer is ready.
 
     // The RDP depth test/write must be ON before any near geometry is emitted.
     // T3D_FLAG_DEPTH only selects zbuf-capable triangle commands; forcing
@@ -769,13 +799,13 @@ void TileStreamer::DrawHighPriority(const CameraDesc& cam) {
     // Build the per-frame triple list (material, cell, first_run, run_count)
     // over the visible textured cells, sort it by material, then upload each
     // sprite once and replay each cell's geometry under that material. The
-    // triple list is a small static buffer sized for the RESIDENT pool
-    // (kMaxResident × 32 materials = 800 × 8 B = 6.4 KB). With the drawn mask
-    // it actually holds ≤ 9 cells (the mask caps drawing), but the safety-net
-    // `break` below silently drops geometry if exceeded, so it is sized for
-    // kMaxResident so the invariant is "never" regardless of mask regressions.
+    // triple list is sized for the RESIDENT pool
+    // (kMaxResident × 32 materials = 416 × 8 B = 3.25 KB).
     static NearMaterialTriple s_triples[kMaxResident * 32];
     int triple_count = 0;
+    if (profiler_) {
+        profiler_->BeginPhase(n64::FrameProfiler::kPhaseNearGroupBuild);
+    }
     for (int i = 0; i < set_.count; ++i) {
         if (!visibility_.visible[i]) continue;
         TexturedRoomRenderer* tr = textured_renderers_[i];
@@ -793,8 +823,16 @@ void TileStreamer::DrawHighPriority(const CameraDesc& cam) {
             ++triple_count;
         }
     }
+    if (counters_) {
+        counters_->near_material_groups = static_cast<uint32_t>(triple_count);
+    }
+    if (triple_count > 0) {
+        SortMaterialTriplesByMaterial(s_triples, triple_count);
+    }
+    if (profiler_) {
+        profiler_->EndPhase(n64::FrameProfiler::kPhaseNearGroupBuild);
+    }
     if (triple_count == 0) return;
-    SortMaterialTriplesByMaterial(s_triples, triple_count);
 
     // Replay: for each material, upload the sprite once, then draw each cell's
     // runs of that material. The whole textured near pass is measured under

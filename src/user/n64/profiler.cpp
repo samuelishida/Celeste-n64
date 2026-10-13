@@ -68,6 +68,7 @@ void FrameProfiler::EndFrame() {
     // cost) over the report window. phase_accum_ticks_ is final after the
     // frame's last EndPhase, so the peak taken here covers the whole frame.
     for (int i = 0; i < kPhaseCount; ++i) {
+        phase_window_ticks_[i] += phase_accum_ticks_[i];
         if (phase_accum_ticks_[i] > phase_peak_ticks_[i])
             phase_peak_ticks_[i] = phase_accum_ticks_[i];
     }
@@ -85,13 +86,14 @@ void FrameProfiler::EndFrame() {
         // every report interval even when silent. Only the debugf self-print
         // is gated (rom_main is the single report path when silent).
         static const char* kPhaseNames[kPhaseCount] = {
-            "high_priority", "texture_upload", "streaming", "update",
+            "distant", "high_priority", "near_group_build", "texture_upload", "streaming", "update", "player_animation", "player_skin", "player_hair", "debug_output", "fixed_step", "actor_world", "player_physics",
         };
         for (int i = 0; i < kPhaseCount; ++i) {
-            const float p_avg = (static_cast<float>(phase_accum_ticks_[i]) /
+            const float p_avg = (static_cast<float>(phase_window_ticks_[i]) /
                                   static_cast<float>(frame_count_)) /
                                 static_cast<float>(TIMER_TICKS_LL(1000));
             phase_avg_ms_[i] = p_avg;
+            phase_window_ticks_[i] = 0;
             // Convert the tick peak to ms (host-safe accessor reads the ms).
             phase_peak_ms_[i] =
                 static_cast<float>(phase_peak_ticks_[i]) /

@@ -26,7 +26,7 @@ sys.path.insert(0, str(REPO / "tools"))
 
 from ogworld.distant_lod import (
     build_distant_lod, _group_coplanar, _group_triangles, _quantize,
-    _outline_of_group, _fan_polygon, _signed_area2d, _convex_hull2d,
+    _outline_of_group, _fan_polygon, _signed_area2d,
     _sort_direction, _DIRECTION_NORMALS,
     QUANT, DEFAULT_BUDGET, DEFAULT_DIRECTION_BUDGET,
 )
@@ -114,6 +114,29 @@ def test_material_split():
     mats = sorted({g[0].material_id for g in groups})
     assert mats == [0, 1], f"material ids not preserved: {mats}"
     print("PASS: material split -> 2 groups with ids [0, 1]")
+
+
+def test_disconnected_coplanar_surfaces_do_not_fill_gap():
+    """Separate coplanar patches must not become their convex hull."""
+    q1 = [(0, 0, 0), (32, 0, 0), (32, 32, 0), (0, 32, 0)]
+    q2 = [(128, 0, 0), (160, 0, 0), (160, 32, 0), (128, 32, 0)]
+    verts, faces, budget_met = build_distant_lod(
+        [_poly(q1, mat=0), _poly(q2, mat=0)], budget=DEFAULT_BUDGET)
+    assert budget_met
+    area = 0.0
+    for idx_tuple, _ in faces:
+        a, b, c = _tri_verts(verts, idx_tuple)
+        ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+        ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+        cross = (ab[1] * ac[2] - ab[2] * ac[1],
+                 ab[2] * ac[0] - ab[0] * ac[2],
+                 ab[0] * ac[1] - ab[1] * ac[0])
+        area += 0.5 * math.sqrt(sum(component * component for component in cross))
+    expected_area = 2.0 * 32.0 * 32.0
+    assert math.isclose(area, expected_area, rel_tol=0.0, abs_tol=1e-6), (
+        f"disconnected patches area {area} != source area {expected_area}; "
+        "convex-hull fallback introduced geometry in the gap")
+    print("PASS: disconnected coplanar patches preserve source area")
 
 
 def test_budget_and_no_degenerate():
@@ -262,6 +285,7 @@ def _plane_basis(n):
 if __name__ == "__main__":
     test_outline_union()
     test_material_split()
+    test_disconnected_coplanar_surfaces_do_not_fill_gap()
     test_budget_and_no_degenerate()
     test_winding_ccw()
     test_quantization()

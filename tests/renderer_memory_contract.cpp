@@ -18,8 +18,14 @@
 #include <cstdlib>
 
 #include "n64/frame_arena.hpp"
+#include "gameplay/render/tile_streamer.hpp"
 
 using namespace n64;
+
+static_assert(madeline_cube::kMaxRing == 9 && madeline_cube::kMaxResident == 13,
+              "resident budget must keep 9-cell core plus 4 forward cells");
+static_assert(madeline_cube::kFlatRendererPoolCapacity == 1,
+              "textured build must not reserve the inactive flat pool");
 
 static int failures = 0;
 
@@ -104,7 +110,7 @@ int main() {
     // resident set (a handful of cell pointers); it must fit trivially.
     {
         FrameArena arena;
-        constexpr size_t kResidentMax = 9;  // near ring: center + 8
+        constexpr size_t kResidentMax = madeline_cube::kMaxResident;
         const size_t resident_budget = sizeof(const void*) * kResidentMax;
         expect(resident_budget < FrameArena::kArenaSize,
                "near-pass resident list fits in the 64 KB arena");

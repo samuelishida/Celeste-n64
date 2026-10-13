@@ -40,7 +40,7 @@ int main() {
 
     ResidentSet set;
     assert(set.count == 0);
-    assert(set.capacity == kMaxResident);  // Inc 3: resident pool is 5×5
+    assert(set.capacity == kMaxResident);  // bounded preload pool, drawn 3×3 intact
 
     // Populate: center + 4 residents, all "used" at distinct frames.
     set.spec[set.count++] = center;

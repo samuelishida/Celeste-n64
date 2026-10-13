@@ -1,36 +1,83 @@
 #include "gameplay/render/model.hpp"
 
-#include <fcntl.h>
-#include <unistd.h>
+#include <cstdio>
 #include <libdragon.h>
 #include <t3d/t3d.h>
 #include <t3d/t3dmath.h>
 #include <t3d/t3dmodel.h>
+#include <rdpq_sprite.h>
 
 namespace madeline_cube {
 
-bool StaticModel::Load(const char* dfs_path) {
-    // Check if file exists before attempting to load
-    int fd = open(dfs_path, O_RDONLY);
-    if (fd < 0) {
-        debugf("[model] file not found: %s\n", dfs_path);
+bool StaticModel::Load(const char* dfs_path, const char* texture_path) {
+    Free();
+    model_path_ = dfs_path;
+    texture_path_ = texture_path;
+    last_error_ = nullptr;
+
+    // Probe DFS paths first. tiny3d/sprite loaders assert on missing files.
+    FILE* model_file = dfs_path ? std::fopen(dfs_path, "rb") : nullptr;
+    if (!model_file) {
+        SetFailure("model path missing");
+        debugf("[model] load FAILED: model=%s texture=%s reason=%s\n",
+               dfs_path ? dfs_path : "(null)",
+               texture_path ? texture_path : "(none)", LastError());
         return false;
     }
-    close(fd);
+    std::fclose(model_file);
+    if (texture_path) {
+        FILE* texture_file = std::fopen(texture_path, "rb");
+        if (!texture_file) {
+            SetFailure("texture path missing");
+            debugf("[model] load FAILED: model=%s texture=%s reason=%s\n",
+                   dfs_path, texture_path, LastError());
+            return false;
+        }
+        std::fclose(texture_file);
+    }
 
     model_ = t3d_model_load(dfs_path);
     if (!model_) {
-        debugf("[model] load FAILED: %s\n", dfs_path);
+        SetFailure("model decode failed");
+        debugf("[model] load FAILED: model=%s texture=%s reason=%s\n",
+               dfs_path, texture_path ? texture_path : "(none)", LastError());
         return false;
     }
     matrix_fp_ = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
-    debugf("[model] loaded: %s\n", dfs_path);
-
+    if (!matrix_fp_) {
+        SetFailure("matrix allocation failed");
+        debugf("[model] load FAILED: model=%s texture=%s reason=%s\n",
+               dfs_path, texture_path ? texture_path : "(none)", LastError());
+        Free();
+        return false;
+    }
+    if (texture_path) {
+        texture_ = sprite_load(texture_path);
+        if (!texture_) {
+            SetFailure("texture decode failed");
+            debugf("[model] load FAILED: model=%s texture=%s reason=%s\n",
+                   dfs_path, texture_path, LastError());
+            Free();
+            return false;
+        }
+        draw_conf_.userData = this;
+        draw_conf_.dynTextureCb = &StaticModel::DynamicTexture;
+    }
     // Record model draw in display list
     rspq_block_begin();
-    t3d_model_draw(model_);
+    if (texture_) t3d_model_draw_custom(model_, draw_conf_);
+    else t3d_model_draw(model_);
     dpl_ = rspq_block_end();
+    if (!dpl_) {
+        SetFailure("display-list allocation failed");
+        debugf("[model] load FAILED: model=%s texture=%s reason=%s\n",
+               dfs_path, texture_path ? texture_path : "(none)", LastError());
+        Free();
+        return false;
+    }
 
+    debugf("[model] loaded: model=%s texture=%s\n",
+           dfs_path, texture_path ? texture_path : "(none)");
     return true;
 }
 
@@ -43,6 +90,11 @@ void StaticModel::Free() {
         t3d_model_free(model_);
         model_ = nullptr;
     }
+    if (texture_) {
+        sprite_free(texture_);
+        texture_ = nullptr;
+    }
+    draw_conf_ = {};
     if (matrix_fp_) {
         free_uncached(matrix_fp_);
         matrix_fp_ = nullptr;
@@ -65,6 +117,13 @@ void StaticModel::Draw() const {
     t3d_matrix_push(matrix_fp_);
     rspq_block_run(dpl_);
     t3d_matrix_pop(1);
+}
+
+void StaticModel::DynamicTexture(void* user_data, const T3DMaterial*,
+                                 rdpq_texparms_t* tile_params, rdpq_tile_t tile) {
+    auto* self = static_cast<StaticModel*>(user_data);
+    if (!self || !self->texture_) return;
+    rdpq_sprite_upload(tile, self->texture_, tile_params);
 }
 
 }  // namespace madeline_cube

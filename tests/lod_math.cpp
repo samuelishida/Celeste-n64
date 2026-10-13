@@ -24,6 +24,33 @@ static void expect(bool cond, const char* what) {
 }
 
 int main() {
+    // --- Conservative camera-frustum culling ---
+    {
+        const Vec3 cam = {0.0f, 0.0f, 0.0f};
+        const Vec3 target = {0.0f, 0.0f, -1.0f};
+        const Vec3 up = {0.0f, 1.0f, 0.0f};
+        const auto visible = [&](const AABB& box) {
+            return CellAabbInFrustum3D(cam, target, up, 45.0f, 4.0f / 3.0f,
+                                       100.0f, 2000.0f, box, 1.0f);
+        };
+        expect(visible({{499, -1, -1001}, {501, 1, -999}}),
+               "3D frustum keeps cell inside view");
+        expect(!visible({{699, -1, -1001}, {701, 1, -999}}),
+               "3D frustum culls cell outside horizontal plane");
+        expect(!visible({{700, -200, -1010}, {720, 200, -990}}),
+               "AABB plane support culls broad off-screen cells");
+        expect(visible({{-1, 399, -1001}, {1, 401, -999}}),
+               "3D frustum includes vertical camera extent");
+        expect(!visible({{-1, 499, -1001}, {1, 501, -999}}),
+               "3D frustum culls cell outside vertical plane");
+        expect(!visible({{-1, -1, -41}, {1, 1, -39}}),
+               "3D frustum culls before near plane");
+        expect(!visible({{-1, -1, -2101}, {1, 1, -2099}}),
+               "3D frustum culls beyond far plane");
+        expect(visible({{530, -40, -1040}, {610, 40, -960}}),
+               "3D frustum conservatively keeps AABB crossing screen edge");
+    }
+
     // --- DirectionalMeshIndex ---
     // Camera +X of the tile => EAST (index 2).
     {

@@ -63,6 +63,28 @@ constexpr rdpq_texparms_t kWrapTexparms = {
     {0.0f, 0, REPEAT_INFINITE, false},  // s
     {0.0f, 0, REPEAT_INFINITE, false},  // t
 };
+constexpr rdpq_texparms_t kClampTexparms = {
+    0, 0,
+    {0.0f, 0, 0, false},
+    {0.0f, 0, 0, false},
+};
+constexpr rdpq_texparms_t kRepeatSClampTTexparms = {
+    0, 0,
+    {0.0f, 0, REPEAT_INFINITE, false},
+    {0.0f, 0, 0, false},
+};
+constexpr rdpq_texparms_t kClampSRepeatTTexparms = {
+    0, 0,
+    {0.0f, 0, 0, false},
+    {0.0f, 0, REPEAT_INFINITE, false},
+};
+
+const rdpq_texparms_t* TextureParms(const MaterialCatalog::MaterialProfile* profile) {
+    if (!profile || (profile->repeat_s && profile->repeat_t)) return &kWrapTexparms;
+    if (profile->repeat_s) return &kRepeatSClampTTexparms;
+    if (profile->repeat_t) return &kClampSRepeatTTexparms;
+    return &kClampTexparms;
+}
 
 }  // namespace
 
@@ -148,6 +170,10 @@ bool TexturedRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
     // memory-opt Inc 4: the file buffer comes from the shared parse scratch
     // (bump-allocated; the scratch is reset at the next parse). No heap alloc.
     uint8_t* buf = static_cast<uint8_t*>(ScratchAlloc((size_t)file_size));
+    if (!buf) {
+        debugf("[texroom] parse scratch too small for %ld bytes\n", file_size);
+        return false;
+    }
     const size_t got = fread(buf, 1, (size_t)file_size, f);
     fclose(f);
     if (got != (size_t)file_size) return false;
@@ -204,7 +230,16 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
         debugf("[texroom] empty level\n"); return false;
     }
 
-    LvlFace* faces = static_cast<LvlFace*>(ScratchAlloc(sizeof(LvlFace) * face_count));
+    // Guard the size_t multiply (see lvl_room_renderer.cpp): a huge face count
+    // from the file would wrap `sizeof(T) * count` on 32-bit size_t.
+    const uint64_t face_bytes =
+        static_cast<uint64_t>(sizeof(LvlFace)) * static_cast<uint64_t>(face_count);
+    if (face_bytes > static_cast<uint64_t>(static_cast<size_t>(-1))) {
+        debugf("[texroom] face_count %u too large\n", static_cast<unsigned>(face_count));
+        return false;
+    }
+    LvlFace* faces =
+        static_cast<LvlFace*>(ScratchAlloc(static_cast<size_t>(face_bytes)));
     if (!faces) return false;
     rd.seek(off_faces);
     for (uint32_t i = 0; i < face_count; ++i) {
@@ -218,7 +253,15 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
         rd.f32(lf.nz);
     }
 
-    LvlVertex* lvl_verts = static_cast<LvlVertex*>(ScratchAlloc(sizeof(LvlVertex) * vertex_count));
+    // Guard the size_t multiply (same as the face table above).
+    const uint64_t vertex_bytes =
+        static_cast<uint64_t>(sizeof(LvlVertex)) * static_cast<uint64_t>(vertex_count);
+    if (vertex_bytes > static_cast<uint64_t>(static_cast<size_t>(-1))) {
+        debugf("[texroom] vertex_count %u too large\n", static_cast<unsigned>(vertex_count));
+        return false;
+    }
+    LvlVertex* lvl_verts =
+        static_cast<LvlVertex*>(ScratchAlloc(static_cast<size_t>(vertex_bytes)));
     if (!lvl_verts) return false;
     rd.seek(off_vertices);
     for (uint32_t i = 0; i < vertex_count; ++i) {
@@ -258,13 +301,11 @@ bool TexturedRoomRenderer::ParseFromBytes(const uint8_t* data, uint32_t size,
         p.posB[2] = toFp(vb.z - render_origin.z);
         p.normA = 0; p.normB = 0;
         p.rgbaA = 0xFFFFFFFF; p.rgbaB = 0xFFFFFFFF;
-        // UVs are in UNWRAPPED TEXEL units (1 unit = 1 texel, world-scale from
-        // the bake pipeline's compute_uv). Pack as s10.5 fixed point where
-        // 1 texel = 32 units (t3d.h: "UV fixed point 10.5 (pixel coords)").
-        // The tile wraps (see kWrapTexparms), so values beyond the 32-texel
-        // sprite are sampled modulo the tile size; the int16 overflow of the
-        // extreme unwrapped values is harmless (65536 is a multiple of the
-        // 1024-unit tile size in s10.5).
+        // UVs are in texel units after bake-time per-face conditioning. Repeat
+        // axes have been shifted by whole texture periods; clamp axes have
+        // been saturated so every packed value fits signed s10.5. Modulo-only
+        // reasoning is insufficient here: int16 overflow preserves sample
+        // phase at vertices but corrupts interpolated gradients and mip LOD.
         p.stA[0] = static_cast<int16_t>(va.u * 32.0f);
         p.stA[1] = static_cast<int16_t>(va.v * 32.0f);
         p.stB[0] = static_cast<int16_t>(vb.u * 32.0f);
@@ -675,8 +716,12 @@ void TexturedRoomRenderer::EmitRunState(uint16_t material_id,
     // else fall back to flat primColor for the whole run.
     sprite_t* sprite = catalog_ ? catalog_->MaterialFor(material_id) : nullptr;
     if (sprite) {
-        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0)));
+        const auto* profile = catalog_ ? catalog_->ProfileFor(material_id) : nullptr;
+        const auto draw_flags = static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0));
+        t3d_state_set_drawflags(draw_flags);
+        rdpq_mode_filter(profile && profile->bilinear_filter ? FILTER_BILINEAR : FILTER_POINT);
         rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
         // RDPQ_COMBINER_TEX_FLAT = (TEX0,0,PRIM,0) = TEX0 * PRIM, so
         // primColor MUST be white here or the texture is tinted by whatever
         // primColor the distant pass (or a flat run) last left.
@@ -687,10 +732,21 @@ void TexturedRoomRenderer::EmitRunState(uint16_t material_id,
         // it holds by construction; assert so a future sprite source cannot
         // regress it.
         assert((reinterpret_cast<uintptr_t>(sprite->data) & 0x7) == 0);
-        rdpq_sprite_upload(TILE0, sprite, &kWrapTexparms);
+        rdpq_sprite_upload(TILE0, sprite, TextureParms(profile));
+        // libdragon's sprite upload counts only appended LOD images when it
+        // calls rdpq_mode_mipmap, but that API expects the total level count
+        // including the base image. Reassert with sprite_get_lod_count's
+        // total, then refresh tiny3d's draw-state snapshot after upload.
+        const int mip_level_count = sprite_get_lod_count(sprite);
+        rdpq_mode_mipmap(
+            mip_level_count > 1 ? MIPMAP_INTERPOLATE : MIPMAP_NONE,
+            mip_level_count > 1 ? mip_level_count : 0);
+        t3d_state_set_drawflags(draw_flags);
         if (counters) ++counters->texture_uploads;  // Inc 1 / D7
     } else {
-        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0)));
+        const auto draw_flags = static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0));
+        rdpq_mode_mipmap(MIPMAP_NONE, 0);
+        t3d_state_set_drawflags(draw_flags);
         rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
         uint32_t color = material_color(material_id);
         rdpq_set_prim_color(RGBA32(
@@ -750,17 +806,28 @@ void TexturedRoomRenderer::EmitBatchCommands(int b, RenderCounters* counters) co
     sprite_t* sprite = catalog_ ? catalog_->MaterialFor(batch.material_id)
                                 : nullptr;
     if (sprite) {
-        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0)));
+        const auto* profile = catalog_ ? catalog_->ProfileFor(batch.material_id) : nullptr;
+        const auto draw_flags = static_cast<T3DDrawFlags>(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0));
+        t3d_state_set_drawflags(draw_flags);
+        rdpq_mode_filter(profile && profile->bilinear_filter ? FILTER_BILINEAR : FILTER_POINT);
         rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+        rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
         // Same primColor-to-white requirement as the run path (see above).
         rdpq_set_prim_color(RGBA32(0xFF, 0xFF, 0xFF, 0xFF));
         // memory-opt Inc 3: sprite upload source — 8-byte RSP DMA contract
         // (see the run path assert above).
         assert((reinterpret_cast<uintptr_t>(sprite->data) & 0x7) == 0);
-        rdpq_sprite_upload(TILE0, sprite, &kWrapTexparms);
+        rdpq_sprite_upload(TILE0, sprite, TextureParms(profile));
+        const int mip_level_count = sprite_get_lod_count(sprite);
+        rdpq_mode_mipmap(
+            mip_level_count > 1 ? MIPMAP_INTERPOLATE : MIPMAP_NONE,
+            mip_level_count > 1 ? mip_level_count : 0);
+        t3d_state_set_drawflags(draw_flags);
         if (counters) ++counters->texture_uploads;  // Inc 1 / D7
     } else {
-        t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0)));
+        const auto draw_flags = static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH | (kEnableBackCull ? T3D_FLAG_CULL_BACK : 0));
+        rdpq_mode_mipmap(MIPMAP_NONE, 0);
+        t3d_state_set_drawflags(draw_flags);
         rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,SHADE,0),(PRIM,0,SHADE,0)));
         uint32_t color = material_color(batch.material_id);
         rdpq_set_prim_color(RGBA32(

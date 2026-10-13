@@ -115,6 +115,12 @@ public:
     // safe: the bake caps faces at kMaxBatches, so vert_count_ fits in int.
     int VertexCount() const { return static_cast<int>(vert_count_); }
 
+    // Exact static command counts for one DrawNoMatrix/Draw call. BuildRuns
+    // precomputes these from the predicates used to capture the RSPQ block.
+    uint32_t DrawBatchCount() const { return counted_batches_; }
+    uint32_t DrawVertLoadCount() const { return counted_vert_loads_; }
+    uint32_t DrawSyncCount() const { return counted_syncs_; }
+
     // The render origin this renderer was loaded with (world units). Stored
     // as a plain Vec3 so host tests can assert it without any N64 dependency.
     const Vec3& RenderOrigin() const { return render_origin_; }

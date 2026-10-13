@@ -104,8 +104,18 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
         debugf("[lvlroom] empty level\n"); fclose(f); return false;
     }
 
-    // Read faces
-    LvlFace* faces = static_cast<LvlFace*>(ScratchAlloc(sizeof(LvlFace) * face_count));
+    // Read faces. Guard the size_t multiply: a huge count from the file would
+    // wrap `sizeof(T) * count` (32-bit size_t on N64), let a tiny scratch block
+    // pass, then overflow it in the loop below.
+    const uint64_t face_bytes =
+        static_cast<uint64_t>(sizeof(LvlFace)) * static_cast<uint64_t>(face_count);
+    if (face_bytes > static_cast<uint64_t>(static_cast<size_t>(-1))) {
+        debugf("[lvlroom] face_count %u too large\n", static_cast<unsigned>(face_count));
+        fclose(f);
+        return false;
+    }
+    LvlFace* faces =
+        static_cast<LvlFace*>(ScratchAlloc(static_cast<size_t>(face_bytes)));
     if (!faces) { fclose(f); return false; }
     fseek(f, (long)off_faces, SEEK_SET);
     for (uint32_t i = 0; i < face_count; ++i) {
@@ -119,8 +129,16 @@ bool LvlRoomRenderer::Load(const char* lvl_path, const Vec3& render_origin,
         fread(&lf.nz, 4, 1, f);
     }
 
-    // Read vertices
-    LvlVertex* lvl_verts = static_cast<LvlVertex*>(ScratchAlloc(sizeof(LvlVertex) * vertex_count));
+    // Read vertices (same 32-bit multiply guard as the face table above).
+    const uint64_t vertex_bytes =
+        static_cast<uint64_t>(sizeof(LvlVertex)) * static_cast<uint64_t>(vertex_count);
+    if (vertex_bytes > static_cast<uint64_t>(static_cast<size_t>(-1))) {
+        debugf("[lvlroom] vertex_count %u too large\n", static_cast<unsigned>(vertex_count));
+        fclose(f);
+        return false;
+    }
+    LvlVertex* lvl_verts =
+        static_cast<LvlVertex*>(ScratchAlloc(static_cast<size_t>(vertex_bytes)));
     if (!lvl_verts) { fclose(f); return false; }
     fseek(f, (long)off_vertices, SEEK_SET);
     for (uint32_t i = 0; i < vertex_count; ++i) {
@@ -435,12 +453,13 @@ bool LvlRoomRenderer::BuildRunsAndBlock(const FaceSpec* faces, int face_count) {
     // fall back to the per-face batch path (run_count_ stays 0) — never a
     // silent truncation.
     //
-    // Inc 1 / D1 (distant-pass perf): the distant pass is Z-off, but the bake
+    // Inc 1 / D1 (distant-pass perf): the depth-tested distant pass draws
+    // opaque faces, so intra-cell order does not affect visibility. The bake
     // (`tools/ogworld/distant_lod.py`) emits faces in arbitrary original
-    // polygon order — not material-grouped, not back-to-front — so there is no
-    // meaningful intra-cell order to preserve. We STABLE-SORT the faces by
-    // material BEFORE coalescing (mirroring `TexturedRoomRenderer::Load`),
-    // grouping all faces of one material into contiguous runs → one
+    // polygon order — not material-grouped, not back-to-front. We STABLE-SORT
+    // the faces by material BEFORE coalescing (mirroring
+    // `TexturedRoomRenderer::Load`), grouping each material into contiguous
+    // runs → one
     // `t3d_vert_load` + one `t3d_tri_sync` per material per cell instead of per
     // run. Measured from the baked LVLs: 1015 → 303 runs across all 45 cells
     // (~22.6 → ~6.7 runs/cell), a ~3.3× reduction in RSP syncs.

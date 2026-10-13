@@ -13,13 +13,22 @@ namespace n64 {
 class FrameProfiler {
 public:
     // Named per-phase timers. Each phase reports its own rolling average.
-    // After removing the z-split distant + low-priority passes, the remaining
-    // phases are contiguous.
+    // Distant and near rendering are measured separately so the frame budget
+    // exposes horizon cost instead of hiding it inside the near pass.
     enum Phase {
-        kPhaseHighPriority = 0,
+        kPhaseDistant = 0,
+        kPhaseHighPriority,
+        kPhaseNearGroupBuild,
         kPhaseTextureUpload,
         kPhaseStreaming,
         kPhaseUpdate,
+        kPhasePlayerAnimation,
+        kPhasePlayerSkin,
+        kPhasePlayerHair,
+        kPhaseDebugOutput,
+        kPhaseFixedStepLoop,
+        kPhaseActorWorldUpdate,
+        kPhasePlayerPhysics,
         kPhaseCount,
     };
 
@@ -65,6 +74,7 @@ private:
     // Per-phase accumulation.
     uint64_t phase_start_ticks_[kPhaseCount] = {};
     uint64_t phase_accum_ticks_[kPhaseCount] = {};
+    uint64_t phase_window_ticks_[kPhaseCount] = {};
     bool phase_open_[kPhaseCount] = {};
     float phase_avg_ms_[kPhaseCount] = {};
     // Per-phase peak (single-frame max) in ms over the current window

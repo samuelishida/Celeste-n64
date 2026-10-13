@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "math_types.hpp"
@@ -7,6 +8,36 @@
 #include "gameplay/world/world.hpp"
 
 namespace madeline_cube {
+
+// Bounded climb diagnostic sample. The controller records the query result it
+// already consumed (never performs a telemetry-only collision query). Raw
+// shoulder fields are -1 when the engine-facing input snapshot is unavailable;
+// the ROM's existing [climb] START/[input-trace] records carry those bits.
+struct ClimbTraceFrame {
+    uint32_t tick = 0;
+    uint8_t input_climb = 0;
+    Vec2 move_input{};
+    int8_t raw_z = -1;
+    int8_t raw_l = -1;
+    int8_t raw_r = -1;
+    uint8_t state_before = 0;
+    uint8_t state_after = 0;
+    uint8_t query_hit = 0;
+    int16_t query_face = -1;
+    uint8_t event = 0;
+    int16_t release_reason = 0;
+    Vec3 query_normal{};
+    Vec3 anchor{};
+    Vec3 position_before{};
+    Vec3 collision_correction{};
+    Vec3 position_after{};
+    Vec3 velocity_before{};
+    Vec3 velocity_after{};
+};
+
+// Opt-in live input diagnostics: collect 60 pre-event and 30 post-event
+// ticks, then drain at most one sample per tick. Normal ROMs emit no windows.
+void RecordClimbTraceFrame(const ClimbTraceFrame& frame);
 
 // Low-cost counters and flags reported by the ROM for hardware diagnostics.
 // All fields are numeric scalars so they can be printed with debugf and

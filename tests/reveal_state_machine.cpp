@@ -40,8 +40,9 @@ struct RevealState {
 
     // One frame of the state machine. `drawn` = cell in the drawn 3×3;
     // `ready` = renderer slot non-null. `dt` in seconds.
-    void Step(bool drawn, bool ready, float dt) {
-        if (!kEnableCellReveal) {
+    void Step(bool drawn, bool ready, float dt,
+              bool enabled = kEnableCellReveal) {
+        if (!enabled) {
             scale = 1.0f;
             revealing = false;
             return;
@@ -90,22 +91,22 @@ int main() {
     {
         // Preloaded: READY before first drawn frame → instant (never reveals).
         RevealState s;
-        s.Step(/*drawn=*/true, /*ready=*/true, dt);
+        s.Step(/*drawn=*/true, /*ready=*/true, dt, /*enabled=*/true);
         assert(s.scale == 1.0f && !s.revealing);
         printf("PASS: preloaded (ready before drawn) is instant\n");
     }
     {
         // Enters drawn while null → starts revealing from epsilon.
         RevealState s;
-        s.Step(/*drawn=*/true, /*ready=*/false, dt);
+        s.Step(/*drawn=*/true, /*ready=*/false, dt, /*enabled=*/true);
         assert(s.revealing && s.scale == kRevealEpsilon);
         // Advances toward 1.0 once ready.
-        s.Step(/*drawn=*/true, /*ready=*/true, dt);
+        s.Step(/*drawn=*/true, /*ready=*/true, dt, /*enabled=*/true);
         assert(s.scale > kRevealEpsilon && s.scale < 1.0f);
         // Completes after enough frames.
         int frames = 0;
         while (s.revealing && frames < 1000) {
-            s.Step(/*drawn=*/true, /*ready=*/true, dt);
+            s.Step(/*drawn=*/true, /*ready=*/true, dt, /*enabled=*/true);
             ++frames;
         }
         assert(!s.revealing && s.scale == 1.0f);
@@ -114,29 +115,35 @@ int main() {
     {
         // Late-land: cell was drawn+null, then lands (ready) → animates.
         RevealState s;
-        s.Step(/*drawn=*/true, /*ready=*/false, dt);  // drawn while null
-        s.Step(/*drawn=*/true, /*ready=*/true, dt);   // late ParseStaged lands
+        s.Step(/*drawn=*/true, /*ready=*/false, dt, /*enabled=*/true);
+        s.Step(/*drawn=*/true, /*ready=*/true, dt, /*enabled=*/true);
         assert(s.revealing && s.scale > kRevealEpsilon);
         printf("PASS: late-land while drawn animates\n");
     }
     {
         // Leaves drawn set → reset to 1.0 (fresh on re-entry).
         RevealState s;
-        s.Step(/*drawn=*/true, /*ready=*/false, dt);
+        s.Step(/*drawn=*/true, /*ready=*/false, dt, /*enabled=*/true);
         assert(s.revealing);
-        s.Step(/*drawn=*/false, /*ready=*/true, dt);
+        s.Step(/*drawn=*/false, /*ready=*/true, dt, /*enabled=*/true);
         assert(!s.revealing && s.scale == 1.0f);
         printf("PASS: leaving drawn set resets reveal\n");
     }
     {
-        // Gate OFF → always 1.0 regardless of drawn/ready.
-        // (kEnableCellReveal is a compile-time constant; the mirror honors it.)
+        // An explicitly disabled gate must never scale loaded terrain.
+        RevealState s;
+        s.Step(/*drawn=*/true, /*ready=*/false, dt, /*enabled=*/false);
+        assert(s.scale == 1.0f && !s.revealing);
+        printf("PASS: disabled reveal keeps terrain scale at 1.0\n");
+    }
+    {
+        // Production default follows the project flag: no scale transition on
+        // late cell arrival, the artifact reported in the Ares screenshots.
         RevealState s;
         s.Step(/*drawn=*/true, /*ready=*/false, dt);
-        if (!kEnableCellReveal) {
-            assert(s.scale == 1.0f && !s.revealing);
-        }
-        printf("PASS: gate-off path keeps scale 1.0 (mirror honors flag)\n");
+        assert(!kEnableCellReveal);
+        assert(s.scale == 1.0f && !s.revealing);
+        printf("PASS: late cell arrival does not warp terrain by default\n");
     }
 
     // --- Matrix formula (M'(L) = s·B·L + (o − cam); pivot at the render

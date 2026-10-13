@@ -123,9 +123,8 @@ ResidentSet ApplyDiff(const RingDiffResult& d, const V2RoomSpec* const new_ring[
 }  // namespace
 
 int main() {
-    // A 6×5 grid (ix -2..3, iz -2..2). Large enough that a 5×5 resident ring
-    // (cheb≤2) centered at A=(0,0) and B=(1,0) both resolve the full 25 cells
-    // (streaming-experience Inc 3), while the 3×3 rings still fit. 30 rooms.
+    // A 6×5 grid (ix -2..3, iz -2..2). Large enough for the 3×3 drawn ring
+    // plus forward-prioritized Cheb-2 preload cells at A=(0,0) and B=(1,0).
     MapSpecV2 spec;
     const int nrooms = BuildGrid(spec, -2, 3, -2, 2);
     assert(nrooms == 30);
@@ -253,33 +252,38 @@ int main() {
         printf("PASS: 0-overlap teleport E->C (0 keep / 9 load / 6 free)\n");
     }
 
-    // ── 5. streaming-experience Inc 3: the 5×5 RESIDENT ring (cheb≤2). A
-    //    1-step move keeps 20 overlapping residents (a 5×5 block shifted by 1
-    //    shares a 4×5 = 20 region) and loads/frees only 5 — far fewer parses
-    //    per transition than the 3×3's 3. (The plan's Inc 3 text says "12";
-    //    review pass 2 corrected it to 20 — the load-bearing invariant is
-    //    "load = new cells, not 25".)
+    // ── 5. Runtime preserves the full 3×3 core, then spends four resident
+    //    slots on forward Cheb-2 coverage. All ready residents remain drawable.
     {
+        assert(kMaxRing == 9 && kMaxResident == 13);
+        const Vec3 camera_forward{1.0f, 0.0f, 0.0f};
         const V2RoomSpec* ringA[kMaxResident] = {};
-        const int nA = ResolveForwardWedge(spec, *A, Vec3{0, 0, 0}, ringA,
+        const int nA = ResolveForwardWedge(spec, *A, camera_forward, ringA,
                                            kMaxResident, /*max_cheb=*/2);
-        assert(nA == 25);
+        assert(nA == 13);
+        for (int iz = -1; iz <= 1; ++iz) {
+            for (int ix = -1; ix <= 1; ++ix) {
+                assert(CountPtr(ringA, nA, FindCell(spec, ix, iz)) == 1);
+            }
+        }
+        assert(CountPtr(ringA, nA, FindCell(spec, 2, 0)) == 1);
+        assert(CountPtr(ringA, nA, FindCell(spec, -2, 0)) == 0);
         ResidentSet setA = MakeSet(ringA, nA);
 
         const V2RoomSpec* ringB[kMaxResident] = {};
-        const int nB = ResolveForwardWedge(spec, *B, Vec3{0, 0, 0}, ringB,
+        const int nB = ResolveForwardWedge(spec, *B, camera_forward, ringB,
                                            kMaxResident, /*max_cheb=*/2);
-        assert(nB == 25);
+        assert(nB == 13);
 
         const RingDiffResult d = ResolveRingDiff(setA, ringB, nB);
-        printf("5x5 A->B: keep=%d load=%d free=%d\n", d.keep_count,
+        printf("13-cell A->B: keep=%d load=%d free=%d\n", d.keep_count,
                d.load_count, d.free_count);
-        assert(d.keep_count == 20);
-        assert(d.load_count == 5);  // the new ix=3 column, not 25
-        assert(d.free_count == 5);  // the departed ix=-2 column
+        assert(d.keep_count + d.load_count == nB);
+        assert(d.keep_count + d.free_count == nA);
+        assert(d.load_count == d.free_count);
         for (int i = 0; i < nA; ++i) AssertExclusive(d, ringA[i]);
         for (int i = 0; i < nB; ++i) AssertExclusive(d, ringB[i]);
-        printf("PASS: 5x5 A->B diff (20 keep / 5 load / 5 free)\n");
+        printf("PASS: bounded 13-cell forward residency diff\n");
     }
 
     printf("tile_streamer_diff_smoke: all assertions passed\n");

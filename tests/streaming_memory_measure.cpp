@@ -10,8 +10,8 @@
 // allocates the exact byte sizes the renderer's Load would (verts, matrix,
 // batches, runs, run_faces, material_groups) and measures the mallinfo peak per
 // cell. The table is the "per-cell resident cost is MEASURED (host table)" the
-// plan requires before the 5×5 ring ships; `kStreamingBudgetBytes` is set from
-// it. Also asserts `MapSpecV2::MaxLvlSize()` equals the largest .lvl on disk.
+// plan uses to validate the bounded resident ring; `kStreamingBudgetBytes` is
+// set from it. Also asserts MaxLvlSize() equals largest .lvl on disk.
 //
 // Build:
 //   g++ -std=c++17 -Isrc/user tests/streaming_memory_measure.cpp \
@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "gameplay/render/batch_coalesce.hpp"
+#include "gameplay/render/tile_streamer.hpp"
 #include "gameplay/world/mappack_loader.hpp"
 
 using namespace madeline_cube;
@@ -210,13 +211,13 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "FAIL: a .lvl exceeds MaxLvlSize()\n");
         ++failures;
     }
-    // Sanity: a 25-cell resident ring at the measured max fits comfortably in
-    // the 8 MB heap (the plan's ~512 KB–1 MB budget).
-    const size_t ring25 = max_resident * 25;
-    std::printf("  25-cell ring at max resident = %zu B (%.1f KB)\n",
-                ring25, ring25 / 1024.0);
-    if (ring25 > 2 * 1024 * 1024) {
-        std::fprintf(stderr, "FAIL: 25-cell ring exceeds 2 MB budget\n");
+    // Sanity: renderer data for current bounded resident capacity fits within
+    // the two-MiB planning ceiling; staging is accounted separately.
+    const size_t ring_bytes = max_resident * kMaxResident;
+    std::printf("  %d-cell ring at max resident = %zu B (%.1f KB)\n",
+                kMaxResident, ring_bytes, ring_bytes / 1024.0);
+    if (ring_bytes > 2 * 1024 * 1024) {
+        std::fprintf(stderr, "FAIL: resident ring exceeds 2 MB budget\n");
         ++failures;
     }
 
