@@ -9,6 +9,21 @@ First pass audio targets:
 - collect
 - one music loop
 
+## OG export gate
+
+The conversion manifest deliberately keeps OG-derived events planned until
+licensed/exported WAV sources are supplied outside this checkout:
+
+```text
+assets/audio/og_exports/sfx/player_dash.wav
+assets/audio/og_exports/music/forsaken_city_theme.wav
+```
+
+Do not point runtime at FMOD `.bank` files. After supplying WAVs, mark the two
+audio entries and `audio_events` active/package in
+`assets/og_converted/asset_manifest.json`; Make then emits WAV64 and
+`filesystem/audio/events.tsv`.
+
 ## Downloaded Assets
 
 ### Sound Effects
@@ -59,4 +74,3 @@ First pass audio targets:
   - 22050 Hz is a good balance for music
   - 44100 Hz for high-quality SFX
 - **Channels:** Mono is strongly preferred on N64
-
