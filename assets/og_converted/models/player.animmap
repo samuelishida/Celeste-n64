@@ -1,0 +1,8 @@
+ANIMMAP	1	7
+Idle	rom:/mdl/player.5.sdata	loop
+Run	rom:/mdl/player.7.sdata	loop
+Skid	rom:/mdl/player.8.sdata	loop
+Jump	rom:/mdl/player.6.sdata	once
+Dash	rom:/mdl/player.3.sdata	once
+Climb.Idle	rom:/mdl/player.1.sdata	loop
+Climb.Up	rom:/mdl/player.2.sdata	loop

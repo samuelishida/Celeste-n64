@@ -1,0 +1,9 @@
+{
+  "axis_transform": "game-y-up-xz-travel",
+  "base_scale": 5.0,
+  "max_prepared_bytes": 262144,
+  "max_triangles": 4096,
+  "pivot": "origin",
+  "texture_image_index": 0,
+  "uv_scale": [0.5, 0.5]
+}
