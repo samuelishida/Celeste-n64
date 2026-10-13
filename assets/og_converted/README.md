@@ -7,16 +7,18 @@ This directory contains a 1:1 conversion of all convertible assets from
 2026-05-16
 
 ## Toolchain
-- libdragon `preview` (N64_INST=/tmp/n64-toolchain-root/opt/libdragon)
+- libdragon `preview` (N64_INST=$HOME/.n64-bootstrap/opt/libdragon)
 - tiny3d
 - `mksprite`, `gltf_to_t3d`, `mkfont`, `audioconv64`
+- Python asset environment (`~/.n64-bootstrap/asset-venv`)
 
 ## Conversion Script
 Run from repo root:
 ```sh
-N64_INST=/tmp/n64-toolchain-root/opt/libdragon \
-PATH=/tmp/n64-toolchain-root/opt/libdragon/bin:$PATH \
-python3 tools/convert_og_assets.py
+N64_BOOTSTRAP="${N64_BOOTSTRAP:-$HOME/.n64-bootstrap}"
+N64_INST="$N64_BOOTSTRAP/opt/libdragon" \
+PATH="$N64_BOOTSTRAP/opt/libdragon/bin:$PATH" \
+"$N64_BOOTSTRAP/asset-venv/bin/python" tools/convert_og_assets.py
 ```
 
 ---

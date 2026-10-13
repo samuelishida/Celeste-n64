@@ -1,9 +1,15 @@
 BUILD_DIR=build
 # Requires libdragon preview branch: fgeom.h (fm_vec3_t) is not in trunk.
 # https://github.com/DragonMinded/libdragon/tree/preview
-# Default: /tmp/n64-bootstrap (setup.sh installs here; ext4 supports symlinks)
-N64_INST ?= /tmp/n64-bootstrap/opt/libdragon
+# Toolchain bytes are stored in-repo (.n64-bootstrap) but accessed through a
+# space-free symlink (default ~/.n64-bootstrap): libdragon tools (n64sym,
+# mkfont) build shell commands from the toolchain path and break if it contains
+# spaces, and this repo lives under ".../Celeste 64 Demake". setup.sh creates
+# the symlink; set N64_BOOTSTRAP to relocate.
+N64_BOOTSTRAP ?= $(HOME)/.n64-bootstrap
+N64_INST ?= $(N64_BOOTSTRAP)/opt/libdragon
 export N64_INST
+ASSET_PYTHON ?= $(N64_BOOTSTRAP)/asset-venv/bin/python
 
 # Default goal must be set before including n64.mk, which defines its own
 # pattern rules that can shadow our targets.

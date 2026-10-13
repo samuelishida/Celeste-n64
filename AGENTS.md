@@ -178,7 +178,7 @@ The project currently builds against:
 - tiny3d
 - a MIPS64 GCC toolchain compatible with current libdragon
 
-The repo lives on an exFAT partition which cannot hold symlinks, so the toolchain is installed to `/tmp/n64-bootstrap` (ext4). This survives reboots on most Linux setups, but can be lost if `/tmp` is cleaned. Re-run `setup.sh` to rebuild.
+The toolchain bytes are stored in-repo (`.n64-bootstrap`, git-ignored) and accessed through the space-free symlink `~/.n64-bootstrap` (libdragon tools are not space-safe, and this repo path contains a space). `setup.sh` creates the symlink; re-run it if the toolchain is missing.
 
 ## Cold-start bootstrap
 
@@ -188,9 +188,9 @@ Run the setup script from the repo root:
 ./setup.sh
 ```
 
-This downloads the GCC toolchain, clones libdragon (preview) and tiny3d, builds both, and installs everything into `/tmp/n64-bootstrap/opt/libdragon`.
+On cold start, this verifies and extracts the pinned GCC toolchain, checks out pinned libdragon and tiny3d commits, builds both, and installs Blender plus the asset venv and pinned Fast64 under `~/.n64-bootstrap` (bytes stored in-repo at `.n64-bootstrap`, accessed via a space-free symlink).
 
-If the toolchain is already present and intact, `setup.sh` exits immediately.
+If core toolchain files are present, `setup.sh` verifies them and refreshes asset-tool dependencies before exiting.
 
 ## Project build
 
@@ -313,7 +313,7 @@ First field issue already found:
 ### Build and tooling
 
 - The current libdragon `preview` flow plus tiny3d builds successfully on this machine.
-- The repo is on an exFAT partition which cannot hold symlinks, so the toolchain must live on ext4 (`/tmp/n64-bootstrap`).
+- The toolchain is stored in-repo (`.n64-bootstrap`, git-ignored) and accessed via the space-free symlink `~/.n64-bootstrap`, so it survives `/tmp` cleanup.
 - `setup.sh` handles the full cold-start bootstrap; `compile-rom.sh` locates the toolchain automatically.
 - The top-level `Makefile` is intentionally small and only compiles project-owned C++ sources.
 - Building full libdragon/tiny3d from scratch also builds many examples, so a cold bootstrap is slower than normal project iteration.
