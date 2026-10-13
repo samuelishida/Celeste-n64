@@ -51,10 +51,10 @@ CollMesh* BuildOneTriangleMesh(uint16_t material) {
     verts[2].pos[0] =  0;  verts[2].pos[1] = 0; verts[2].pos[2] =  50;
 
     CollTriangle* tris = new CollTriangle[1];
-    tris[0].i0 = 0; tris[0].i1 = 1; tris[0].i2 = 2;
+    tris[0].i0 = 0; tris[0].i1 = 2; tris[0].i2 = 1;
     tris[0].material = material;
     tris[0].face_id = 0;
-    tris[0].pad = 0;
+    tris[0].source_face_id = 0;
 
     CollBvhNode* nodes = new CollBvhNode[1];
     nodes[0].aabb_min[0] = -50; nodes[0].aabb_min[1] = 0; nodes[0].aabb_min[2] = -50;
@@ -92,7 +92,7 @@ int main() {
         room.coll_mesh = mesh;
         MoveService mover;
         PlayerState state;
-        state.position = {0.0f, 10.0f, 0.0f};  // feet at y=0, ON the platform
+        state.position = {0.0f, mover.Config().half_height, 0.0f};  // feet at y=0, ON the platform
         Vec3 pushout{};
         const bool grounded = mover.GroundCheck(state, room, &pushout, nullptr);
         assert(grounded);
@@ -110,7 +110,7 @@ int main() {
         PlayerState state;
         // Feet just below the platform surface (center y=8 -> feet y=-2, within
         // the ceiling ray reach of feet+1..feet+12).
-        state.position = {0.0f, 8.0f, 0.0f};
+        state.position = {0.0f, mover.Config().half_height - 2.0f, 0.0f};
         // GroundCheck from below misses (no floor underneath).
         assert(!mover.GroundCheck(state, room, nullptr, nullptr));
         // CeilingCheck sees the one-way above but the pass-through-from-below
@@ -122,11 +122,13 @@ int main() {
     // --- Solid platform still blocks from below via CeilingCheck. ---
     {
         CollMesh* mesh = BuildOneTriangleMesh(MAT_SOLID);
+        const_cast<CollTriangle*>(mesh->triangles)[0].i1 = 1;
+        const_cast<CollTriangle*>(mesh->triangles)[0].i2 = 2;
         Room room;
         room.coll_mesh = mesh;
         MoveService mover;
         PlayerState state;
-        state.position = {0.0f, 8.0f, 0.0f};  // feet at y=-2, below the platform
+        state.position = {0.0f, mover.Config().half_height - 2.0f, 0.0f};  // feet at y=-2, below the platform
         bool blocked = mover.CeilingCheck(state, room, nullptr);
         assert(blocked);
         FreeMesh(mesh);

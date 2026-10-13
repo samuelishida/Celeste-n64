@@ -29,7 +29,7 @@ struct SyntheticMesh {
     std::vector<Vec3> world_verts;
     CollMesh mesh{};
 
-    // Floor at y=0 plus one vertical wall quad at z=5 facing -z.
+    // Floor at y=0 plus one vertical wall quad at z=5 facing +z toward the fixture.
     void Build() {
         header.magic[0] = 'C'; header.magic[1] = 'M'; header.magic[2] = 'S'; header.magic[3] = 'H';
         header.version = 1;
@@ -47,7 +47,7 @@ struct SyntheticMesh {
         };
         uint16_t m = MAT_SOLID;
         tris = {
-            {0, 1, 2, m, 0, 0}, {0, 2, 3, m, 1, 0},
+            {0, 2, 1, m, 0, 0}, {0, 3, 2, m, 1, 0},
             {4, 5, 6, m, 2, 0}, {4, 6, 7, m, 3, 0},
         };
         nodes = {

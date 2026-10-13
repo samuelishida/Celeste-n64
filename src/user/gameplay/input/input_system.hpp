@@ -66,21 +66,33 @@ inline Vec2 SampleStickAxis(int16_t stick_x, int16_t stick_y, float stick_max) {
 //   LB/RB/LT/RT  -> L / R / Z  (shoulders + trigger)
 //   Start (Pause)-> Start
 //
-// Each call to Poll() samples the joypad once and feeds the virtual states
-// (controls-physics-port Inc 1): the move stick gets a circular deadzone
-// (OG default 0.35, configurable) and the buttons get the OG VirtualButton press buffer
-// (0.10 s for jump/dash, unbuffered for climb/pause) with consume-once edges.
-// Gameplay reads the results via the exposed virtual states; the scene builds
-// the PlayerInput snapshot from them each frame.
+// Poll once per rendered frame; observed edges survive zero-tick frames.
+// BeginTick advances jump/dash buffers in simulation time and delivers each
+// raw edge once. Climb is an immediate held action, with no debounce/buffer.
 class InputSystem {
 public:
     // Sample the controller for the current frame. Must be called once per
-    // frame before reading any action/button state. `delta_seconds` drives
-    // the device-owned press-buffer decay (OG VirtualButton parity).
+    // frame. delta_seconds only drives the render-frame Pause action;
+    // simulation buffers advance through BeginTick.
     void Poll(float delta_seconds = 1.0f / 60.0f);
+    // Pure device boundary, shared by joypad sampling and host fixtures.
+    // Disconnection supplies false for every held bit, preserving releases.
+    void ObserveGameplayButtons(bool jump, bool dash, bool climb) {
+        polled_jump_.Poll(jump);
+        polled_dash_.Poll(dash);
+        polled_climb_.Poll(climb);
+    }
+    void BeginTick(float dt) {
+        polled_jump_.BeginTick(jump_, 0.10f, dt);
+        polled_dash_.BeginTick(dash_, 0.10f, dt);
+        polled_climb_.BeginTick(climb_, 0.0f, dt);
+    }
+    void EndTick(bool jump_claimed, bool dash_claimed) {
+        if (jump_claimed) ConsumeJumpPress();
+        if (dash_claimed) ConsumeDashPress();
+    }
 
-    // Virtual states (device-owned deadzone + press buffer + consume-once).
-    // Gameplay reads these; the scene builds PlayerInput from them each frame.
+    // Tick states: read only after BeginTick, then commit accepted claims.
     const VirtualStickState& Move() const { return move_; }
     const VirtualButtonState& Jump() const { return jump_; }
     const VirtualButtonState& Dash() const { return dash_; }
@@ -136,6 +148,7 @@ private:
     VirtualButtonState jump_;
     VirtualButtonState dash_;
     VirtualButtonState climb_;
+    PolledButtonState polled_jump_, polled_dash_, polled_climb_;
     VirtualButtonState pause_;
     RawSnapshot last_raw_;
 };

@@ -63,6 +63,8 @@ SphereTriHit SphereTriangle(const Vec3& P, float radius,
 {
     SphereTriHit result;
 
+    if (Len2(Cross(Sub(b, a), Sub(c, a))) <= 1e-12f) return result;
+
     // Barycentric coordinate computation (Ericson §5.1.5 / §5.2.7)
     Vec3 ab = Sub(b, a);
     Vec3 ac = Sub(c, a);
@@ -190,6 +192,48 @@ SphereTriHit SphereTriangle(const Vec3& P, float radius,
             result.normal = Norm(diff);
     }
     return result;
+}
+
+bool ClosestTriangleHorizontalSlice(const Vec3& point, const Vec3& a,
+                                    const Vec3& b, const Vec3& c, Vec3& closest) {
+    if (Len2(Cross(Sub(b, a), Sub(c, a))) <= 1e-12f) return false;
+    const Vec3 vertices[3] = {a, b, c};
+    Vec3 line0{};
+    Vec3 line1{};
+    int count = 0;
+    for (int i = 0; i < 3; ++i) {
+        const Vec3& v = vertices[i];
+        const Vec3& w = vertices[(i + 1) % 3];
+        const Vec3 edge = Sub(w, v);
+        // OG's C# division yields infinity/NaN for a parallel edge, then its
+        // inclusive [0,1] test rejects it. Skip explicitly: N64 div.s traps
+        // instead, despite the same candidate being rejected by the source.
+        if (edge.y == 0.0f) continue;
+        const float t = (point.y - v.y) / edge.y;
+        if (t >= 0.0f && t <= 1.0f) {
+            const Vec3 intersection = Add(v, Scale(edge, t));
+            if (count == 0) line0 = intersection;
+            else line1 = intersection; // each later edge overwrites line1
+            ++count;
+        }
+    }
+    if (count == 0) return false;
+
+    // OG flattens these endpoints to XY, where world Z is inverted. The
+    // sign cancels in projection, so use world XZ while preserving endpoint
+    // order and Foster Line.ClosestPoint's zero-length return of From.
+    const float dx = line1.x - line0.x;
+    const float dz = line1.z - line0.z;
+    if (dx == 0.0f && dz == 0.0f) {
+        closest = {line0.x, point.y, line0.z};
+        return true;
+    }
+    const float wx = point.x - line0.x;
+    const float wz = point.z - line0.z;
+    float t = (wx * dx + wz * dz) / (dx * dx + dz * dz);
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    closest = {line0.x + dx * t, point.y, line0.z + dz * t};
+    return true;
 }
 
 // ---------------------------------------------------------------------------

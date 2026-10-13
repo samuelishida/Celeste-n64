@@ -73,11 +73,8 @@ void InputSystem::Poll(float delta_seconds) {
     const bool climb_held = (held.z != 0) || (held.l != 0) || (held.r != 0);
     const bool pause_held = (held.start != 0);
 
-    // Device-owned press buffers (OG VirtualButton parity): jump/dash carry
-    // the 0.10 s buffer; climb/pause are unbuffered (OG Climb has no buffer).
-    UpdateVirtualButton(jump_, jump_held, 0.10f, delta_seconds);
-    UpdateVirtualButton(dash_, dash_held, 0.10f, delta_seconds);
-    UpdateVirtualButton(climb_, climb_held, 0.0f, delta_seconds);
+    ObserveGameplayButtons(jump_held, dash_held, climb_held);
+    // Pause is a render-frame UI action rather than simulation gameplay.
     UpdateVirtualButton(pause_, pause_held, 0.0f, delta_seconds);
 
     last_raw_.style = static_cast<uint8_t>(joypad_get_style(JOYPAD_PORT_1));

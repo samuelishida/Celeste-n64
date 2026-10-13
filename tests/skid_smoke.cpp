@@ -81,12 +81,16 @@ int main() {
             in.jump_pressed = false;
             controller.Step(p, in, cam, kDt, &no_room);
         }
+        p.platform_carry.stored_velocity = {10.0f, 20.0f, -5.0f};
+        p.platform_carry.time_remaining = 0.10f;
         in.jump_pressed = true;
         in.jump_held = true;
         controller.Step(p, in, cam, kDt, &no_room);
         assert(p.movement_state == PlayerMovementState::Normal);
-        assert(p.velocity.y > config.jump_speed);  // skid jump 120 > normal 90
-        printf("skid-jump: vy=%.2f (expect ~%.0f)\n", p.velocity.y, config.skid_jump_speed);
+        assert(std::fabs(p.velocity.y - (config.skid_jump_speed + 20.0f)) < 0.01f);
+        assert(std::fabs(p.velocity.z + 5.0f) < 0.01f);
+        assert(p.platform_carry.time_remaining == 0.0f);
+        printf("skid-jump: vy=%.2f (source + carry)\n", p.velocity.y);
     }
 
     // A render frame below 60 FPS can run two physics ticks from sibling
@@ -98,6 +102,7 @@ int main() {
         p.grounded = true;
         p.contact.was_grounded = true;
         p.position = {0.0f, config.player_half_height, 0.0f};
+        p.contact.coyote_height = p.position.y;
         p.velocity = {config.run_speed, 0.0f, 0.0f};
         p.movement_state = PlayerMovementState::Skidding;
         p.target_facing = {1.0f, 0.0f, 0.0f};
@@ -110,13 +115,15 @@ int main() {
         frame_input.move = {1.0f, 0.0f};
         frame_input.jump_pressed = jump.pressed;
         frame_input.jump_held = true;
-        frame_input.jump_device = &jump;
         PlayerInput first_tick = frame_input;
         PlayerInput second_tick = frame_input;
 
         controller.Step(p, first_tick, cam, kDt, &no_room);
         assert(p.velocity.y == config.skid_jump_speed);
         assert(p.coyote_time_remaining == 0.0f);
+        if (first_tick.jump_press_consumed) ConsumePress(jump);
+        UpdateVirtualButton(jump, true, config.jump_buffer_time, kDt);
+        second_tick.jump_pressed = jump.pressed;
         controller.Step(p, second_tick, cam, kDt, &no_room);
         assert(p.velocity.y >= config.skid_jump_speed - 0.01f);
     }
@@ -126,7 +133,7 @@ int main() {
         PlayerState p;
         p.grounded = true;
         p.position = {0.0f, config.player_half_height, 0.0f};
-        p.air_dash_available = true;
+        p.dashes = 1;
         p.dash_cooldown_remaining = 0.0f;
         p.target_facing = {1.0f, 0.0f, 0.0f};
 
@@ -148,7 +155,7 @@ int main() {
         PlayerState p;
         p.grounded = true;
         p.position = {0.0f, config.player_half_height, 0.0f};
-        p.air_dash_available = true;
+        p.dashes = 1;
         // A dash cooldown blocks the press from firing *now*.
         p.dash_cooldown_remaining = 0.06f;  // ~4 ticks of block
 
@@ -173,6 +180,8 @@ int main() {
         PlayerState p;
         p.grounded = true;
         p.position = {0.0f, config.player_half_height, 0.0f};
+        p.contact.coyote_height = p.position.y;
+        p.coyote_time_remaining = config.coyote_time;
 
         PlayerInput in;
         in.jump_pressed = true;

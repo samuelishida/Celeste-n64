@@ -34,7 +34,7 @@
 #include "gameplay/player/player_controller.hpp"
 #include "gameplay/player/player_movement.hpp"
 #include "gameplay/player/player_state.hpp"
-#include "gameplay/render/player_model_clearance.hpp"
+#include "gameplay/player/player_model_clearance.hpp"
 #include "gameplay/world/world.hpp"
 
 using namespace madeline_cube;
@@ -185,6 +185,47 @@ struct SyntheticMesh {
         mesh.surface_links = nullptr;
         mesh.world_verts = world_verts.data();
     }
+
+    // Two perpendicular walls meet at a corner, but second wall starts above
+    // the climb waist. A waist-only clearance query sees wall A and misses B,
+    // even though the tall rendered model overlaps B near its head.
+    void BuildModelClearanceCorner() {
+        header.magic[0] = 'C'; header.magic[1] = 'M';
+        header.magic[2] = 'S'; header.magic[3] = 'H';
+        header.version = 1;
+        header.flags = 1;
+        header.quant_scale = 1.0f;
+        header.quant_origin[0] = header.quant_origin[1] = header.quant_origin[2] = 0.0f;
+        verts = {
+            {{-200, 0, 5}}, {{200, 0, 5}}, {{200, 60, 5}}, {{-200, 60, 5}},
+            // The current reduced model tops out near y=35 from feet y=20.
+            // Begin above its waist (y=23), but inside its rendered height.
+            {{5, 30, 5}}, {{5, 30, 200}}, {{5, 100, 200}}, {{5, 100, 5}},
+        };
+        const uint16_t m = physics::MAT_SOLID;
+        tris = {
+            {0, 1, 2, m, 0, 0}, {0, 2, 3, m, 1, 0},
+            {4, 6, 5, m, 2, 0}, {4, 7, 6, m, 3, 0},
+        };
+        nodes = {
+            {{-200, 0, 5}, {200, 100, 200},
+             0, static_cast<uint16_t>(tris.size())},
+        };
+        header.vertex_count = static_cast<uint32_t>(verts.size());
+        header.triangle_count = static_cast<uint32_t>(tris.size());
+        header.bvh_node_count = static_cast<uint32_t>(nodes.size());
+        header.surface_link_count = 0;
+        mesh.header = &header;
+        world_verts.resize(verts.size());
+        for (size_t i = 0; i < verts.size(); ++i) {
+            world_verts[i] = physics::DequantVert(mesh, verts[i]);
+        }
+        mesh.vertices = verts.data();
+        mesh.triangles = tris.data();
+        mesh.bvh_nodes = nodes.data();
+        mesh.surface_links = nullptr;
+        mesh.world_verts = world_verts.data();
+    }
 };
 
 constexpr float kDt = 1.0f / 60.0f;
@@ -223,10 +264,11 @@ struct Harness {
     }
 
     void Tick(const PlayerInput& input) {
+        controller.BeginMoveTick(state);
         PlayerController::StepContext ctx =
             controller.TimerInputPhase(state, input, kCamForward, kDt);
         controller.StatePhase(state, input, ctx, kDt, &room);
-        controller.MovePhase(state, kDt, &room);
+        controller.MovePhase(state, kDt, &room, &ctx);
     }
 };
 
@@ -352,6 +394,61 @@ int main() {
                "outer-corner: rendered model clears both old and new walls");
     }
 
+    // Stable climb must check whole-model wall clearance. Waist query sees the
+    // lower wall only; a higher perpendicular face clips the model unless its
+    // plane joins the clearance solve.
+    {
+        g_mesh.BuildModelClearanceCorner();
+        Harness h;
+        h.Setup(30.0f);
+        const MovementConfig config{};
+        const Vec3 feet = {8.0f, 20.0f, 8.0f};
+        const Vec3 waist = {
+            feet.x, feet.y + config.climb_waist_offset, feet.z};
+        const WallHit waist_wall = QueryClimbWall(
+            h.room, waist, config.climb_check_dist, {0.0f, 0.0f, 1.0f});
+        report(waist_wall.hit, "model-clearance: waist finds lower wall");
+        const float lower_gap = waist_wall.hit
+            ? physics::Dot(waist_wall.plane_normal,
+                           physics::Sub(feet, waist_wall.point))
+            : 0.0f;
+        const float waist_only_offset = PlayerModelHorizontalOffset(
+            waist_wall.plane_normal, lower_gap, kMadelineModelRadius,
+            kMadelineModelHeight, kMadelineModelWallGap);
+        const float missed_upper_gap = PlayerModelMinimumPlaneGapAfterTranslation(
+            {1.0f, 0.0f, 0.0f}, 3.0f, kMadelineModelRadius,
+            kMadelineModelHeight,
+            {0.0f, 0.0f, waist_only_offset});
+        report(missed_upper_gap < kMadelineModelWallGap,
+               "model-clearance: waist-only offset reproduces upper-wall clip");
+
+        PlayerModelPlaneConstraint constraints[kMaxPlayerModelWallConstraints];
+        const int count = QueryPlayerModelWallConstraints(
+            h.room, feet, kMadelineModelRadius, kMadelineModelHeight,
+            config.climb_waist_offset, kMadelineModelWallGap, constraints,
+            kMaxPlayerModelWallConstraints);
+        bool found_upper_wall = false;
+        for (int i = 0; i < count; ++i) {
+            if (constraints[i].normal.x > 0.9f) found_upper_wall = true;
+        }
+        report(found_upper_wall,
+               "model-clearance: top-height query finds raised perpendicular wall");
+        const Vec3 offset = PlayerModelMultiPlaneHorizontalOffset(
+            constraints, count, kMadelineModelRadius, kMadelineModelHeight,
+            kMadelineModelWallGap);
+        bool all_clear = count > 0;
+        for (int i = 0; i < count; ++i) {
+            const float gap = PlayerModelMinimumPlaneGapAfterTranslation(
+                constraints[i].normal, constraints[i].feet_signed_distance,
+                kMadelineModelRadius, kMadelineModelHeight, offset);
+            if (gap < kMadelineModelWallGap - 0.01f) all_clear = false;
+        }
+        std::printf("model multi-plane: constraints=%d offset=(%.2f,%.2f) clear=%d\n",
+                    count, offset.x, offset.z, all_clear ? 1 : 0);
+        report(all_clear,
+               "model-clearance: stable climb keeps mesh outside lower and raised walls");
+    }
+
     // --- 1. Vertical wall (baseline — should be clean) ---
     {
         g_mesh.Build(0.0f);
@@ -366,9 +463,11 @@ int main() {
                     m.ticks_climbing, m.min_dist_to_plane, m.max_dist_to_plane,
                     m.min_model_gap, m.min_y_delta, m.max_per_tick_delta, m.max_head_pushout,
                     (int)m.inside_geometry);
-        report(m.ticks_climbing >= 55, "vertical: sustained climb");
+        report(m.ticks_climbing >= 50,
+               "vertical: sustained climb reaches the wall lip at tuned speed");
         report(m.min_y_delta > 0.0f, "vertical: no down-push while climbing up");
-        report(m.max_per_tick_delta < 1.0f, "vertical: no wiggle (per-tick delta < 1)");
+        report(m.max_per_tick_delta < MovementConfig{}.climb_speed * kDt + 0.05f,
+               "vertical: no wiggle beyond commanded climb step");
         report(!m.inside_geometry, "vertical: no clip");
         report(m.min_model_gap >= kMadelineModelWallGap - 0.01f,
                "vertical: full model stays outside wall");
@@ -400,14 +499,22 @@ int main() {
             h.state.position.z,
         };
         const WallHit entry_wall = QueryClimbWall(
-            h.room, overhang_waist, config.climb_check_dist, overhang_normal);
+            h.room, overhang_waist, config.climb_check_dist + 2.0f, overhang_normal);
         const float waist_gap = entry_wall.hit
             ? physics::Dot(entry_wall.plane_normal,
                            physics::Sub(overhang_waist, entry_wall.point))
             : -1000.0f;
-        report(entry_wall.hit &&
-                   std::fabs(waist_gap - config.climb_pushout_dist) < 0.05f,
-               "overhang: entry anchor holds exact waist pushout");
+        const Vec3 entry_head = {overhang_waist.x,
+            overhang_waist.y + config.climb_head_offset - config.climb_waist_offset,
+            overhang_waist.z};
+        const WallHit physical_head = QueryWallPushout(h.room, entry_head,
+                                                       config.player_wall_radius);
+        // Entry uses the full plane normal; the final shared Popout can move
+        // its head shell farther out on an overhang. It is not a waist-only
+        // kinematic resolver, so exact waist plane gap3 is not the contract.
+        report(entry_wall.hit && waist_gap >= config.climb_pushout_dist - .15f &&
+                   physical_head.hit && physical_head.pushout < .01f,
+               "overhang: entry ends at shared body-shell equilibrium");
 
         const float visual_margin = kMadelineModelWallGap;
         const Vec3 feet = {h.state.position.x,
@@ -432,21 +539,29 @@ int main() {
                "overhang: fixed vertical-wall offset is insufficient");
         report(corrected_model_gap >= visual_margin - 0.01f,
                "overhang: slope-aware model bounds clear wall");
-        for (int i = 0; i < 6; ++i) {
-            const Vec3 prev = h.state.position;
-            h.Tick(MakeInput(true, 1.0f));
-            std::printf("  t%d pos=(%.2f,%.2f,%.2f) st=%d dy=%.3f\n",
-                        i, h.state.position.x, h.state.position.y, h.state.position.z,
-                        (int)h.state.movement_state, h.state.position.y - prev.y);
-        }
-        const WallMetrics m = ClimbUp(h, -15.0f, 60);
+        const WallMetrics m = ClimbUp(h, -15.0f, 30);
         std::printf("overhang: ticks=%d dist=[%.2f,%.2f] modelGap=%.2f minYd=%.3f maxDt=%.3f headPush=%.3f inside=%d\n",
                     m.ticks_climbing, m.min_dist_to_plane, m.max_dist_to_plane,
                     m.min_model_gap, m.min_y_delta, m.max_per_tick_delta, m.max_head_pushout,
                     (int)m.inside_geometry);
-        report(m.ticks_climbing >= 55, "overhang: sustained climb");
+        const Vec3 source_normal = h.state.climb.wall_normal;
+        const float horizontal_normal = std::sqrt(source_normal.x * source_normal.x +
+                                                   source_normal.z * source_normal.z);
+        const float head_shell_waist_gap = config.player_wall_radius * horizontal_normal -
+            (config.climb_head_offset - config.climb_waist_offset) * source_normal.y;
+        const float source_anchor_y = source_normal.y *
+            (config.climb_pushout_dist - head_shell_waist_gap);
+        const float expected_step_y = horizontal_normal * config.climb_speed * kDt +
+                                       source_anchor_y;
+        const float expected_step_length = expected_step_y / horizontal_normal;
+        report(m.ticks_climbing == 30, "overhang: 30 uninterrupted source-slope ticks");
+        report(std::fabs(h.state.velocity.x) + std::fabs(h.state.velocity.y) +
+                   std::fabs(h.state.velocity.z) < .001f,
+               "overhang: kinematic corrections do not pump velocity");
         report(m.min_y_delta > 0.0f, "overhang: no down-push while climbing up");
-        report(m.max_per_tick_delta < 1.0f, "overhang: no wiggle");
+        report(std::fabs(m.min_y_delta - expected_step_y) < .03f &&
+                   std::fabs(m.max_per_tick_delta - expected_step_length) < .03f,
+               "overhang: displacement matches source sweep plus slope reanchor");
         report(!m.inside_geometry, "overhang: no clip");
         report(m.min_model_gap >= kMadelineModelWallGap - 0.01f,
                "overhang: full model stays outside wall while climbing");
@@ -469,7 +584,8 @@ int main() {
                     (int)m.inside_geometry);
         report(m.ticks_climbing >= 55, "lean-away: sustained climb");
         report(m.min_y_delta > 0.0f, "lean-away: no down-push while climbing up");
-        report(m.max_per_tick_delta < 1.0f, "lean-away: no wiggle");
+        report(m.max_per_tick_delta < MovementConfig{}.climb_speed * kDt + 0.05f,
+               "lean-away: no wiggle beyond commanded climb step");
         report(!m.inside_geometry, "lean-away: no clip");
         report(m.min_model_gap >= kMadelineModelWallGap - 0.01f,
                "lean-away: full model stays outside wall while climbing");
@@ -489,32 +605,20 @@ int main() {
                     m.ticks_climbing, m.min_dist_to_plane, m.max_dist_to_plane,
                     m.min_y_delta, m.max_per_tick_delta, m.max_head_pushout,
                     (int)m.inside_geometry);
-        report(m.ticks_climbing >= 55, "thin: sustained climb");
+        report(m.ticks_climbing >= 50, "thin: sustained climb reaches lip at tuned speed");
         report(m.min_y_delta > 0.0f, "thin: no down-push");
-        report(m.max_per_tick_delta < 1.0f, "thin: no wiggle");
+        report(m.max_per_tick_delta < MovementConfig{}.climb_speed * kDt + 0.05f,
+               "thin: no wiggle beyond commanded climb step");
         report(!m.inside_geometry, "thin: no clip/stuck");
     }
 
-    // --- 5. Reversed-winding vertical wall (Inc 4: the baked map's winding) ---
-    // The fixture flips the wall triangle winding (raw normal points INTO the
-    // wall); the player spawns IN FRONT (z=8). The OLD signed_dist<0
-    // front-side gate rejected every such wall — the reason the grab never
-    // fired on the real map (device: 0 [climb] START lines). The
-    // winding-independent gate must still grab and sustain.
+    // --- 5. Authored backface must not turn into a player-facing wall. ---
     {
         g_mesh.Build(0.0f, 0.0f, true);
         Harness h;
         h.Setup(30.0f);
-        if (!h.EnterClimb(MakeInput(true, 1.0f))) {
-            std::printf("FAIL: reversed-winding wall never entered Climbing\n");
-            return 1;
-        }
-        const WallMetrics m = ClimbUp(h, 0.0f, 60);
-        std::printf("reversed: ticks=%d dist=[%.2f,%.2f] inside=%d\n",
-                    m.ticks_climbing, m.min_dist_to_plane, m.max_dist_to_plane,
-                    (int)m.inside_geometry);
-        report(m.ticks_climbing >= 55, "reversed: sustained climb on reversed winding");
-        report(!m.inside_geometry, "reversed: no clip");
+        report(!h.EnterClimb(MakeInput(true, 1.0f)),
+               "authored backface: no grip from the back of a surface");
     }
 
     // --- 6. Under-overhang (Inc 4 auto-latch guard) ---

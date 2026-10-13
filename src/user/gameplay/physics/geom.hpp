@@ -55,6 +55,12 @@ struct SphereTriHit {
 SphereTriHit SphereTriangle(const Vec3& centre, float radius,
                              const Vec3& a, const Vec3& b, const Vec3& c);
 
+// OG wall query: intersect a finite triangle with the horizontal plane at
+// point.y and choose the closest point on that slice. Inclusive tangency;
+// degenerate/flat triangles and heights outside the face return false.
+bool ClosestTriangleHorizontalSlice(const Vec3& point, const Vec3& a,
+                                    const Vec3& b, const Vec3& c, Vec3& closest);
+
 // ---------------------------------------------------------------------------
 // AABB vs AABB
 // ---------------------------------------------------------------------------

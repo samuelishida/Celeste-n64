@@ -172,6 +172,65 @@ int main() {
                (int)ghost.hit, (int)real.hit, real.plane_normal.x);
     }
 
+    // OG SolidGrid query-order regression. Source-face id 1 belongs to solid
+    // 1, whose first shared cell is visited second; source-face id 2 belongs
+    // to solid 10, whose first shared cell is visited first. BVH/source order
+    // must not win over query-cell encounter order before the eight-hit cap.
+    {
+        CollHeader order_header{};
+        order_header.magic[0]='C'; order_header.magic[1]='M';
+        order_header.magic[2]='S'; order_header.magic[3]='H';
+        order_header.version = 2;
+        order_header.flags = 1;
+        order_header.quant_scale = 1.0f;
+        order_header.vertex_count = 8;
+        order_header.triangle_count = 4;
+        order_header.bvh_node_count = 1;
+        order_header.solid_grid_count = 2;
+
+        const Vec3 order_verts[] = {
+            {198.9f,0,-203.5f},{198.9f,200,-203.5f},
+            {198.9f,200,-199.0f},{198.9f,0,-199.0f},
+            {201.0f,0,-202.0f},{201.0f,0,-197.6f},
+            {201.0f,200,-197.6f},{201.0f,200,-202.0f},
+        };
+        const CollTriangle order_tris[] = {
+            {0,1,2,MAT_SOLID,0,2},{0,2,3,MAT_SOLID,1,2},
+            {4,5,6,MAT_SOLID,2,1},{4,6,7,MAT_SOLID,3,1},
+        };
+        const CollBvhNode order_node = {
+            {198,0,-204},{202,200,-197},0,4
+        };
+        const CollSolidGridRecord order_solids[] = {
+            {1,1,1,0,201.0f,199.8f,201.0f,199.8f},
+            {10,2,2,0,198.9f,201.0f,198.9f,201.0f},
+        };
+        CollMesh order_mesh{};
+        order_mesh.header = &order_header;
+        order_mesh.triangles = order_tris;
+        order_mesh.bvh_nodes = &order_node;
+        order_mesh.world_verts = const_cast<Vec3*>(order_verts);
+        order_mesh.solid_grid = order_solids;
+        Room order_room;
+        order_room.coll_mesh = &order_mesh;
+        order_room.collider_count = 0;
+
+        WallHit ordered_hits[8];
+        const int ordered_count = QueryWallsFacePlane(
+            order_room,{199.9f,100.0f,-199.9f},6.0f,ordered_hits,8);
+        if (ordered_count != 2 ||
+            order_tris[ordered_hits[0].face_id].source_face_id != 2) {
+            printf("FAIL: wall hits did not follow OG first shared grid cell "
+                   "(count=%d first_source=%u)\n", ordered_count,
+                   ordered_count > 0
+                       ? order_tris[ordered_hits[0].face_id].source_face_id : 0);
+            return 1;
+        }
+        printf("og-grid-order: count=%d first_source=%u (cell order beats source id)\n",
+               ordered_count,
+               order_tris[ordered_hits[0].face_id].source_face_id);
+    }
+
     printf("wall_plane_query_smoke PASS\n");
     return 0;
 }

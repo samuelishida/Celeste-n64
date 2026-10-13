@@ -46,6 +46,7 @@ int main() {
     PlayerInput late_jump;
     late_jump.jump_pressed = true;
     late_jump.jump_held = true;
+    controller.BeginMoveTick(player);
     auto context = controller.TimerInputPhase(player, late_jump,
                                               camera_forward, dt);
     controller.StatePhase(player, late_jump, context, dt, &room);
@@ -53,7 +54,7 @@ int main() {
     assert(player.velocity.y > 80.0f);
     assert(player.coyote_time_remaining == 0.0f);
     assert(!player.grounded);
-    controller.MovePhase(player, dt, &room);
+    controller.MovePhase(player, dt, &room, &context);
     assert(player.position.y > takeoff_height);
     assert(!player.grounded);
     return 0;

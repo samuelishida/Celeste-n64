@@ -107,10 +107,11 @@ int main() {
     bool entered = false, clipped = false;
     for (int i = 0; i < 120; ++i) {
         if (entered) in.move = {0.0f, 1.0f};
+        controller.BeginMoveTick(state);
         PlayerController::StepContext ctx =
             controller.TimerInputPhase(state, in, {0.0f, 0.0f, -1.0f}, kDt);
         controller.StatePhase(state, in, ctx, kDt, &room);
-        controller.MovePhase(state, kDt, &room);
+        controller.MovePhase(state, kDt, &room, &ctx);
         if (state.movement_state == PlayerMovementState::Climbing) entered = true;
         // After any adopt, 3 ticks later the waist/head must NOT be interior.
         if (i % 10 == 0) {
@@ -147,10 +148,11 @@ int main() {
         din.climb_held = true;
         bool d_entered = false;
         for (int i = 0; i < 20; ++i) {
+            controller.BeginMoveTick(dash_state);
             PlayerController::StepContext ctx =
                 controller.TimerInputPhase(dash_state, din, {0.0f, 0.0f, 1.0f}, kDt);
             controller.StatePhase(dash_state, din, ctx, kDt, &room);
-            controller.MovePhase(dash_state, kDt, &room);
+            controller.MovePhase(dash_state, kDt, &room, &ctx);
             if (dash_state.movement_state == PlayerMovementState::Climbing) { d_entered = true; break; }
         }
         if (!d_entered) {
@@ -162,10 +164,11 @@ int main() {
         dash.dash_pressed = true;
         dash.move = {0.0f, 1.0f};
         for (int i = 0; i < 10; ++i) {
+            controller.BeginMoveTick(dash_state);
             PlayerController::StepContext ctx =
                 controller.TimerInputPhase(dash_state, dash, {0.0f, 0.0f, 1.0f}, kDt);
             controller.StatePhase(dash_state, dash, ctx, kDt, &room);
-            controller.MovePhase(dash_state, kDt, &room);
+            controller.MovePhase(dash_state, kDt, &room, &ctx);
             dash.dash_pressed = false;  // single press
         }
         // Interior test: the body must not sit inside wall B (plane z=20, spans

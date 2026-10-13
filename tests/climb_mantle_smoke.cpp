@@ -122,10 +122,11 @@ struct Harness {
     // StatePhase (velocity edits) -> MovePhase (SweepMove + contact). The old
     // motor.Step is replaced by MovePhase's single mover.
     void Tick(const PlayerInput& input) {
+        controller.BeginMoveTick(state);
         PlayerController::StepContext ctx =
             controller.TimerInputPhase(state, input, kCamForward, kDt);
         controller.StatePhase(state, input, ctx, kDt, &room);
-        controller.MovePhase(state, kDt, &room);
+        controller.MovePhase(state, kDt, &room, &ctx);
     }
 };
 
@@ -146,9 +147,10 @@ int main() {
         float climbed_sum = 0.0f;
         int climb_ticks = 0;
         for (int i = 0; i < 60; ++i) {
+            const float before_y = h.state.position.y;
             h.Tick(MakeInput(true, 1.0f));
             if (h.state.movement_state != PlayerMovementState::Climbing) break;
-            climbed_sum += h.state.velocity.y * kDt;
+            climbed_sum += h.state.position.y - before_y;
             ++climb_ticks;
         }
         if (climb_ticks == 0) {
@@ -157,8 +159,10 @@ int main() {
         }
         const float avg_rate = climbed_sum / (static_cast<float>(climb_ticks) * kDt);
         printf("climb avg rate %.2f u/s over %d ticks\n", avg_rate, climb_ticks);
-        if (avg_rate < 35.0f || avg_rate > 45.0f) {
-            printf("FAIL: climb-up rate not ~40 u/s\n");
+        const float target_climb_speed = MovementConfig{}.climb_speed;
+        if (std::fabs(avg_rate - target_climb_speed) > 0.1f) {
+            printf("FAIL: climb-up rate %.2f differs from target %.2f u/s\n",
+                   avg_rate, target_climb_speed);
             return 1;
         }
     }
@@ -271,15 +275,18 @@ int main() {
             PlayerInput wj = MakeInput(true, move_y);
             wj.jump_pressed = true;
             wj.jump_held = true;
+            h.state.platform_carry.stored_velocity = {10.0f, 20.0f, -5.0f};
+            h.state.platform_carry.time_remaining = 0.10f;
             h.Tick(wj);
             // OG WallJump always sets outward XY to MaxSpeed*1.3 and Y to
             // JumpSpeed, independent of movement input. Wall normal points
             // +z (toward the player side), so launch must be +z.
             const float expected_horizontal = MovementConfig{}.wall_jump_speed_x;
             const float expected_vertical = MovementConfig{}.wall_jump_speed_y;
-            if (!(std::fabs(h.state.velocity.x) < 0.5f &&
-                  std::fabs(h.state.velocity.z - expected_horizontal) < 0.5f &&
-                  std::fabs(h.state.velocity.y - expected_vertical) < 0.5f)) {
+            if (!(std::fabs(h.state.velocity.x - 10.0f) < 0.5f &&
+                  std::fabs(h.state.velocity.z - (expected_horizontal - 5.0f)) < 0.5f &&
+                  std::fabs(h.state.velocity.y - (expected_vertical + 20.0f)) < 0.5f &&
+                  h.state.platform_carry.time_remaining == 0.0f)) {
                 printf("FAIL: %s walljump SET velocity wrong (%.1f, %.1f, %.1f)\n",
                        label, h.state.velocity.x, h.state.velocity.y,
                        h.state.velocity.z);
@@ -308,16 +315,24 @@ int main() {
         bool mantled = false;
         for (int i = 0; i < 200; ++i) {
             if (h.state.movement_state != PlayerMovementState::Climbing) break;
+            // Refresh source-style stored carry near lip so the hop itself,
+            // not an earlier climb tick, consumes it.
+            if (h.state.position.y > SyntheticMesh::kWallTop - 20.0f) {
+                h.state.platform_carry.stored_velocity = {5.0f, 20.0f, -7.0f};
+                h.state.platform_carry.time_remaining = 0.10f;
+            }
             h.Tick(MakeInput(true, 1.0f));
             if (h.state.movement_state == PlayerMovementState::Normal &&
                 h.state.velocity.y > 60.0f) {
                 mantled = true;
                 // Hop impulse: forward = -wall_normal * 40, up = 80.
-                if (!(std::fabs(h.state.velocity.y - 80.0f) < 0.5f)) {
-                    printf("FAIL: mantle vertical impulse %.2f != 80\n", h.state.velocity.y);
+                if (!(std::fabs(h.state.velocity.y - 100.0f) < 0.5f)) {
+                    printf("FAIL: mantle vertical impulse with carry %.2f != 100\n", h.state.velocity.y);
                     return 1;
                 }
-                if (!(h.state.velocity.z < -20.0f)) {  // -normal_z * 40, normal is +z
+                if (!(std::fabs(h.state.velocity.x - 5.0f) < 0.5f &&
+                      std::fabs(h.state.velocity.z + 47.0f) < 0.5f &&
+                      h.state.platform_carry.time_remaining == 0.0f)) {
                     printf("FAIL: mantle forward impulse %.2f not into the lip\n",
                            h.state.velocity.z);
                     return 1;
@@ -352,7 +367,7 @@ int main() {
     {
         Harness h;
         const float half_height = h.controller.Mover().Config().half_height;
-        const float climb_distance = 40.0f * kDt * 15.0f;
+        const float climb_distance = MovementConfig{}.climb_speed * kDt * 15.0f;
         h.Setup(SyntheticMesh::kWallTop - 2.0f - climb_distance + half_height);
         if (!h.EnterClimb(MakeInput(true, 1.0f), 10)) {
             printf("FAIL: near-lip grab never entered Climbing\n");
@@ -443,7 +458,7 @@ int main() {
                 };
                 uint16_t m = physics::MAT_SOLID;
                 tris = {
-                    {0,1,2,m,0,0},{0,2,3,m,1,0},
+                    {0,2,1,m,0,0},{0,3,2,m,1,0}, // authored floor normal +Y
                     {4,5,6,m,2,0},{4,6,7,m,3,0},   // slanted plane
                 };
                 nodes = {
@@ -504,7 +519,8 @@ int main() {
                st.position.x, st.position.y, st.position.z);
         // If grounded at all, it must be on the REAL floor (feet ~ 0), never on
         // the diagonal trim (feet would be a large positive value mid-wall).
-        if (ever_grounded && first_ground_y_feet > 1.0f) {
+        if (!ever_grounded || std::fabs(first_ground_y_feet) > 0.01f ||
+            std::fabs(feet) > 0.01f) {
             printf("FAIL: diagonal mid-wall trim latched as ground at feet=%.2f\n",
                    first_ground_y_feet);
             return 1;
@@ -524,9 +540,8 @@ int main() {
             printf("FAIL: up-climb never entered Climbing\n");
             return 1;
         }
-        // Climb up for a window that stays below the wall top (y=80): from
-        // y=30 at climb_speed 40 that's well under 1s. Only the genuine mantle
-        // at the lip (y=80) should ever exit, and we stop before reaching it.
+        // Keep the test window below the wall top (y=80), while requiring
+        // enough travel to catch a sluggish climb-speed regression.
         int uncommanded_exits = 0;
         int climbed_ticks = 0;
         float start_y = h.state.position.y;
@@ -545,8 +560,9 @@ int main() {
             printf("FAIL: up-climb exited before the lip (grip unstable)\n");
             return 1;
         }
-        if (climbed_ticks < 44 || gained < 20.0f) {
-            printf("FAIL: up-climb did not sustain upward (climbed=%d gained=%.2f)\n",
+        // OG ClimbSpeed=40: 45 uninterrupted 60-Hz ticks gain 30 units.
+        if (climbed_ticks != 45 || std::fabs(gained - 30.0f) > 0.01f) {
+            printf("FAIL: up-climb differs from OG speed (climbed=%d gained=%.2f, need 30)\n",
                    climbed_ticks, gained);
             return 1;
         }
@@ -585,7 +601,7 @@ int main() {
                 };
                 uint16_t m = physics::MAT_SOLID;
                 tris = {
-                    {0,1,2,m,0,0},{0,2,3,m,1,0},          // floor
+                    {0,2,1,m,0,0},{0,3,2,m,1,0},          // floor normal +Y
                     {4,5,6,m,2,0},{4,6,7,m,3,0},          // wall A (normal -x)
                     {8,9,10,m,4,0},{8,10,11,m,5,0},       // wall B (normal -z)
                 };
@@ -620,7 +636,8 @@ int main() {
         PlayerController ctrl;
         PlayerState st;
         // Spawn touching wall A (x=20) at its corner edge (z=20), facing +x.
-        st.position = {15.0f, 100.0f, 19.0f};
+        // OG TryClimb radius is 4; start at the 3-unit wall anchor.
+        st.position = {17.0f, 100.0f, 19.0f};
         st.velocity = {};
         st.grounded = false;
         st.target_facing = {1, 0, 0};
@@ -632,10 +649,11 @@ int main() {
         // Enter climb.
         bool entered = false;
         for (int i = 0; i < 20; ++i) {
+            ctrl.BeginMoveTick(st);
             PlayerController::StepContext ctx =
                 ctrl.TimerInputPhase(st, in, kCamForward, kDt);
             ctrl.StatePhase(st, in, ctx, kDt, &room);
-            ctrl.MovePhase(st, kDt, &room);
+            ctrl.MovePhase(st, kDt, &room, &ctx);
             if (st.movement_state == PlayerMovementState::Climbing) { entered = true; break; }
         }
         if (!entered) {
@@ -648,10 +666,11 @@ int main() {
         int entries = 1, exits = 0;
         bool was_climbing = true;
         for (int i = 0; i < 60; ++i) {
+            ctrl.BeginMoveTick(st);
             PlayerController::StepContext ctx =
                 ctrl.TimerInputPhase(st, in, kCamForward, kDt);
             ctrl.StatePhase(st, in, ctx, kDt, &room);
-            ctrl.MovePhase(st, kDt, &room);
+            ctrl.MovePhase(st, kDt, &room, &ctx);
             const bool climbing = st.movement_state == PlayerMovementState::Climbing;
             if (climbing && !was_climbing) ++entries;
             if (!climbing) ++exits;

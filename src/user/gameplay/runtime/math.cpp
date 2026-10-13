@@ -42,8 +42,10 @@ Vec3 RelativeMoveInput(const Vec2& move, const Vec3& camera_forward, const Vec3&
 
     const Vec3 forward = NormalizeXZ(camera_forward, fallback_facing);
     const Vec3 right = {forward.z, 0.0f, -forward.x};
-    const float normalized_x = move.x / input_length;
-    const float normalized_y = move.y / input_length;
+    float normalized_x = move.x / input_length;
+    float normalized_y = move.y / input_length;
+    // OG snaps nearly-forward input to its cardinal basis before projection.
+    if (normalized_y >= 0.985f) { normalized_x = 0.0f; normalized_y = 1.0f; }
     return NormalizeXZ({
         (right.x * normalized_x) + (forward.x * normalized_y),
         0.0f,

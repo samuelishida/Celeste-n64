@@ -17,25 +17,35 @@ int main() {
     MovementConfig config;
     PlayerController controller(config);
     const Vec3 camera_forward = {0.0f, 0.0f, 1.0f};
+    Room floor;
+    floor.colliders[floor.collider_count++] = {
+        .type = ColliderType::Plane,
+        .bounds = {.min = {-100.0f, 0.0f, -100.0f}, .max = {100.0f, 0.0f, 100.0f}},
+        .solid = true,
+        .normal = {0.0f, 1.0f, 0.0f},
+    };
 
     // Ground dash + jump -> dash-jump: ends dash, applies vertical velocity,
     // preserves horizontal momentum.
     PlayerState p;
     p.grounded = true;
+    p.position.y = config.player_half_height;
     p.velocity = {0.0f, 0.0f, 0.0f};
+    p.coyote_time_remaining = config.coyote_time;
+    p.contact.coyote_height = p.position.y;
     p.target_facing = {1.0f, 0.0f, 0.0f};
     p.last_facing = {1.0f, 0.0f, 0.0f};
     PlayerInput dash;
     dash.move = {1.0f, 0.0f};
     dash.dash_pressed = true;
-    controller.Step(p, dash, camera_forward, kDt);
+    controller.Step(p, dash, camera_forward, kDt, &floor);
     assert(p.movement_state == PlayerMovementState::Dashing);
     assert(p.dashed_on_ground);
 
     // Wait for the no_dash_jump window (0.10s) to elapse while dashing.
     PlayerInput hold;
     hold.move = {1.0f, 0.0f};
-    for (int i = 0; i < 7; ++i) controller.Step(p, hold, camera_forward, kDt);
+    for (int i = 0; i < 8; ++i) controller.Step(p, hold, camera_forward, kDt, &floor);
     assert(p.movement_state == PlayerMovementState::Dashing);
 
     // Press jump during dash -> dash-jump.
@@ -44,6 +54,7 @@ int main() {
     jump.jump_pressed = true;
     jump.jump_held = true;
     const float dash_speed_before_jump = p.velocity.x;
+    controller.BeginMoveTick(p);
     auto jump_context = controller.TimerInputPhase(p, jump, camera_forward, kDt);
     controller.StatePhase(p, jump, jump_context, kDt);
     assert(p.movement_state == PlayerMovementState::Normal);
@@ -63,7 +74,7 @@ int main() {
     coyote_dash.grounded = false;
     coyote_dash.movement_state = PlayerMovementState::Dashing;
     coyote_dash.dashed_on_ground = true;
-    coyote_dash.velocity = {0.0f, 0.0f, 0.0f};
+    coyote_dash.velocity = {config.dash_speed, 0.0f, 0.0f};
     coyote_dash.target_facing = {1.0f, 0.0f, 0.0f};
     coyote_dash.last_facing = {1.0f, 0.0f, 0.0f};
     coyote_dash.contact.coyote_height = 10.0f;

@@ -18,7 +18,7 @@ PHYSICS_RESULT = (
     "air_release_drop=5.3 air_grounded=0 run_peak=64.0 brake_min=0.0 "
     "reverse_speed=64.0 jump_rise=24.0 dash_distance=37.9 dash_launch=1 "
     "dash_airborne=1 dash_launch_y=52.0 dash_launch_speed=140.0 target=1 approach=1 "
-    "approach_ticks=49 start_gap=51.2 entry_gap=3.4 climb=1 climb_ticks=16 "
+    "approach_ticks=49 start_gap=51.2 entry_gap=3.4 climb=1 climb_ticks=16 climb_rise=8.53 "
     "climb_entry_grounded=1 climb_first_step_dy=0.67 climb_first_step_snap=0.100 "
     "climb_first_step_ok=1 walljump=1 walljump_ok=1 walljump_xy=83.2 "
     "walljump_y=90.0 walljump_out=83.2 mantle=0 mantle_ok=0 clearance_samples=16 "
@@ -36,7 +36,7 @@ def good_capture() -> str:
         "[matcat] loaded 32 materials from rom:/lvl/forsyken-city/forsyken-city.manifest",
         "[texroom] loaded: 415 verts, 12 batches, 114 faces, 0 discarded block=yes",
         "[input] z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0",
-        "[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13",
+        "[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56",
         "[phys-test] climb-target hit=1 height=9 max_height=9 face=5190 range=50.0",
         "[phys-test] climb-entry gap=3.35 ticks=49 pos=(1.7,36.9,41.8)",
         PHYSICS_RESULT,
@@ -48,6 +48,9 @@ def main() -> None:
     capture = good_capture()
     good = validate_capture(capture, SHA)
     assert not good, f"valid capture rejected: {good}"
+    insufficient_rise = capture.replace("climb_rise=8.53", "climb_rise=0.5")
+    assert any("climb_rise" in issue for issue in validate_capture(insufficient_rise, SHA)), \
+        "brief grab accepted without measured sustained climb rise"
 
     mantle_result = PHYSICS_RESULT.replace("profile=walljump", "profile=mantle")
     mantle_result = mantle_result.replace("walljump=1 walljump_ok=1", "walljump=0 walljump_ok=0")
@@ -112,6 +115,9 @@ def main() -> None:
     report_filters = [line for line in capture_script.splitlines() if "grep -nE" in line]
     assert any("input-trace" in line for line in report_filters), (
         "capture_baseline must preserve fixed-tick [input-trace] records"
+    )
+    assert any("climb-window" in line for line in report_filters), (
+        "capture_baseline must preserve bounded [climb-window] diagnostics"
     )
 
     print("PASS: verifier enforces wall-jump/mantle/corner profiles and rejects stale evidence")

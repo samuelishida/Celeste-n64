@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cmath>
 
 #include "../src/user/gameplay/player/player_controller.hpp"
 #include "../src/user/gameplay/player/player_movement.hpp"
@@ -11,6 +12,22 @@ int main() {
     PlayerController controller(config);
     const Vec3 camera_forward = {0.0f, 0.0f, 1.0f};
 
+    // OG RefillDash starts a simulation-ticked .05 s white hair flash only
+    // when restoring a spent charge; subsequent world ticks decay it.
+    {
+        PlayerState player;
+        player.grounded = true;
+        player.dashes = 0;
+        PlayerInput input;
+        controller.BeginMoveTick(player);
+        controller.TimerInputPhase(player, input, camera_forward, 1.0f / 60.0f);
+        assert(player.dashes == 1);
+        assert(std::fabs(player.dash_refill_flash_remaining - 0.05f) < 1.0e-6f);
+        controller.BeginMoveTick(player);
+        controller.TimerInputPhase(player, input, camera_forward, 1.0f / 60.0f);
+        assert(std::fabs(player.dash_refill_flash_remaining - (0.05f - 1.0f / 60.0f)) < 1.0e-6f);
+    }
+
     // Source-required runtime bookkeeping exists in PlayerState.
     {
         PlayerState player;
@@ -19,7 +36,7 @@ int main() {
         assert(player.contact.ground_snap_cooldown_remaining == 0.0f);
         assert(player.platform_carry.time_remaining == 0.0f);
         assert(player.climb.wall_surface_id == -1);
-        // dash_count removed (review C2): dead bookkeeping after motor deletion.
+        assert(player.dashes == 1);
     }
 
     // Timer/input captures pre-state velocity and only updates timers/input facts.
@@ -32,6 +49,7 @@ int main() {
 
         PlayerInput input;
         input.move = {1.0f, 0.0f};
+        controller.BeginMoveTick(player);
         PlayerController::StepContext context =
             controller.TimerInputPhase(player, input, camera_forward, 0.25f);
 
@@ -58,17 +76,20 @@ int main() {
         PlayerState player;
         player.position = {0.0f, 10.0f, 0.0f};  // feet on the floor at y=0
         player.grounded = true;
+        player.contact.coyote_height = player.position.y;
+        player.coyote_time_remaining = config.coyote_time;
 
         PlayerInput input;
         input.jump_pressed = true;
         input.jump_held = true;
+        controller.BeginMoveTick(player);
         PlayerController::StepContext context =
             controller.TimerInputPhase(player, input, camera_forward, 1.0f / 60.0f);
         controller.StatePhase(player, input, context, 1.0f / 60.0f);
         assert(player.velocity.y > 0.0f);       // state handler edits velocity
         assert(player.position.y == 10.0f);     // state phase does NOT move
 
-        controller.MovePhase(player, 1.0f / 60.0f, &room);
+        controller.MovePhase(player, 1.0f / 60.0f, &room, &context);
         assert(player.position.y > 10.0f);      // jump applied through the mover
     }
 

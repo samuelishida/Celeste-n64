@@ -72,10 +72,11 @@ struct Harness {
     // StatePhase (velocity edits) -> MovePhase (SweepMove + contact). The old
     // motor.Step is replaced by MovePhase's single mover.
     void Tick(const PlayerInput& input) {
+        controller.BeginMoveTick(state);
         PlayerController::StepContext ctx =
             controller.TimerInputPhase(state, input, cam_forward, kDt);
         controller.StatePhase(state, input, ctx, kDt, &room);
-        controller.MovePhase(state, kDt, &room);
+        controller.MovePhase(state, kDt, &room, &ctx);
     }
 
     Vec3 cam_forward{0.0f, 0.0f, -1.0f};
@@ -95,9 +96,9 @@ int main() {
         };
         const uint16_t m = physics::MAT_SOLID;
         mb.tris = {
-            {0, 1, 2, m, 0, 0}, {0, 2, 3, m, 1, 0},
+            {0, 2, 1, m, 0, 0}, {0, 3, 2, m, 1, 0},
             {4, 5, 6, m, 2, 0}, {4, 6, 7, m, 3, 0},   // wall A (normal -x)
-            {8, 9, 10, m, 4, 0}, {8, 10, 11, m, 5, 0}, // wall B (normal -z)
+            {8, 10, 9, m, 4, 0}, {8, 11, 10, m, 5, 0}, // wall B (normal -z)
         };
         mb.nodes = {{{-h, 0, -h}, {h, top, h}, 0, static_cast<uint16_t>(mb.tris.size())}};
         mb.Finalize();
@@ -127,7 +128,7 @@ int main() {
         // climb-up. Flip this fixture's camera to (0,0,+1): stick left+up →
         // world +z drift with climb-up unchanged.
         hh.cam_forward = {0.0f, 0.0f, 1.0f};
-        in.move = {-1.0f, 1.0f};  // stick left+up → world +z drift
+        in.move = {-1.0f, 1.0f};  // OG raw side +1 follows wallRight (+z).
         bool reanchored = false;
         int exits = 0;
         for (int i = 0; i < 120 && hh.state.position.z < 21.0f; ++i) {
@@ -171,11 +172,11 @@ int main() {
         mb.verts = {
             {{-h, 0, -h}}, {{h, 0, -h}}, {{h, 0, h}}, {{-h, 0, h}},
             {{20, 0, 0}}, {{20, 0, 200}}, {{20, top, 200}}, {{20, top, 0}},      // wall A (n -x)
-            {{-200, 0, 200}}, {{20, 0, 200}}, {{20, top, 200}}, {{-200, top, 200}}, // wall C (n -z from +z side)
+            {{20, 0, 200}}, {{200, 0, 200}}, {{200, top, 200}}, {{20, top, 200}}, // wall C (n -z from +z side)
         };
         const uint16_t m = physics::MAT_SOLID;
         mb.tris = {
-            {0, 1, 2, m, 0, 0}, {0, 2, 3, m, 1, 0},
+            {0, 2, 1, m, 0, 0}, {0, 3, 2, m, 1, 0},
             {4, 5, 6, m, 2, 0}, {4, 6, 7, m, 3, 0},
             {8, 9, 10, m, 4, 0}, {8, 10, 11, m, 5, 0},
         };
@@ -187,7 +188,7 @@ int main() {
         hh.room.collider_count = 0;
         // 4 units off wall A (x=20): within the entry probe's reach at
         // tangency. Wall C at z=200 is 140 away — only wall A is near.
-        hh.state.position = {16.0f, 60.0f, 60.0f};
+        hh.state.position = {16.0f, 60.0f, 160.0f};
         hh.state.grounded = false;
         hh.state.target_facing = {1.0f, 0.0f, 0.0f};
         hh.state.last_facing = {1.0f, 0.0f, 0.0f};
@@ -204,7 +205,7 @@ int main() {
         // Same camera flip as fixture A: stick left+up → world -z drift along
         // wall A toward the edge at z=0.
         hh.cam_forward = {0.0f, 0.0f, 1.0f};
-        in.move = {1.0f, 1.0f};  // stick right+up → world -z drift
+        in.move = {-1.0f, 1.0f};  // stick right+up → world -z drift
         int exits = 0;
         float max_delta = 0.0f;
         Vec3 prev = hh.state.position;
@@ -240,7 +241,7 @@ int main() {
         };
         const uint16_t m = physics::MAT_SOLID;
         mb.tris = {
-            {0, 1, 2, m, 0, 0}, {0, 2, 3, m, 1, 0},
+            {0, 2, 1, m, 0, 0}, {0, 3, 2, m, 1, 0},
             {4, 5, 6, m, 2, 0}, {4, 6, 7, m, 3, 0},
         };
         mb.nodes = {{{-h, 0, -h}, {h, top, h}, 0, static_cast<uint16_t>(mb.tris.size())}};

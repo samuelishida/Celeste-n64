@@ -23,13 +23,22 @@
 #include "gameplay/player/player_controller.hpp"
 #include "gameplay/player/player_movement.hpp"
 #include "gameplay/player/player_state.hpp"
-#include "gameplay/render/player_model_clearance.hpp"
+#include "gameplay/player/player_model_clearance.hpp"
 #include "gameplay/world/world.hpp"
 
 using namespace madeline_cube;
 using namespace madeline_cube::physics;
 
 namespace {
+
+void TickMove(const MoveService& mover, PlayerState& state, const Room& room,
+              const Vec3& delta, bool resolve) {
+    mover.BeginTick(state);
+    mover.SweepMove(state, room, delta, resolve);
+    mover.Popout(state, room, false);
+    state.grounded = mover.GroundCheck(state, room, nullptr, nullptr);
+}
+
 
 constexpr float kDt = 1.0f / 60.0f;
 
@@ -75,7 +84,7 @@ struct SyntheticMesh {
     // Add a quad (4 verts, 2 triangles) with the given corners.
     // `mat` is the material; face_id is auto-assigned to the array index.
     uint32_t AddQuad(const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d,
-                     uint16_t mat = MAT_SOLID) {
+                     uint16_t mat = MAT_SOLID, Vec3 authored_normal = {0,1,0}) {
         const uint32_t base = static_cast<uint32_t>(verts.size());
         verts.push_back({static_cast<int16_t>(a.x), static_cast<int16_t>(a.y), static_cast<int16_t>(a.z)});
         verts.push_back({static_cast<int16_t>(b.x), static_cast<int16_t>(b.y), static_cast<int16_t>(b.z)});
@@ -87,6 +96,11 @@ struct SyntheticMesh {
         tris.push_back({static_cast<uint16_t>(base), static_cast<uint16_t>(base + 2),
                         static_cast<uint16_t>(base + 3), mat,
                         static_cast<uint16_t>(tris.size()), 0});
+        const Vec3 raw = Cross(Sub(b,a),Sub(c,a));
+        if (Dot(raw,authored_normal) < 0) {
+            std::swap(tris[tris.size()-2].i1,tris[tris.size()-2].i2);
+            std::swap(tris[tris.size()-1].i1,tris[tris.size()-1].i2);
+        }
         return base;
     }
 
@@ -141,7 +155,7 @@ struct CeilingOnlyGeometry {
         const int16_t half = 200;
         constexpr int16_t ceiling_y = 20;
         syn.AddQuad({-half, ceiling_y, -half}, {half, ceiling_y, -half},
-                    {half, ceiling_y, half}, {-half, ceiling_y, half});
+                    {half, ceiling_y, half}, {-half, ceiling_y, half}, MAT_SOLID, {0,-1,0});
         syn.Finalize();
     }
 };
@@ -161,7 +175,7 @@ struct KneeHighLipGeometry {
         if (ceiling_y > 0) {
             const float roof_y = static_cast<float>(ceiling_y);
             syn.AddQuad({0, roof_y, -span}, {span, roof_y, -span},
-                        {span, roof_y, span}, {0, roof_y, span});
+                        {span, roof_y, span}, {0, roof_y, span}, MAT_SOLID, {0,-1,0});
         }
         syn.Finalize();
     }
@@ -177,7 +191,7 @@ int RunAntiTunnelDash() {
     SyntheticMesh syn;
     syn.Reset();
     const int16_t half = 100, top = 80;
-    syn.AddQuad({-half, 0, 4}, {half, 0, 4}, {half, top, 4}, {-half, top, 4});    // front
+    syn.AddQuad({-half, 0, 4}, {half, 0, 4}, {half, top, 4}, {-half, top, 4}, MAT_SOLID, {0,0,-1});    // front
     syn.AddQuad({-half, 0, 5}, {half, 0, 5}, {half, top, 5}, {-half, top, 5});    // back
     syn.AddQuad({-half, 0, -half}, {half, 0, -half}, {half, 0, half}, {-half, 0, half}); // floor
     syn.Finalize();
@@ -193,7 +207,7 @@ int RunAntiTunnelDash() {
     bool tunneled = false;
     for (int i = 0; i < 5; ++i) {
         const Vec3 amount = {state.velocity.x * kDt, state.velocity.y * kDt, state.velocity.z * kDt};
-        mover.SweepMove(state, room, amount, true);
+        TickMove(mover, state, room, amount, true);
         // Interior test: position strictly outside every wall face volume
         // (z < 4 or z > 5). Waist/head heights are within the wall's y range.
         const float waist_y = state.position.y - mover.Config().half_height + 3.0f;
@@ -253,7 +267,7 @@ int RunStepDownSnap() {
         state.grounded = false;
         if (!state.grounded) state.velocity.y = state.velocity.y - 600.0f * kDt;
         const Vec3 amount = {10.0f * kDt, state.velocity.y * kDt, 0.0f};
-        mover.SweepMove(state, room, amount, true);
+        TickMove(mover, state, room, amount, true);
         mover.GroundSnap(state, room, kDt);
     }
 
@@ -286,14 +300,14 @@ int RunDeathContactAccumulatesAcrossSweep() {
     PlayerState state;
     state.position = {-1.0f, mover.Config().half_height, 0.0f};
     state.grounded = true;
-    mover.SweepMove(state, room, {8.0f, 0.0f, 0.0f}, true);
+    TickMove(mover, state, room, {8.0f, 0.0f, 0.0f}, true);
 
     if (state.position.x <= 2.0f || !state.death_contact) {
         printf("FAIL (death sweep): x=%.2f death_contact=%u; crossed death strip but lost contact\n",
                state.position.x, state.death_contact ? 1u : 0u);
         return 1;
     }
-    mover.SweepMove(state, room, {}, false);
+    TickMove(mover, state, room, {}, false);
     if (state.death_contact) {
         printf("FAIL (death sweep): contact stayed latched into next safe move\n");
         return 1;
@@ -396,19 +410,19 @@ int RunControllerStepDownGroundedState(uint16_t lower_floor_material) {
 
 int RunKneeHighLipStepUp() {
     KneeHighLipGeometry geo;
-    geo.Build();
+    geo.Build(2);
     Room room;
     WireRoom(room, geo.syn);
     MoveService mover;
     const float half_height = mover.Config().half_height;
-    constexpr float lip_height = 5.0f;
+    constexpr float lip_height = 2.0f;
 
     PlayerState state;
     state.position = {-6.0f, half_height, 0.0f};
     state.velocity = {64.0f, 0.0f, 0.0f};
     state.grounded = true;
     for (int i = 0; i < 30; ++i) {
-        mover.SweepMove(state, room, {state.velocity.x * kDt, 0.0f, 0.0f}, true);
+        TickMove(mover, state, room, {state.velocity.x * kDt, 0.0f, 0.0f}, true);
         state.grounded = mover.GroundCheck(state, room, nullptr, nullptr);
     }
 
@@ -440,7 +454,7 @@ int RunLipStepRejectsUnsafeRise() {
         state.velocity = {64.0f, 0.0f, 0.0f};
         state.grounded = true;
         for (int tick = 0; tick < 12; ++tick) {
-            mover.SweepMove(state, room,
+            TickMove(mover, state, room,
                 {state.velocity.x * kDt, 0.0f, 0.0f}, true);
             state.grounded = mover.GroundCheck(state, room, nullptr, nullptr);
         }
@@ -459,7 +473,7 @@ int RunLipStepRejectsUnsafeRise() {
 
 int RunControllerWalksKneeHighLip() {
     KneeHighLipGeometry geo;
-    geo.Build();
+    geo.Build(2);
     Room room;
     WireRoom(room, geo.syn);
     MovementConfig config;
@@ -479,7 +493,7 @@ int RunControllerWalksKneeHighLip() {
 
     const float feet_y = state.position.y - config.player_half_height;
     if (state.position.x < 3.0f || !state.grounded ||
-        std::fabs(feet_y - 5.0f) > 0.5f) {
+        std::fabs(feet_y - 2.0f) > 0.5f) {
         printf("FAIL (controller lip): x=%.2f feet_y=%.2f grounded=%u v_x=%.2f\n",
                state.position.x, feet_y, state.grounded ? 1u : 0u, state.velocity.x);
         return 1;
@@ -505,7 +519,7 @@ int RunSlopeGround() {
     MoveService mover;
     PlayerState state;
     // Place above the slope at x=-2.5 (slope y there ~2.5); feet near it.
-    state.position = {-2.5f, 12.5f, 0.0f};
+    state.position = {-2.5f, 2.5f + mover.Config().half_height, 0.0f};
     state.velocity = {};
     state.grounded = false;
 
@@ -560,11 +574,50 @@ int RunCeilingPopoutUsesFeetAnchor() {
         return 1;
     }
     printf("  (ceiling) feet-anchored popout OK: feet y=%.2f\n", feet_y);
-    mover.SweepMove(state, room, {0.0f, -1.0f, 0.0f}, false);
+    TickMove(mover, state, room, {0.0f, -1.0f, 0.0f}, false);
     if (state.ceiling_contact) {
         printf("FAIL (ceiling): contact remained latched after moving clear\n");
         return 1;
     }
+    return 0;
+}
+
+int RunPopoutMixedGroundCeilingWallOrder() {
+    // Deliberately overlapping floor/roof force OG's ground-if / ceiling-else
+    // branch to choose ground. The wall remains a separate following if and
+    // must still repair position/project horizontal impact in that same call.
+    SyntheticMesh syn;
+    syn.Reset();
+    constexpr int16_t half = 100;
+    syn.AddQuad({-half, 0, -half}, {half, 0, -half},
+                {half, 0, half}, {-half, 0, half}, MAT_SOLID, {0, 1, 0});
+    syn.AddQuad({-half, 10, -half}, {half, 10, -half},
+                {half, 10, half}, {-half, 10, half}, MAT_SOLID, {0, -1, 0});
+    syn.AddQuad({-half, 0, 5}, {half, 0, 5},
+                {half, 12, 5}, {-half, 12, 5}, MAT_SOLID, {0, 0, 1});
+    syn.Finalize();
+
+    Room room;
+    WireRoom(room, syn);
+    MoveService mover;
+    PlayerState state;
+    state.position = {0.0f, mover.Config().half_height, 7.0f}; // feet on floor
+    state.velocity = {0.0f, 20.0f, -30.0f};
+
+    const bool wall_pop = mover.Popout(state, room, true);
+    const float feet_y = state.position.y - mover.Config().half_height;
+    if (!wall_pop || !state.wall_contact || state.ceiling_contact ||
+        std::fabs(feet_y) > 0.01f || std::fabs(state.position.z - 8.0f) > 0.02f ||
+        std::fabs(state.velocity.y - 20.0f) > 0.02f ||
+        std::fabs(state.velocity.z) > 0.02f) {
+        printf("FAIL (mixed popout): wall=%u wall_contact=%u ceiling=%u feet=%.3f "
+               "z=%.3f v=(%.3f,%.3f,%.3f)\n",
+               wall_pop ? 1u : 0u, state.wall_contact ? 1u : 0u,
+               state.ceiling_contact ? 1u : 0u, feet_y, state.position.z,
+               state.velocity.x, state.velocity.y, state.velocity.z);
+        return 1;
+    }
+    printf("  (mixed popout) ground wins ceiling branch; independent wall still resolves\n");
     return 0;
 }
 
@@ -587,7 +640,7 @@ int RunWallPopoutWaistHead() {
     // Several ticks so the body settles against the wall at equilibrium.
     for (int i = 0; i < 10; ++i) {
         const Vec3 amount = {state.velocity.x * kDt, state.velocity.y * kDt, state.velocity.z * kDt};
-        mover.SweepMove(state, room, amount, true);
+        TickMove(mover, state, room, amount, true);
         state.velocity.z = -50.0f;  // keep pushing into the wall
     }
 
@@ -609,6 +662,69 @@ int RunWallPopoutWaistHead() {
     return 0;
 }
 
+int RunObliqueWallImpactMatchesOgProjection() {
+    // Player.Popout (Player.cs:709-714) removes the inward component along the
+    // face normal, while positional repair uses radial WallHit.Pushout. Probe
+    // just beyond a finite wall edge so these vectors are not interchangeable.
+    SyntheticMesh syn;
+    syn.Reset();
+    constexpr Vec3 normal{0.6f, 0.0f, 0.8f};
+    syn.AddQuad({-40, -20, 30}, {40, -20, -30},
+                {40, 30, -30}, {-40, 30, 30}, MAT_SOLID, normal);
+    syn.Finalize();
+
+    Room room;
+    WireRoom(room, syn);
+    MoveService mover;
+    const float half_height = mover.Config().half_height;
+    constexpr Vec3 tangent{0.8f, 0.0f, -0.6f};
+    PlayerState state;
+    state.position = {normal.x * 2.0f + tangent.x * 51.5f, half_height,
+                      normal.z * 2.0f + tangent.z * 51.5f};
+    // -50 into the face, +30 along it, and -20 vertically. Source response
+    // preserves both tangent components and removes only the inward normal.
+    state.velocity = {-6.0f, -20.0f, -58.0f};
+
+    const Vec3 waist = {state.position.x,
+                        state.position.y - half_height + 3.0f,
+                        state.position.z};
+    const WallHit hit = QueryWallPushout(room, waist, mover.Config().wall_radius);
+    const float radial_face_dot = hit.normal.x * hit.plane_normal.x +
+                                  hit.normal.z * hit.plane_normal.z;
+    if (!hit.hit || std::fabs(hit.plane_normal.x - normal.x) > 0.001f ||
+        std::fabs(hit.plane_normal.z - normal.z) > 0.001f ||
+        radial_face_dot > 0.95f) {
+        printf("FAIL (oblique wall): source face not selected: hit=%u n=(%.3f,%.3f,%.3f)\n",
+               hit.hit ? 1u : 0u, hit.plane_normal.x, hit.plane_normal.y,
+               hit.plane_normal.z);
+        return 1;
+    }
+
+    const Vec3 before_position = state.position;
+    mover.Popout(state, room, true);
+    const Vec3 expected_velocity = {24.0f, -20.0f, -18.0f};
+    const Vec3 actual_push = {state.position.x - before_position.x,
+                              state.position.y - before_position.y,
+                              state.position.z - before_position.z};
+    const Vec3 expected_push = {hit.normal.x * hit.pushout,
+                                hit.normal.y * hit.pushout,
+                                hit.normal.z * hit.pushout};
+    if (!state.wall_contact ||
+        std::fabs(actual_push.x - expected_push.x) > 0.01f ||
+        std::fabs(actual_push.y - expected_push.y) > 0.01f ||
+        std::fabs(actual_push.z - expected_push.z) > 0.01f ||
+        std::fabs(state.velocity.x - expected_velocity.x) > 0.02f ||
+        std::fabs(state.velocity.y - expected_velocity.y) > 0.02f ||
+        std::fabs(state.velocity.z - expected_velocity.z) > 0.02f) {
+        printf("FAIL (oblique wall): push=(%.3f,%.3f,%.3f) v=(%.3f,%.3f,%.3f)\n",
+               actual_push.x, actual_push.y, actual_push.z,
+               state.velocity.x, state.velocity.y, state.velocity.z);
+        return 1;
+    }
+    printf("  (oblique wall edge) OG separates radial pushout from face-normal velocity projection\n");
+    return 0;
+}
+
 int RunWallRestEquilibrium() {
     MotorWallRestGeometry geo;
     geo.Build();
@@ -624,7 +740,7 @@ int RunWallRestEquilibrium() {
     const int kTicks = 60;
     for (int i = 0; i < kTicks; ++i) {
         const Vec3 amount = {state.velocity.x * kDt, state.velocity.y * kDt, state.velocity.z * kDt};
-        mover.SweepMove(state, room, amount, true);
+        TickMove(mover, state, room, amount, true);
     }
 
     // Normal-state rest distance from the face plane (z=5) = wall_radius (3)
@@ -641,7 +757,7 @@ int RunWallRestEquilibrium() {
     const float z_at_30 = state.position.z;
     for (int i = 0; i < 30; ++i) {
         const Vec3 amount = {state.velocity.x * kDt, state.velocity.y * kDt, state.velocity.z * kDt};
-        mover.SweepMove(state, room, amount, true);
+        TickMove(mover, state, room, amount, true);
     }
     const float drift = std::fabs(state.position.z - z_at_30);
     if (drift >= 0.5f) {
@@ -662,13 +778,13 @@ int RunWallContactClearsAfterLeaving() {
 
     PlayerState state;
     state.position = {0.0f, 10.0f, 7.5f};  // within radius 3 of wall at z=5
-    mover.SweepMove(state, room, {0.0f, 0.0f, 0.0f}, false);
+    TickMove(mover, state, room, {0.0f, 0.0f, 0.0f}, false);
     if (!state.wall_contact) {
         printf("FAIL (f): expected wall contact at rest\n");
         return 1;
     }
 
-    mover.SweepMove(state, room, {0.0f, 0.0f, 2.0f}, false);  // move away
+    TickMove(mover, state, room, {0.0f, 0.0f, 2.0f}, false);  // move away
     if (state.wall_contact) {
         printf("FAIL (f): wall contact stayed latched after leaving wall\n");
         return 1;
@@ -698,7 +814,7 @@ int RunPlayerModelWallClearance() {
     walking.position = {0.0f, config.half_height, 20.0f};
     walking.velocity = {0.0f, 0.0f, -64.0f};
     for (int i = 0; i < 60; ++i) {
-        mover.SweepMove(walking, room,
+        TickMove(mover, walking, room,
             {0.0f, 0.0f, walking.velocity.z * kDt}, true);
     }
     const float walk_clearance = walking.position.z - 5.0f;
@@ -718,7 +834,7 @@ int RunPlayerModelWallClearance() {
 
     PlayerState climbing;
     climbing.position = {0.0f, config.half_height, 8.0f};  // OG climb anchor: 3 from z=5
-    mover.SweepMoveClimb(climbing, room, {0.0f, 0.0f, -1.0f});
+    TickMove(mover, climbing, room, {0.0f, 0.0f, -1.0f}, false);
     const float climb_clearance = climbing.position.z - 5.0f;
     const float climb_model_offset = PlayerModelHorizontalOffset(
         wall_normal, climb_clearance, kMadelineModelRadius,
@@ -752,7 +868,9 @@ int main() {
     failures += RunControllerWalksKneeHighLip();
     failures += RunSlopeGround();
     failures += RunCeilingPopoutUsesFeetAnchor();
+    failures += RunPopoutMixedGroundCeilingWallOrder();
     failures += RunWallPopoutWaistHead();
+    failures += RunObliqueWallImpactMatchesOgProjection();
     failures += RunWallRestEquilibrium();
     failures += RunWallContactClearsAfterLeaving();
     failures += RunPlayerModelWallClearance();

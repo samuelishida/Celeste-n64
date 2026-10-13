@@ -13,6 +13,13 @@
 using namespace madeline_cube;
 
 int main() {
+    Room left_wall;
+    left_wall.colliders[left_wall.collider_count++] = {
+        .type = ColliderType::Box,
+        .bounds = {.min = {-6, -100, -100}, .max = {-3, 100, 100}},
+        .solid = true,
+        .face_id = 1,
+    };
     MovementConfig config;
     PlayerController controller(config);
     RespawnSystem respawn(config);
@@ -23,10 +30,21 @@ int main() {
         PlayerState player;
         player.grounded = true;
 
+        Room floor;
+        floor.colliders[floor.collider_count++] = {
+            .type = ColliderType::Plane,
+            .bounds = {.min = {-100, 0, -100}, .max = {100, 0, 100}},
+            .solid = true,
+            .normal = {0, 1, 0},
+        };
+        player.position.y = config.player_half_height;
+        player.contact.coyote_height = player.position.y;
+        player.coyote_time_remaining = config.coyote_time;
+
         PlayerInput jump_input;
         jump_input.jump_pressed = true;
         jump_input.jump_held = true;
-        controller.Step(player, jump_input, camera_forward, 1.0f / 60.0f);
+        controller.Step(player, jump_input, camera_forward, 1.0f / 60.0f, &floor);
         assert(!player.grounded);
         assert(player.velocity.y > 0.0f);
     }
@@ -35,13 +53,13 @@ int main() {
     {
         PlayerState player;
         player.grounded = false;
-        player.air_dash_available = true;
+        player.dashes = 1;
 
         PlayerInput dash_input;
         dash_input.move = {1.0f, 0.0f};
         dash_input.dash_pressed = true;
         controller.Step(player, dash_input, camera_forward, 1.0f / 60.0f);
-        assert(!player.air_dash_available);
+        assert(player.dashes == 0);
         const float air_dash_speed = config.dash_speed / std::sqrt(1.16f);
         assert(std::fabs(player.velocity.x - air_dash_speed) < 0.02f);
         assert(std::fabs(player.velocity.y - air_dash_speed * 0.4f) < 0.02f);
@@ -78,6 +96,8 @@ int main() {
         assert(player.velocity.y <= 0.0f);  // airborne, no coyote: buffered, not fired
 
         player.grounded = true;
+        player.contact.coyote_height = player.position.y;
+        player.coyote_time_remaining = config.coyote_time;
         controller.Step(player, jump_input, camera_forward, 1.0f / 60.0f);
         assert(player.velocity.y > 0.0f);   // buffered edge consumed on landing
     }
@@ -86,6 +106,8 @@ int main() {
     {
         PlayerState player;
         player.grounded = true;
+        player.contact.coyote_height = player.position.y;
+        player.coyote_time_remaining = config.coyote_time;
 
         PlayerInput jump_input;
         jump_input.jump_pressed = true;
@@ -102,6 +124,14 @@ int main() {
     // --- Wall climb (unified OG-style grab; unlimited grip, no stamina) ---
     {
         PlayerState player;
+        Room wall_room;
+        wall_room.colliders[wall_room.collider_count++] = {
+            .type = ColliderType::Box,
+            .bounds = {.min = {-6, -100, -100}, .max = {-3, 100, 100}},
+            .solid = true,
+            .face_id = 1,
+        };
+        player.position = {0, 30, 0};
         player.grounded = false;
         player.velocity.y = -1.0f;
         player.wall_contact = true;
@@ -112,20 +142,25 @@ int main() {
 
         PlayerInput grab_input;
         grab_input.climb_held = true;
-        controller.Step(player, grab_input, camera_forward, 1.0f / 60.0f);
+        controller.Step(player, grab_input, camera_forward, 1.0f / 60.0f, &wall_room);
         assert(player.movement_state == PlayerMovementState::Climbing);
         assert(player.velocity.y == 0.0f);  // grab zeroes velocity
 
         // Stick up climbs at climb_speed.
         PlayerInput climb_up = grab_input;
         climb_up.move = {0.0f, 1.0f};
-        controller.Step(player, climb_up, camera_forward, 1.0f / 60.0f);
-        assert(player.velocity.y == config.climb_speed);
+        const float climb_before = player.position.y;
+        // OG's shared climb probe requires neutral or into-wall relative
+        // input. Point this fixture's camera toward its -X wall.
+        controller.Step(player, climb_up, {-1.0f, 0.0f, 0.0f}, 1.0f / 60.0f, &wall_room);
+        assert(player.velocity.y == 0);
+        assert(std::fabs(player.position.y - climb_before - config.climb_speed / 60.0f) < .001f);
     }
 
     // --- Climb release ---
     {
         PlayerState player;
+        player.position = {0, 30, 0};
         player.grounded = false;
         player.movement_state = PlayerMovementState::Climbing;
         player.locomotion_state = LocomotionState::Climb;
@@ -136,7 +171,7 @@ int main() {
 
         PlayerInput release_input;
         release_input.climb_held = false;
-        controller.Step(player, release_input, camera_forward, 1.0f / 60.0f);
+        controller.Step(player, release_input, camera_forward, 1.0f / 60.0f, &left_wall);
         assert(player.movement_state == PlayerMovementState::Normal);
         assert(player.velocity.x == 0.0f && player.velocity.z == 0.0f);
     }
@@ -144,6 +179,7 @@ int main() {
     // --- Wall jump from climb: SET velocity away from the wall normal ---
     {
         PlayerState player;
+        player.position = {0, 30, 0};
         player.grounded = false;
         player.movement_state = PlayerMovementState::Climbing;
         player.locomotion_state = LocomotionState::Climb;
@@ -156,7 +192,7 @@ int main() {
         wall_jump_input.climb_held = true;
         wall_jump_input.jump_pressed = true;
         wall_jump_input.jump_held = true;
-        controller.Step(player, wall_jump_input, camera_forward, 1.0f / 60.0f);
+        controller.Step(player, wall_jump_input, camera_forward, 1.0f / 60.0f, &left_wall);
         assert(player.movement_state == PlayerMovementState::Normal);
         assert(player.velocity.x > 0.0f);   // away from the wall
         assert(player.velocity.y > 0.0f);
@@ -167,6 +203,7 @@ int main() {
     //     shim → SET-away velocity + facing flips away from the wall. ---
     {
         PlayerState player;
+        player.position = {0, 30, 0};
         player.grounded = false;
         player.wall_contact = true;
         player.wall_normal = {1.0f, 0.0f, 0.0f};   // wall to the -x side
@@ -176,7 +213,7 @@ int main() {
         PlayerInput njump_input;
         njump_input.jump_pressed = true;
         njump_input.jump_held = true;
-        controller.Step(player, njump_input, camera_forward, 1.0f / 60.0f);
+        controller.Step(player, njump_input, camera_forward, 1.0f / 60.0f, &left_wall);
         assert(player.movement_state == PlayerMovementState::Normal);
         // SET (not add): falling -20 must not bias the launch.
         assert(player.velocity.y == config.wall_jump_speed_y);
@@ -188,6 +225,7 @@ int main() {
     //     adjacent faces near an edge/corner must NOT eject the climb. ---
     {
         PlayerState player;
+        player.position = {0, 30, 0};
         player.grounded = false;
         player.wall_contact = true;
         player.wall_normal = {1.0f, 0.0f, 0.0f};
@@ -196,7 +234,7 @@ int main() {
 
         PlayerInput grab;
         grab.climb_held = true;
-        controller.Step(player, grab, camera_forward, 1.0f / 60.0f);
+        controller.Step(player, grab, camera_forward, 1.0f / 60.0f, &left_wall);
         assert(player.movement_state == PlayerMovementState::Climbing);
 
         // Simulate the motor reporting a perpendicular face on later ticks
@@ -205,9 +243,10 @@ int main() {
         for (int i = 0; i < 5; ++i) {
             player.wall_normal = (i % 2 == 0) ? Vec3{0.0f, 0.0f, -1.0f}
                                               : Vec3{1.0f, 0.0f, 0.0f};
-            controller.Step(player, grab, camera_forward, 1.0f / 60.0f);
+            const float before_y = player.position.y;
+            controller.Step(player, grab, {-1.0f, 0.0f, 0.0f}, 1.0f / 60.0f, &left_wall);
             assert(player.movement_state == PlayerMovementState::Climbing);
-            assert(player.velocity.y == config.climb_speed);  // still going up
+            assert(player.velocity.y == 0 && player.position.y > before_y);
         }
     }
 
@@ -262,7 +301,7 @@ int main() {
         assert(respawn.Step(player, checkpoint));
         assert(player.position.y == checkpoint.y);
         assert(player.velocity.x == 0.0f);
-        assert(player.air_dash_available);
+        assert(player.dashes == 1);
         assert(player.movement_state == PlayerMovementState::Normal);
     }
 
@@ -299,7 +338,7 @@ int main() {
     {
         PlayerState player;
         player.grounded = true;
-        player.air_dash_available = false;  // spent dash gets refilled
+        player.dashes = 0;  // spent dash gets refilled by spring
         player.velocity = {20.0f, -5.0f, 20.0f};  // momentum to be killed
         player.coyote_time_remaining = config.coyote_time;
         player.auto_jump = false;
@@ -323,7 +362,7 @@ int main() {
         assert(std::fabs(player.hold_jump_time_remaining - config.spring_jump_hold_time) < 1e-5f);
         assert(player.coyote_time_remaining == 0.0f);
         assert(player.auto_jump == true);
-        assert(player.air_dash_available == true);
+        assert(player.dashes == 1);
         // Momentum killed: |vx|,|vz| approach 0 at 30 → <= 30 and reduced.
         assert(std::fabs(player.velocity.x) <= 30.0f);
         assert(std::fabs(player.velocity.z) <= 30.0f);
@@ -336,11 +375,14 @@ int main() {
         SpringActor s;
         s.Init();
         assert(s.cooldown_remaining == 0.0f);
+        s.update_off_screen = true;  // GameplayScene sets this on spring launch.
         s.cooldown_remaining = SpringActor::kCooldown;
         s.Update(0.4f);
         assert(s.cooldown_remaining > 0.35f && s.cooldown_remaining < 0.61f);
+        assert(s.update_off_screen);
         s.Update(0.7f);
         assert(s.cooldown_remaining == 0.0f);
+        assert(!s.update_off_screen);
     }
 
     // --- RefillActor uses collected instead of used ---

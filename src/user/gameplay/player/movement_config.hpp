@@ -3,7 +3,7 @@
 namespace madeline_cube {
 
 struct MovementConfig {
-    // OG Celeste64 values (Y-up, no rescaling — these ARE the original values).
+    // Source world units; axis rotation adapts OG +Z-up to engine +Y-up.
     float run_speed = 64.0f;
     float acceleration = 500.0f;
     float past_max_deceleration = 60.0f;
@@ -54,7 +54,8 @@ struct MovementConfig {
     float player_wall_radius = 3.0f;
     float climb_waist_offset = 3.0f;        // grip probe height above feet (OG SolidWaistTestPos)
     float climb_head_offset = 10.0f;        // OG head probe band top (feet + 10)
-    float climb_ledge_probe_extra = 1.0f;   // mantle probe = waist + 1 (OG ClimbCheckAt +1 UnitZ)
+    // Source lip sample: one unit above the waist, at source climb speed40.
+    float climb_ledge_probe_extra = 1.0f;
     float climb_check_dist = 4.0f;          // grip/ledge/corner query radius (OG ClimbCheckDist)
     float climb_pushout_dist = 3.0f;        // entry reposition target (OG WallPushoutDist)
     float climb_corner_ease_time = 0.20f;   // corner position/facing ease (OG 0.2 s)

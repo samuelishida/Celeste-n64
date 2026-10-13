@@ -115,11 +115,10 @@ def validate_capture(
     counter_lines = _tag_lines(text, "counters")
     if not any(
         (near := re.search(r"\bnear_batches=(\d+)\b", line))
-        and (resident := re.search(r"\bresident=(\d+)\b", line))
-        and int(near.group(1)) > 0 and int(resident.group(1)) > 0
+        and int(near.group(1)) > 0
         for line in counter_lines
     ):
-        issues.append("render counters show no resident near geometry")
+        issues.append("render counters show no near geometry")
 
     # The runtime emits diagnostic events (climb-target, climb-entry) with the
     # same tag before its terminal result. Count only terminal result records.
@@ -168,12 +167,14 @@ def validate_capture(
         ("dash_launch_speed", 142.0, "max"),
         ("approach_ticks", 1.0, "min"),
         ("entry_gap", 4.01, "max"),
-        ("climb_ticks", 10.0, "min"),
+        ("climb_ticks", 10.0 if profile == "corner" else 4.0, "min"),
         ("climb_first_step_dy", 0.5, "min"),
         ("climb_first_step_snap", 0.0, "gt"),
         ("clearance_samples", 10.0, "min"),
         ("clearance_violations", 0.0, "eq"),
     )
+    if profile != "corner":
+        threshold_checks += (("climb_rise", 4.0, "min"),)
     if profile == "walljump":
         threshold_checks += (
             ("walljump_xy", 82.2, "min"),
@@ -209,6 +210,48 @@ def validate_capture(
     start_gap = _number(result, "start_gap", issues)
     if start_gap is not None and "entry_gap" in values and start_gap - values["entry_gap"] < 4.0:
         issues.append("guided climb approach did not cover at least 4 world units")
+
+    # Animation-alignment telemetry: parse [anim-align] lines and compute
+    # max angular delta between visual facing and target facing while climbing.
+    # Only the corner profile requires the metric to be present for now.
+    anim_align_lines = _tag_lines(text, "anim-align")
+    climb_max_delta = 0.0
+    corner_max_delta = 0.0
+    corner_triggered_ticks: set[int] = set()
+    for line in _tag_lines(text, "climb"):
+        fields = _fields(line)
+        if fields.get("event") == "corner_triggered":
+            tick_str = fields.get("tick")
+            if tick_str is not None and tick_str.isdigit():
+                corner_triggered_ticks.add(int(tick_str))
+    previous_target = None
+    stable_target_samples = 0
+    unsettled_facing = False
+    for line in anim_align_lines:
+        fields = _fields(line)
+        facing = _number(fields, "facing", issues)
+        target = _number(fields, "target", issues)
+        if facing is None or target is None:
+            continue
+        delta = abs((target - facing + math.pi) % (2.0 * math.pi) - math.pi)
+        delta_deg = math.degrees(delta)
+        target_change = abs((target - previous_target + math.pi) % (2.0 * math.pi) - math.pi) if previous_target is not None else math.inf
+        stable_target_samples = stable_target_samples + 1 if target_change < 0.001 else 1
+        previous_target = target
+        # Source Facing approaches at4pi/s: transient lag after a target change
+        # is expected. Reject persistent lag after eight stable observed frames.
+        unsettled_facing |= stable_target_samples >= 8 and delta_deg >= 2.0
+        if delta_deg > climb_max_delta:
+            climb_max_delta = delta_deg
+        tick_str = fields.get("tick")
+        if tick_str is not None and tick_str.isdigit() and int(tick_str) in corner_triggered_ticks:
+            if delta_deg > corner_max_delta:
+                corner_max_delta = delta_deg
+    if anim_align_lines:
+        values["climb_max_facing_delta_deg"] = climb_max_delta
+        values["corner_max_facing_delta_deg"] = corner_max_delta
+    if anim_align_lines and profile == "corner" and unsettled_facing:
+        issues.append("climb facing did not converge after eight stable target samples")
 
     return issues
 

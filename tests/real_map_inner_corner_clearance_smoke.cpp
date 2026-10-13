@@ -1,7 +1,6 @@
-// Reproduce the finite wall edge near Forsaken City Start. A corner ray aimed
-// from behind face 5186 can orient its normal backward and snap Madeline
-// through the wall. This route must keep bounded steps and release cleanly
-// when adjacent front-side geometry is unreachable.
+// Traverse the finite pillar corner near Start. Authored outward winding
+// makes face5186 (-X) a reachable front-side outer wall, so the source path
+// must ease onto it with bounded continuous movement and no body penetration.
 #include <cmath>
 #include <cstdio>
 
@@ -16,7 +15,7 @@ using namespace madeline_cube::physics;
 namespace {
 
 constexpr float kDt = 1.0f / 60.0f;
-constexpr Vec3 kWrongSideNormal{-1.0f, 0.0f, 0.0f};
+constexpr Vec3 kTargetNormal{-1.0f, 0.0f, 0.0f};
 
 }  // namespace
 
@@ -54,9 +53,10 @@ int main(int argc, char** argv) {
     PlayerInput input{};
     input.climb_held = true;
     auto tick = [&](const PlayerInput& in) {
+        controller.BeginMoveTick(state);
         auto context = controller.TimerInputPhase(state, in, {0.0f, 0.0f, 1.0f}, kDt);
         controller.StatePhase(state, in, context, kDt, &room);
-        controller.MovePhase(state, kDt, &room);
+        controller.MovePhase(state, kDt, &room, &context);
         return context.corner_triggered;
     };
     tick(input);
@@ -70,8 +70,41 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    input.move = {-1.0f, 0.0f};  // camera +Z maps left stick to world -X
-    bool unsupported_edge_released = false;
+    // Check the actual baked contact without running a duplicate query in the
+    // game path: isolated fixture calls must have bounded overlap-only cost.
+    CollisionQueryCounters query_cost{};
+    room.query_counters = &query_cost;
+    const Vec3 waist = ProbeAboveFeet(state.position, config.player_half_height,
+                                     config.climb_waist_offset);
+    const WallHit grip = QueryClimbWall(room, waist, config.climb_check_dist,
+                                       state.climb.wall_normal);
+    room.query_counters = nullptr;
+    if (!grip.hit || grip.plane_normal.z < 0.8f ||
+        query_cost.overlap_queries != 1 || query_cost.raycasts != 0) {
+        std::printf("FAIL: baked grip query contract/cost face=%d overlaps=%u rays=%u\n",
+                    grip.face_id, query_cost.overlap_queries, query_cost.raycasts);
+        FreeCollMesh(mesh);
+        return 1;
+    }
+
+    // A separate actual backside candidate must remain unreachable. This
+    // point lies inside the pillar just behind its left face; only Include
+    // may see that authored -X face while gameplay culling must reject it.
+    const Vec3 behind_left_face = {-18.2f,waist.y,45.0f};
+    const GroundHit backface = RaycastRoomSource(room,behind_left_face,{-1,0,0},2,
+                                                BackfacePolicy::Include);
+    WallHit unreachable{};
+    if (!backface.hit || backface.normal.x > -.99f ||
+        QueryWallRay(room,behind_left_face,{-1,0,0},2,&unreachable)) {
+        std::printf("FAIL: authored backside wall incorrectly reachable\n");
+        FreeCollMesh(mesh);
+        return 1;
+    }
+
+    input.move = {1.0f, 0.0f};  // initial source sign1: raw +X walks world -X
+    bool released = false;
+    int corner_events = 0;
+    float min_authored_side = INFINITY;
     bool wrong_side_corner_adopted = false;
     float max_step = 0.0f;
     float max_body_pushout = 0.0f;
@@ -83,8 +116,19 @@ int main(int argc, char** argv) {
         const float dz = state.position.z - tick_start.z;
         const float tick_distance = std::sqrt(dx * dx + dy * dy + dz * dz);
         max_step = std::max(max_step, tick_distance);
-        wrong_side_corner_adopted = wrong_side_corner_adopted ||
-            (corner_triggered && Dot(kWrongSideNormal, state.climb.wall_normal) > 0.8f);
+        if (corner_triggered) {
+            ++corner_events;
+            const int fid = state.climb.grip_face_id;
+            const CollTriangle& triangle = mesh->triangles[fid];
+            const Vec3& a = mesh->world_verts[triangle.i0];
+            const Vec3 raw = Norm(Cross(Sub(mesh->world_verts[triangle.i1],a),
+                                       Sub(mesh->world_verts[triangle.i2],a)));
+            const Vec3 waist_at_adopt = ProbeAboveFeet(state.position,
+                config.player_half_height,config.climb_waist_offset);
+            const float authored_side = Dot(raw,Sub(waist_at_adopt,a));
+            min_authored_side = std::min(min_authored_side,authored_side);
+            wrong_side_corner_adopted |= authored_side < -0.001f;
+        }
         if (state.movement_state == PlayerMovementState::Climbing) {
             const Vec3 feet = {state.position.x,
                                state.position.y - config.player_half_height,
@@ -102,17 +146,22 @@ int main(int argc, char** argv) {
                 }
             }
         } else {
-            unsupported_edge_released = true;
+            released = true;
             break;
         }
     }
-    std::printf("[real-map-inner-corner] released=%u wrong_side_adopt=%u max_step=%.3f "
-                "max_body_pushout=%.3f end=(%.2f,%.2f,%.2f)\n",
-                unsupported_edge_released ? 1u : 0u,
-                wrong_side_corner_adopted ? 1u : 0u,
-                max_step, max_body_pushout,
-                state.position.x, state.position.y, state.position.z);
+    const bool arrived = Dot(state.climb.wall_normal,kTargetNormal) > .99f &&
+                         state.climb.corner_ease <= .001f;
+    std::printf("[real-map-inner-corner] released=%u wrong_side_adopt=%u events=%d "
+                "arrived=%u authored_side=%.3f max_step=%.3f max_body_pushout=%.3f "
+                "end=(%.2f,%.2f,%.2f)\n",
+                released ? 1u : 0u, wrong_side_corner_adopted ? 1u : 0u,
+                corner_events,arrived ? 1u : 0u,min_authored_side,max_step,max_body_pushout,
+                state.position.x,state.position.y,state.position.z);
     FreeCollMesh(mesh);
-    return unsupported_edge_released && !wrong_side_corner_adopted &&
-           max_step <= 1.0f && max_body_pushout <= 0.10f ? 0 : 1;
+    // Source corner easing plus final repair spans both horizontal axes;
+    // retain a diagonal displacement bound instead of a vertical-climb rate.
+    return !released && corner_events == 1 && arrived && !wrong_side_corner_adopted &&
+           max_step <= std::sqrt(2.0f) * config.climb_speed * kDt + 0.05f &&
+           max_body_pushout <= 0.10f ? 0 : 1;
 }

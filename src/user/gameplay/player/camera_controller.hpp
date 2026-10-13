@@ -27,12 +27,9 @@ struct CameraConfig {
     float look_at_height = 12.0f;
     float zoom_snap_interval = 1.0f / 3.0f;
     float zoom_snap_threshold = 0.1f;
-    // Deliberate deviation from OG Celeste64's 1.0 normalized-distance/sec zoom
-    // (Player.cs:283): a stick/button medium lacks the fine control of OG's
-    // mouse wheel, so we sweep ~1.8x faster and snap to detents ~2x faster.
-    // Orbit/follow/FOV rates remain OG-exact. See docs/movement_spec.md.
-    float zoom_rate = 1.8f;          // normalized distance/sec
-    float zoom_snap_speed = 1.0f;    // detent-settle speed (fraction/sec)
+    // Source Player.Update: zoom1 unit/s; idle detent approach dt/2.
+    float zoom_rate = 1.0f;
+    float zoom_snap_speed = 0.5f;
     float vertical_follow_decay = 0.001f;
     float camera_follow_decay = 0.01f;
     float fov_base_deg = 45.0f;
@@ -64,6 +61,12 @@ public:
         float delta_seconds,
         const Room* room = nullptr
     );
+
+    // OG Update applies orbit/zoom before player controls, then LateUpdate follows.
+    void InputPhase(CameraState& camera, const CameraInput& input, float delta_seconds);
+    void FollowPhase(CameraState& camera, const Vec3& player_position,
+                     bool climbing, bool grounded, float horizontal_speed,
+                     const CameraInput& input, float delta_seconds, const Room* room = nullptr);
 
     // Reorient the camera to look along `forward` (normalized XZ direction)
     // and recompute `target`/`position` from the current `target_distance`

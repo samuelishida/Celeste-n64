@@ -80,8 +80,9 @@ Vec3 DesiredLookAt(const CameraState& camera, const CameraConfig& config) {
     };
 }
 
-Vec3 DesiredPosition(const CameraState& camera, const CameraConfig& config) {
-    const Vec3 look_at = DesiredLookAt(camera, config);
+Vec3 DesiredPosition(const CameraState& camera, const CameraConfig& /*config*/) {
+    // OG builds the camera position from origin before raising look-at12.
+    const Vec3 look_at = camera.origin;
     const float distance = Lerp3(30.0f, 60.0f, 110.0f, 110.0f, camera.target_distance);
     const float height = Lerp3(1.0f, 30.0f, 80.0f, 180.0f, camera.target_distance);
     return {
@@ -145,12 +146,11 @@ void CameraController::Step(
         Reset(camera, player_position);
     }
 
-    // Store forward/distance so they persist across respawn (OG: static
-    // storedCameraForward/storedCameraDistance).
-    stored_forward_ = camera.target_forward;
-    stored_distance_ = camera.target_distance;
-    has_stored_ = true;
+    InputPhase(camera, input, delta_seconds);
+    FollowPhase(camera, player_position, climbing, grounded, horizontal_speed, input, delta_seconds, room);
+}
 
+void CameraController::InputPhase(CameraState& camera, const CameraInput& input, float delta_seconds) {
     // --- Orbit ---
     if (input.orbit != 0.0f) {
         camera.target_forward = RotateAroundUp(
@@ -183,24 +183,33 @@ void CameraController::Step(
         }
     }
 
+}
+
+void CameraController::FollowPhase(CameraState& camera, const Vec3& player_position,
+                                  bool climbing, bool grounded, float horizontal_speed,
+                                  const CameraInput& /*input*/, float delta_seconds, const Room* room) {
+    // Persist the completed intent, including a source corner-camera ease.
+    stored_forward_ = camera.target_forward;
+    stored_distance_ = camera.target_distance;
+    has_stored_ = true;
     // --- XZ follow (immediate, no smoothing) ---
     camera.origin.x = player_position.x;
     camera.origin.z = player_position.z;
 
     // --- Y follow ---
     // OG behavior:
-    //   - Grounded: snap Y to player Y immediately
-    //   - Airborne + player below camera: snap down immediately
+    //   - Grounded: target player Y
+    //   - Airborne + player below camera: target player Y
     //   - Airborne + player above pad: rise with fast approach
     //   - Airborne + player within pad: hold current Y
     const float vertical_pad = climbing ? 0.0f : config_.vertical_pad;
     float target_y = camera.origin.y;
 
     if (grounded) {
-        // When on ground, camera Y tracks player exactly (no lag).
+        // On ground the target has no vertical dead zone.
         target_y = player_position.y;
     } else if (player_position.y < camera.origin.y) {
-        // Player fell below camera origin: snap down immediately.
+        // Falling below the origin removes the vertical dead zone.
         target_y = player_position.y;
     } else if (player_position.y > camera.origin.y + vertical_pad) {
         // Player rose above the dead zone: shift target up by pad amount.
@@ -209,7 +218,7 @@ void CameraController::Step(
 
     if (camera.origin.y != target_y) {
         // OG: vertical follow uses decay 0.001 => (1 - 0.001^dt) alpha.
-        // This is extremely fast (~99.2% per frame at 60fps), almost a snap.
+        // At60Hz this approaches by about10.9% per tick, as in OG.
         const float alpha = FollowAlpha(config_.vertical_follow_decay, delta_seconds);
         camera.origin.y += (target_y - camera.origin.y) * alpha;
     }
@@ -231,16 +240,8 @@ void CameraController::Step(
         }
     }
 
-    // --- Smooth position follow (OG: 1 - pow(0.01, dt)) ---
-    // The follow decay is shared with orbit/movement and is intentionally
-    // slow (0.01 -> ~7%/frame). But that same lag ALSO gates perceived zoom:
-    // even with `target_distance` swept at `zoom_rate`, camera.position only
-    // creeps ~7% toward the new desired spot per frame, so a full zoom still
-    // takes ~2-3s. While the player is actively zooming we tighten the follow
-    // so the camera chases the zoomed-in spot responsively, then let the
-    // normal decay ease it on the way back when zoom stops.
-    const float follow_decay =
-        input.zoom != 0.0f ? 0.0001f : config_.camera_follow_decay;
+    // Source uses the same .01 decay while orbiting, zooming and resting.
+    const float follow_decay = config_.camera_follow_decay;
     const float alpha = FollowAlpha(follow_decay, delta_seconds);
     Vec3 resolved_position = {
         camera.position.x + (desired_position.x - camera.position.x) * alpha,

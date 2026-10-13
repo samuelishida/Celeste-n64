@@ -7,7 +7,7 @@
 
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/player/player_controller.hpp"
-#include "gameplay/render/player_model_clearance.hpp"
+#include "gameplay/player/player_model_clearance.hpp"
 #include "gameplay/world/mappack_loader.hpp"
 #include "gameplay/world/world.hpp"
 
@@ -19,7 +19,9 @@ namespace {
 constexpr float kDt = 1.0f / 60.0f;
 constexpr float kMaxCornerStep = 6.0f;
 constexpr float kMaxWaistPushout = 0.50f;
-constexpr float kMaxRenderOffset = kMadelineModelRadius + kMadelineModelWallGap;
+// Two nonopposing vertical planes may require a diagonal render translation.
+constexpr float kMaxRenderOffset = 1.41421356237f *
+    (kMadelineModelRadius + kMadelineModelWallGap + kMaxWaistPushout);
 
 struct RouteMetrics {
     float max_step = 0.0f;
@@ -27,6 +29,8 @@ struct RouteMetrics {
     float max_head_probe_pushout = 0.0f;
     float min_model_gap = std::numeric_limits<float>::infinity();
     float max_render_offset = 0.0f;
+    float min_corner_feet_gap = INFINITY;
+    float min_corner_normal_dot = INFINITY;
     int model_samples = 0;
     int corner_events = 0;
     int exits = 0;
@@ -84,10 +88,11 @@ int main(int argc, char** argv) {
 
     const Vec3 camera_forward{0.0f, 0.0f, 1.0f};
     auto tick = [&](const PlayerInput& input, bool* corner_triggered = nullptr) {
+        controller.BeginMoveTick(state);
         PlayerController::StepContext context = controller.TimerInputPhase(
             state, input, camera_forward, kDt);
         controller.StatePhase(state, input, context, kDt, &room);
-        controller.MovePhase(state, kDt, &room);
+        controller.MovePhase(state, kDt, &room, &context);
         if (corner_triggered) *corner_triggered = context.corner_triggered;
     };
     auto sample = [&](const Vec3& before, RouteMetrics& metrics) {
@@ -120,8 +125,8 @@ int main(int argc, char** argv) {
                 metrics.max_waist_pushout, waist_overlap.pushout);
         }
         if (head_overlap.hit) {
-            // Climb mover intentionally uses waist-only collision. Keep this
-            // as diagnostic; the rendered mesh has its own both-plane gate.
+            // The shared resolver checks waist and head. Keep both repair
+            // diagnostics alongside rendered clearance against both planes.
             metrics.max_head_probe_pushout = std::fmax(
                 metrics.max_head_probe_pushout, head_overlap.pushout);
         }
@@ -143,6 +148,10 @@ int main(int argc, char** argv) {
                 feet.x - plane_a.x, feet.y - plane_a.y, feet.z - plane_a.z});
             const float gap_b = Dot(normal_b, {
                 feet.x - plane_b.x, feet.y - plane_b.y, feet.z - plane_b.z});
+            metrics.min_corner_feet_gap = std::fmin(metrics.min_corner_feet_gap,
+                std::fmin(gap_a, gap_b));
+            metrics.min_corner_normal_dot = std::fmin(metrics.min_corner_normal_dot,
+                Dot(normal_a, normal_b));
             const Vec3 offset = PlayerModelCornerHorizontalOffset(
                 normal_a, gap_a, normal_b, gap_b, kMadelineModelRadius,
                 kMadelineModelHeight, kMadelineModelWallGap);
@@ -211,6 +220,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // OG entry resets climbInputSign. Recenter once so the opposite-facing
+    // camera latches -1 before sustained side input.
+    input.move = {};
+    tick(input);
+
     // With camera forward +Z, stick left walks toward the shared edge along
     // the wall's +X tangent. Keep climb held; do not teleport between faces.
     input.move = {-1.0f, 0.0f};
@@ -265,6 +279,8 @@ int main(int argc, char** argv) {
                 static_cast<int>(state.movement_state),
                 state.climb.wall_normal.x, state.climb.wall_normal.y,
                 state.climb.wall_normal.z);
+    std::printf("[corner-plane-proof] min_feet_gap=%.3f min_normal_dot=%.3f diagonal_bound=%.3f\n",
+        metrics.min_corner_feet_gap, metrics.min_corner_normal_dot, kMaxRenderOffset);
     const bool eased_to_target = Dot(state.climb.wall_normal, target_normal) > 0.8f &&
                                  state.climb.corner_ease <= 0.001f;
     const bool passed = corner_seen && metrics.adopted_target_wall && eased_to_target &&
@@ -272,6 +288,8 @@ int main(int argc, char** argv) {
         metrics.max_step <= kMaxCornerStep &&
         metrics.max_waist_pushout <= kMaxWaistPushout &&
         metrics.max_render_offset <= kMaxRenderOffset &&
+        metrics.min_corner_feet_gap >= -kMaxWaistPushout &&
+        metrics.min_corner_normal_dot >= -0.001f &&
         metrics.model_samples >= 2 &&
         metrics.min_model_gap >= kMadelineModelWallGap - 0.01f &&
         state.movement_state == PlayerMovementState::Climbing;

@@ -217,52 +217,23 @@ static void TestUnbufferedSingleFrameEdge() {
 }
 
 static void TestPlayerInputDevicePropagation() {
-    // Inc 1: the controller's ConsumeJumpPress must ALSO consume the device
-    // edge so the buffered press cannot re-fire on the next frame's snapshot.
-    VirtualButtonState jump;
-    UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
-    PlayerInput in;
-    in.jump_pressed = jump.pressed;
-    in.jump_device = &jump;
-    assert(in.ConsumeJumpPress());
-    assert(!jump.pressed);  // device edge consumed
-    // Next frame: no re-fire.
-    UpdateVirtualButton(jump, true, 0.10f, 1.0f / 60.0f);
-    assert(!jump.pressed);
-
-    // Same for dash.
-    VirtualButtonState dash;
-    UpdateVirtualButton(dash, true, 0.10f, 1.0f / 60.0f);
-    PlayerInput in2;
-    in2.dash_pressed = dash.pressed;
-    in2.dash_device = &dash;
-    assert(in2.ConsumeDashPress());
-    assert(!dash.pressed);
-
-    // GameplayScene copies one render-frame snapshot into every fixed physics
-    // tick. At <60 render FPS, sibling copies must still share consume-once
-    // device semantics: one tick claiming an edge makes it unavailable to the
-    // next tick in the same rendered frame.
-    VirtualButtonState shared_jump;
-    UpdateVirtualButton(shared_jump, true, 0.10f, 1.0f / 60.0f);
-    PlayerInput frame_input;
-    frame_input.jump_pressed = shared_jump.pressed;
-    frame_input.jump_device = &shared_jump;
-    PlayerInput first_tick = frame_input;
-    PlayerInput second_tick = frame_input;  // mirrors tick_input = input
-    assert(first_tick.ConsumeJumpPress());
-    assert(!second_tick.ConsumeJumpPress());
-
-    VirtualButtonState shared_dash;
-    UpdateVirtualButton(shared_dash, true, 0.10f, 1.0f / 60.0f);
-    frame_input = {};
-    frame_input.dash_pressed = shared_dash.pressed;
-    frame_input.dash_device = &shared_dash;
-    first_tick = frame_input;
-    second_tick = frame_input;
-    assert(first_tick.ConsumeDashPress());
-    assert(!second_tick.ConsumeDashPress());
-
+    PolledButtonState polls;
+    VirtualButtonState device;
+    polls.Poll(true);
+    polls.BeginTick(device, .10f, 1.0f / 60.0f);
+    PlayerInput first;
+    first.jump_pressed = device.pressed;
+    first.dash_pressed = device.pressed;
+    assert(first.ConsumeJumpPress());
+    assert(!first.ConsumeJumpPress());
+    assert(first.ConsumeDashPress());
+    // Explicit scene commit; a snapshot never mutates the poll adapter.
+    assert(device.pressed);
+    if (first.jump_press_consumed) ConsumePress(device);
+    polls.BeginTick(device, .10f, 1.0f / 60.0f);
+    PlayerInput second;
+    second.jump_pressed = device.pressed;
+    assert(!second.ConsumeJumpPress());
     std::printf("[input] TestPlayerInputDevicePropagation PASS\n");
 }
 

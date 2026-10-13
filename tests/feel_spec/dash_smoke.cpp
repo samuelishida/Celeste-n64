@@ -27,6 +27,7 @@ int main() {
     PlayerState long_jump;
     long_jump.grounded = true;
     long_jump.dashed_on_ground = true;
+    long_jump.velocity = {140.0f, 0.0f, 0.0f};
     long_jump.movement_state = PlayerMovementState::Dashing;
     long_jump.dash_time_remaining = 0.05f;
     long_jump.dash_active_remaining = 0.05f;

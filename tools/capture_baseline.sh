@@ -12,7 +12,7 @@
 # causes a fail-fast refusal; this script cannot capture another process's log.
 #
 # Report cadence (src/user/rom_main.cpp):
-#   [profiler] / [render-phases] / [counters] / [distant-cells]  every 60 frames
+#   [profiler] / [render-phases] / [counters] every 60 frames
 #   [memory]                                                     every 3600 frames
 # Ares runs at ~60 fps in the emulator, so 60-frame reports land ~1 s apart and
 # a [memory] line lands ~60 s apart. A run must cross 3600 frames to capture a
@@ -142,7 +142,7 @@ trap - EXIT
 {
   printf '[artifact] rom=%s sha256=%s size_bytes=%s\n' \
     "$ROM" "$ROM_SHA256" "$ROM_SIZE_BYTES"
-  grep -nE '\[(build|init|mappack|map_runtime|matcat|texroom|lvlroom|profiler|render-phases|counters|distant-cells|memory|budget|phys-test|phys|move|climb|input-trace|input)\]' "$RAW" || true
+  grep -nE '\[(build|init|mappack|map_runtime|matcat|texroom|lvlroom|profiler|render-phases|counters|memory|budget|phys-test|phys|move|climb-window|climb|input-trace|input)\]' "$RAW" || true
 } > "$OUT"
 
 echo "[capture_baseline] wrote $OUT"

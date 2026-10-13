@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
 
 #include "gameplay/math_types.hpp"
 
@@ -15,8 +16,41 @@ struct VirtualButtonState {
     bool down = false;
     bool pressed = false;
     bool released = false;
+    bool pressed_edge = false;
     bool consumed = false;
     float buffer_remaining = 0.0f;
+};
+
+// Hardware polls only latch observed edges. Simulation ticks own buffer time.
+// A press followed by release before a tick retains both observations; held
+// always reflects the newest poll (including a disconnected controller).
+struct PolledButtonState {
+    bool down = false;
+    bool pending_press = false;
+    bool pending_release = false;
+    void Poll(bool held) {
+        pending_press |= !down && held;
+        pending_release |= down && !held;
+        down = held;
+    }
+    void BeginTick(VirtualButtonState& tick, float buffer, float dt) {
+        UpdateTick(tick, buffer, dt);
+        pending_press = pending_release = false;
+    }
+private:
+    void UpdateTick(VirtualButtonState& tick, float buffer, float dt) {
+        tick.down = down;
+        tick.released = pending_release;
+        tick.pressed_edge = pending_press;
+        if (pending_press) {
+            tick.pressed = true;
+            tick.consumed = false;
+            tick.buffer_remaining = buffer;
+        } else {
+            tick.buffer_remaining = std::fmax(0.0f, tick.buffer_remaining - dt);
+            tick.pressed = !tick.consumed && tick.buffer_remaining > 0.0f;
+        }
+    }
 };
 
 // Feed the raw held state for this frame. `buffer_seconds` is the press-buffer

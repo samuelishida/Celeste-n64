@@ -39,6 +39,8 @@ int main() {
         PlayerController controller;
         PlayerState jump;
         jump.grounded = true;
+        jump.contact.coyote_height = jump.position.y;
+        jump.coyote_time_remaining = MovementConfig{}.coyote_time;
         jump.platform_carry.stored_velocity = {2.0f, 3.0f, 0.0f};
         jump.platform_carry.time_remaining = 0.1f;
         PlayerInput input;
@@ -81,6 +83,44 @@ int main() {
         assert(rider.platform_carry.time_remaining == 0.0f);
     }
 
+    // --- OG RidingPlatformCheck accepts the currently gripped wall actor
+    //     without a ground check; moving it carries the climber and both
+    //     in-flight corner anchors through the same swept mover. ---
+    {
+        Room room;
+        constexpr int kWallOwner = 300;
+        MovingSurface& wall = room.moving_surfaces[room.moving_surface_count++];
+        wall.id = kWallOwner;
+        wall.position = {};
+        wall.last_position = wall.position;
+
+        PlayerState climber;
+        climber.movement_state = PlayerMovementState::Climbing;
+        climber.position = {10.0f, 20.0f, 30.0f};
+        climber.climb.wall_surface_id = kWallOwner;
+        climber.climb.corner_from = {1.0f, 2.0f, 3.0f};
+        climber.climb.corner_to = {4.0f, 5.0f, 6.0f};
+
+        wall.position = {1.0f, 2.0f, 3.0f};
+        AdvanceMovingSurfaces(room, kDt);
+        PlayerController controller;
+        controller.MovingSurfacePhase(climber, room);
+
+        assert(ApproxEq(climber.position.x, 11.0f));
+        assert(ApproxEq(climber.position.y, 22.0f));
+        assert(ApproxEq(climber.position.z, 33.0f));
+        assert(ApproxEq(climber.platform_carry.stored_velocity.x, 60.0f));
+        assert(ApproxEq(climber.platform_carry.stored_velocity.y, 120.0f));
+        assert(ApproxEq(climber.platform_carry.stored_velocity.z, 180.0f));
+        assert(ApproxEq(climber.platform_carry.time_remaining, 0.1f));
+        assert(ApproxEq(climber.climb.corner_from.x, 2.0f));
+        assert(ApproxEq(climber.climb.corner_from.y, 4.0f));
+        assert(ApproxEq(climber.climb.corner_from.z, 6.0f));
+        assert(ApproxEq(climber.climb.corner_to.x, 5.0f));
+        assert(ApproxEq(climber.climb.corner_to.y, 7.0f));
+        assert(ApproxEq(climber.climb.corner_to.z, 9.0f));
+    }
+
     // --- Slope normal: QueryFloorSource returns the actual slope plane normal,
     //     not the default (+Y). ---
     {
@@ -108,7 +148,9 @@ int main() {
             p.velocity.y -= kGravity * kDt;
             const Vec3 amount = {p.velocity.x * kDt, p.velocity.y * kDt, 0.0f};
             mover.SweepMove(p, room, amount, true);
-            grounded = mover.GroundCheck(p, room, nullptr, nullptr);
+            Vec3 ground_normal;
+            grounded = mover.GroundCheck(p, room, nullptr, &ground_normal);
+            if (grounded) p.contact.ground_normal = ground_normal;
             p.grounded = grounded;
             p.contact.was_grounded = grounded;
         }
@@ -125,14 +167,14 @@ int main() {
         MoveService mover;
         PlayerState p;
         // Feet 2 units above the lower floor (y=-10): feet at -8 -> center 2.
-        p.position = {0.5f, 2.0f, 0.0f};
+        p.position = {0.5f, -8.0f + mover.Config().half_height, 0.0f};
         p.grounded = false;
         p.contact.was_grounded = true;
         p.contact.ground_snap_cooldown_remaining = 0.0f;
         mover.GroundSnap(p, room, kDt);
         // Snapped feet onto the lower floor (y=-10) -> center y=0 exactly.
         assert(ApproxEq(mover.GroundCheck(p, room, nullptr, nullptr), true));
-        assert(p.position.y == 0.0f);  // exact snap (review C5: no loose eps)
+        assert(p.position.y == -10.0f + mover.Config().half_height);  // exact snap (review C5: no loose eps)
     }
 
     // --- Ledge no-snap when previously airborne: stays (was_grounded false). ---

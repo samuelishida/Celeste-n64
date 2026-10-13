@@ -5,7 +5,8 @@
 using namespace madeline_cube;
 
 int main() {
-    PlayerController controller;
+    MovementConfig config;
+    PlayerController controller(config);
     constexpr float dt = 1.0f / 60.0f;
 
     PlayerState coyote;
@@ -19,6 +20,8 @@ int main() {
     controller.Step(buffered, {.jump_pressed = true, .jump_held = true}, {0,0,1}, dt);
     assert(buffered.velocity.y <= 0.0f);  // airborne, no coyote: buffered, not fired
     buffered.grounded = true;
+    buffered.coyote_time_remaining = config.coyote_time;  // LateUpdate support refresh
+    buffered.contact.coyote_height = buffered.position.y;
     // Inc 1: the device keeps the pressed edge live for the 0.10 s buffer
     // window, so the second tick replays the same buffered press.
     controller.Step(buffered, {.jump_pressed = true, .jump_held = true}, {0,0,1}, dt);
@@ -26,6 +29,8 @@ int main() {
 
     PlayerState full;
     full.grounded = true;
+    full.coyote_time_remaining = config.coyote_time;
+    full.contact.coyote_height = full.position.y;
     controller.Step(full, {.jump_pressed = true, .jump_held = true}, {0,0,1}, dt);
     PlayerState short_hop = full;
     controller.Step(full, {.jump_held = true}, {0,0,1}, dt);
