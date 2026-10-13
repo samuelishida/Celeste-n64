@@ -4,17 +4,47 @@ Target: **30 fps** → **≤ 33.3 ms / frame** measured on device with the
 per-phase profiler (`[profiler] avg frame time …` + per-phase lines,
 every 60 frames via USB serial).
 
-The renderer is a **single near pass** — the two-pass z-split (near + distant
-DLOD horizon) was removed (see `AGENTS.md`, "Renderer (single near pass)").
-There is no distant phase, no distant counters, and no `[distant-cells]`
-line. The `.dlod` artifacts and baker remain on disk for a future
-distant-horizon feature but are not loaded at runtime.
+Current candidate runs the DLOD horizon with its own projection, then clears
+depth before the detailed near pass (5..800). Separate triple-buffered sky,
+distant, and near viewports avoid rewriting matrices still consumed by the
+RSP. Residency remains bounded at 13 cells (3×3 core plus four forward Cheb-2
+cells), while near and DLOD submit only AABBs accepted by the same conservative
+3D frustum predicate and margin. DLOD yields only to READY cells actually
+submitted by near; pending cells remain DLOD-owned. This replaces the older
+fixed all-occupied draw mask; exact-ROM visual/FPS checks are still required.
+Heading-sector changes refresh the four outer residents.
+
+Latest candidate ROM SHA-256:
+`ff9b1d1017ca471c243c4d2d7e4a9d45591ff7b69913fc2e9234a4a11250bdce`
+(142 host tests pass; ROM builds clean). It includes conservative 3D near
+AABB culling shared with DLOD. This is an unqualified performance candidate;
+device and 30-fps checks remain open. It includes exact hair-coordinate
+packing and a 20-vertex/36-triangle hair sphere per node (down from 32/60);
+OG hair node counts and simulation remain unchanged. CPU skinning now bypasses
+weighted accumulation for the 1,011/2,492 production vertices whose single
+weight is exactly 1; all other vertices keep the same weighted transform.
+Dynamic-solid visibility now emits `[dsolid-visibility]` on first sample and
+visibility transitions, with actor IDs, bounds, camera, and player position.
+Use those records during Ares repro to distinguish platform frustum-culling
+from depth/overlap artifacts.
+Render telemetry also splits near material-group collection/sort from textured
+draw; `near_material_groups` reports actual sort volume.
+`weighted_skinning_math_smoke` and full host suite pass. It is **not
+Ares-qualified**. Telemetry now also breaks update into fixed-step, actor-world,
+and player-physics phases and prints simulated/rendered tick counts. The latest
+predecessor capture (`fc7329…`, single-near,
+before that fast path) measured 8.9–9.0 fps idle: update 46.7–48.6 ms, near
+24.7–24.8 ms, skinning ~22.0 ms, hair ~2.2 ms. Older moving captures showed
+6.9–10.9 fps, hair ~9–12 ms, and near ~7–49 ms. These logs identify costs but
+do not measure current hash. Re-test this exact ROM in Ares before claiming
+visual stability or target frame rate.
 
 ## Phase budget (per frame)
 
 | Phase | Budget |
 |-------|--------|
-| high_priority (near, Z-on, visible-culled, coalesced) | ≤ 8 ms |
+| distant (frustum-culled DLOD horizon, Z-on) | ≤ 6 ms |
+| high_priority (near ring + dynamic solids, Z-on, coalesced) | ≤ 8 ms |
 | update (fixed-step ticks + camera + actors) | ≤ 6 ms |
 | present / rest (overlays, swap, idle) | ≤ 7 ms |
 | **total** | **≤ 33.3 ms** |
@@ -34,16 +64,26 @@ hitch to investigate (load-once budget).
      update=X.XXX ms` — the whole-frame average plus the scene-update slice
      (physics/collision/actors, bracketed by `kPhaseUpdate` in
      `rom_main.cpp`).
-   - `[render-phases] high_priority=X.XXX streaming=X.XXX ms` — the real
-     per-pass cost. `streaming` is nonzero only on chunk transitions/boot.
-   - `[counters] near_batches=N texture_uploads=N vert_loads=N syncs=N` —
-     the near-pass draw counters.
+   - `[render-phases] distant=… high_priority=… near_group_build=…
+     near_textured_draw=… streaming=… ms` — DLOD, near grouping, textured
+     replay, and streaming costs. Distant excludes the skybox; streaming is
+     nonzero on chunk transitions/boot or camera-sector preload refresh.
+   - `[counters] distant_cells=N distant_faces=N distant_batches=N
+     distant_vert_loads=N distant_syncs=N near_material_groups=N ...` — horizon
+     coverage and DLOD RSP work, separated from near material-sort volume and
+     batches/uploads/loads/syncs.
    - `[memory] total=N used=N free=N` — the mallinfo heap snapshot, printed
      every 3600 frames (so a short capture may contain zero of them).
 3. Use the report to judge the pass:
-   - `near_batches` ≈ visible cells × material runs (1–9 cells resident; the
-     3×3 ring keeps 9 loaded, culling gates which are drawn).
-   - `texture_uploads` ≈ distinct material runs in the visible ring (5–25),
+   - `near_batches` ≈ READY submitted residents × material runs (up to 13
+     cells). A READY outer resident may draw in the near pass; pending cells
+     remain DLOD-owned until ready.
+   - `distant_cells` is the visible horizon-cell count; only READY cells
+     actually submitted by the fixed near draw ring are excluded.
+   - `distant_batches`, `distant_vert_loads`, and `distant_syncs` are derived
+     from each cell renderer's active precomputed draw path; they expose actual
+     DLOD command volume instead of attributing it to near-pass `syncs`.
+   - `texture_uploads` ≈ distinct material runs in the resident set (5–25),
      NOT per-face.
    - `syncs` should track `near_batches` (one RSP sync per batch).
 4. Walk the whole map from `cell_00_00`; confirm no hard hitches, no popping
@@ -66,15 +106,10 @@ work runs in `Update` outside the draw-phase markers and shows up in the
 
 All are compile-time constants, tuned after measuring on device:
 
-- `kMaxRing` (`src/user/gameplay/render/tile_streamer.hpp`): near resident
-  pool (9). Can grow only if the memory report (`[memory] free=`) has
-  headroom; visibility culling keeps drawn cells low either way.
-- `kEnableNearCulling` (`tile_streamer.hpp`, default **OFF**): gates the
-  per-resident-cell `CellAabbInNearCone` AABB-cone test in
-  `TileStreamer::UpdateCamera` (the center cell is always drawn). When ON,
-  cells outside the camera cone are skipped in the draw list; device
-  before/after (`.plans/n64-optimization/`, Inc 3) showed no visual
-  regression and no memory change.
+- `kMaxResident` (`src/user/gameplay/render/tile_streamer.hpp`): 13 slots —
+  detailed 3×3 core plus four camera-forward Cheb-2 preload residents. Near
+  and DLOD use the same conservative 3D AABB/frustum culling; READY visible
+  cells are near-owned, and pending visible cells remain DLOD-owned.
 - `kEnableTextures` (`tile_streamer.hpp`): textured near pass on/off. Keep ON
   per the project decision; global material grouping makes it fast.
 - `kPosScale` (near 32): fixed-point packing; don't touch without a
@@ -104,24 +139,22 @@ All are compile-time constants, tuned after measuring on device:
   if it ever shows as a cost, multi-slot the matrices instead of removing the
   sync.
 
-### Distant-LOD baker knobs (on disk, not loaded at runtime)
+### Distant LOD
 
-The `.dlod` artifacts and their baker remain for a future distant-horizon
-feature. If that feature returns, its tuning surface was:
-
-- `--distant-budget` (bake, default 20): per-cell face budget (hard ceiling).
-- `--no-directional` (bake): single 360° mesh instead of 4 painter-sorted
-  direction variants.
-- `KLOD_SCALE` (`tools/ogworld/distant_lod.py`, 0.25): distant fixed-point
-  position scale.
-- `kCullMargin` / `extent_slack` (`lod_math.hpp`): frustum cone margin and
-  extent-aware depth slack for the cone tests.
+DLOD is active. Its near plane matches the detailed pass: a ring-edge near clip
+can slice a nonresident cell when camera follow leads the active cell during
+fast movement. Only ready cells in the fixed detailed 3×3 draw ring are
+excluded from DLOD; pending core cells and all outer preloads retain coarse
+coverage. Its far plane covers the full 3D map-bounds diagonal. Keep this
+ownership rule aligned with the near streamer.
+Tune distant culling only against current-hash Ares captures and the ≤6 ms
+phase budget.
 
 ## If a phase still dominates
 
-- **high_priority / texture_upload still > 8 ms**: add a global per-cell
-  material sort in the NEAR pass only (Z-on → order-safe) for one sprite
-  upload per material per cell instead of per run.
+- **high_priority / texture_upload still > 8 ms**: global near material
+  grouping is already active. Use current-hash batch/load/sync counts to locate
+  remaining cost; only then change run coalescing or texture payloads.
 - **streaming spike**: keep transitions on a load-once budget; the tile
   streamer already loads outside the draw (`SetCenter` from Update, not the
   render loop). Consider pre-loading the next cell during gameplay.
@@ -134,12 +167,13 @@ feature. If that feature returns, its tuning surface was:
 - Global near-pass material sort (see above) if uploads still dominate.
 - Grow `kMaxRing` trading RAM for fewer stream transitions.
 - Per-cell material-run cache to skip re-coalescing on SetCenter re-loads.
-- Turn `kEnableNearCulling` ON by default if a future map outgrows the 9-cell
-  draw budget.
+- Improve batching or lower far range only after resident coverage is visually
+  validated and Ares telemetry confirms the 30 fps target.
 
 ## Final measured before/after (n64-optimization close-out)
 
-Measured on Ares (sole device emulator). BEFORE = pre-plan autowalk capture
+Historical single-near-pass measurements on Ares (sole device emulator).
+BEFORE = pre-plan autowalk capture
 (`build/raw-baseline-autowalk-fix-20260821-134018.txt.log`, walking the map
 with the pre-plan renderer state). AFTER = post-plan captures: stationary at
 map center (`build/baseline-inc5-update-20260821-193329`) and walking
@@ -157,25 +191,27 @@ map center (`build/baseline-inc5-update-20260821-193329`) and walking
 | `syncs` | 94 | 56 | 94 |
 | `[memory] total/used/free` | not captured | 2,165,944 / 2,146,768 / 19,176 | 2,288,680 / 2,230,464 / 58,216 |
 
-**Memory note (authoritative):** the `[memory]` report is a `mallinfo()`
-snapshot of the libdragon heap. Stationary at map center: `total` ≈
-**2.16 MB** arena, `used` ≈ **2.15 MB**, `free` ≈ 19 KB (ratio used/total
-≈ 0.991). Walking (the ring streaming new cells): `total` ≈ **2.29 MB**,
-`used` ≈ **2.23 MB**, `free` ≈ 57 KB (ratio ≈ 0.975), stable across every
-`[memory]` report in the walk capture (no leak). The arena is larger while
-walking because the 3×3 ring holds more resident cells; both are well within
-the 8 MB Expansion Pak heap. The older "≈ 5.48 MB arena / used ≈ 5.39 MB"
-figures in this doc's history and in `AGENTS.md` are stale — they predate the
-current heap layout and do not match any device telemetry.
+**Historical memory note:** these 2026-08/09 captures report `mallinfo()` for
+their then-current ROM: stationary map-center `total=2,165,944`,
+`used=2,146,768`, `free=19,176`; walking `total=2,288,680`,
+`used=2,230,464`, `free=58,216`, stable across that walk capture. These values
+are not current for the weighted-player ROM. The latest stationary Ares sample
+is documented in `docs/memory_budget.md` and reports arena
+`6,403,784 / 6,369,896 / 33,888` total/used/free bytes. `mallinfo` free is
+current arena reserve, not full Expansion Pak headroom because `sbrk` can grow
+the arena; framebuffer, stack, RSP, and other non-arena allocations also need
+accounting before stating total RDRAM headroom.
 
-**Reading the table:** the frame is **RSP-bound at ~33 ms / ~30 fps**; the
+**Historical reading (single-near 2026-08/09 build):** that build was
+**RSP-bound at ~33 ms / ~30 fps**; the
 CPU slices are small — `update` is ~0.6% of the frame (0.194 ms),
 `high_priority` ~0.2%, `streaming` ~0%. The stationary→walking
 `near_batches` jump (56 → 94) is the 3×3 ring streaming new cells as the
 player walks; it is the expected working state, not a regression. The
 before/after frame-time delta (34.5 → 33.1 ms) is within Ares run-to-run
 noise; the structural wins are the trimmed draw path (no distant pass), the
-per-material uploads, and the per-TU `-O2` on the 6 hot TUs.
+per-material uploads, and the per-TU `-O2` on the hot TUs. This is not evidence
+for the current weighted-player, 13-resident, two-pass ROM.
 
 **Normal-boot note (autowalk off):** with `kDebugAutoWalk` false and
 `kDebugTeleportToMapCenter` false, the player spawns at the corner Start
@@ -200,17 +236,19 @@ has always had at that spawn.
 - **Inc 2 — Inline hot math + LUT wiring:** hot helpers `always_inline`;
   `CosRadians`/`SinRadians` via a 4096-entry LUT (BSS, memory-neutral);
   boot-time `std::cos/sin` left raw per plan.
-- **Inc 3 — Near-pass frustum culling (gated):** `kEnableNearCulling`
-  (default OFF) gates `CellAabbInNearCone` per resident cell (center cell
-  exempt); device before/after showed no regression; memory neutral.
+- **Inc 3 — Near-pass frustum culling (history):** camera-driven near culling
+  was removed after screenshots showed missing terrain and cell-edge flicker.
+  Current (2026-10-09) draw mask is the fixed occupied 13-resident set; DLOD
+  uses 3D AABB plane culling. Current-hash Ares confirmation is pending.
 - **Inc 4 — Actor query cleanup:** `ActorTypeId` enum + ctor stamps +
   RTTI-free `Get<T>`; dead templates + dead test deleted; 27/27 host.
 - **Inc 5 — Collision sqrt micro-opt (measurement-gated):** the gate FAILED —
   `update` measured at 0.194–0.195 ms/frame ≪ the ~1 ms threshold, so the
   sqrt opt was skipped; the permanent deliverable is the `kPhaseUpdate`
   instrumentation (`update=` in the `[profiler]` line).
-- **Inc 6 — Dead-code removal:** `distant_world_renderer.cpp`,
-  `gameplay/arena.*`, `tests/runtime_smoke.cpp` deleted; `.dlod` + baker kept
-  on disk for the future feature; elf unchanged; 27/27 host.
+- **Inc 6 — Dead-code removal (historical):** `gameplay/arena.*` and
+  `tests/runtime_smoke.cpp` deleted. The distant tier was later reintroduced
+  for the current Z-split; `.dlod` + baker remain active. Historical test count
+  and ELF result do not qualify current ROM.
 - **Inc 7 — Metrics + close-out:** this table; stale distant-pass references
   cleaned from this doc and `AGENTS.md`; device walk capture green.

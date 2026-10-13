@@ -252,7 +252,7 @@ changes as you walk sideways, the artifact is angle/movement-dependent.
 - `src/user/gameplay/scene/gameplay_scene.cpp` (~1015) — the per-frame clear ordering and
   the near-pass drawflags setup.
 - tiny3d `rdpq_mode_zbuf` semantics (test vs write) in
-  `/tmp/n64-bootstrap/libdragon/include/rdpq.h` / tiny3d sources.
+  `~/.n64-bootstrap/libdragon/include/rdpq.h` / tiny3d sources (space-free access symlink).
 
 ---
 

@@ -7,6 +7,17 @@ deterministic grab-instant-release loop; it materialized exactly as written,
 and several other geometry couplings surfaced that the plan's "one query
 family" decision did not fully pre-solve.
 
+## Current implementation (2026-10-07)
+The current code follows OG `TryClimb` entry separately from sustained grip:
+entry runs its own waist query, reanchors from the returned wall point at the OG
+3-unit pushout, and applies the airborne/rising 4-unit snap-up rule. Grip, ledge,
+and corner checks share the bounded wall-check family. Movement uses the
+3-unit physics shell and center-to-feet half-height mapping; rendered model
+bounds and the 0.5-unit visual gap remain outside physics. Final real-map Ares
+walljump, mantle, and corner profiles pass. The historical failure notes below
+explain how these values were derived; they do not describe a remaining
+standalone climb resolver.
+
 ## What surprised us
 - **The entry probe radius and the motor's climb radius are COUPLED.** With
   the motor's Normal-state radius 5.0, the resting anchor places the waist 5

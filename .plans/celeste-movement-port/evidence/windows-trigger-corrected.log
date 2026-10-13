@@ -1,0 +1,284 @@
+[artifact] rom=\\wsl.localhost\Debian\mnt\wsl\PHYSICALDRIVE0p1\Code\Celeste 64 Demake\madeline_cube_rom.z64 sha256=cd11b81addb8e72658db62b18f82d245e3c27740dafe24dfdf1e9ea6092486c8
+Loaded madeline_cube_rom
+Vulkan Enabled: using paraLLEl-RDP
+[build] compiled=Oct  7 2026 00:03:54
+dfs_init: OK
+test_marker: NOT FOUND
+[audio] malformed event manifest: rom:/audio/events.tsv
+[audio] unavailable; planned events remain disabled
+[skybox] initialized
+[hud] rdpq_font_load rom:/fnt/Renogare.font64 OK
+[model] loaded: model=rom:/mdl/strawberry.t3dm texture=rom:/tex/overworld/strawberry.sprite
+[model] loaded: model=rom:/mdl/tape_1.t3dm texture=(none)
+[animated-model] loaded rom:/mdl/player.t3dm (6 clips)
+[player-envelope] scale=0.08 radius=3.00 half_height=11.25 climb_anchor=3.00 model_radius=10.84 model_height=15.01 model_gap=0.50
+[model] loaded: model=rom:/mdl/room_fixture.t3dm texture=(none)
+[init] ENTRY: mappack_path_pending_=rom:/lvl/forsyken-city/forsyken-city.mappack lvl_path_=rom:/lvl/first-room.lvl
+[init] Calling BootMapPack(rom:/lvl/forsyken-city/forsyken-city.mappack)
+[mappack] BootMapPack ENTRY: path=rom:/lvl/forsyken-city/forsyken-city.mappack
+[mappack] v2 loaded rom:/lvl/forsyken-city/forsyken-city.mappack: 45 rooms, start=cell_00_00, global=rom:/lvl/forsyken-city/forsyken-city.colmesh (10618 tris)
+[map_runtime] global collision loaded: 10618 tris, 20868 verts
+[lvl] atmos: sky=rock_1 music=rock_1 amb=rock_1 snow=0.00 dir=(0.00,0.00,0.00)
+[lvl] loaded: colliders=0 faces=114 vertices=415 entities=1
+[map_runtime] active room -> cell_00_00 (origin 120.0,57.6,120.0)
+[matcat] material[0]=rock_1 OK lods=4 filter=bilinear
+[matcat] material[1]=snow_1 OK lods=4 filter=bilinear
+[matcat] material[2]=girder_wood OK lods=4 filter=bilinear
+[matcat] material[3]=rock_4 OK lods=4 filter=bilinear
+[matcat] material[4]=rock_5 OK lods=4 filter=bilinear
+[matcat] material[5]=girder OK lods=4 filter=bilinear
+[matcat] material[6]=wall_ruined_1 OK lods=4 filter=bilinear
+[matcat] material[7]=wall_ruined_5 OK lods=4 filter=bilinear
+[matcat] material[8]=wood_2 OK lods=4 filter=bilinear
+[matcat] material[9]=wood_4 OK lods=4 filter=bilinear
+[matcat] material[10]=wall_ruined_2 OK lods=4 filter=bilinear
+[matcat] material[11]=wall_ruined_3 OK lods=4 filter=bilinear
+[matcat] material[12]=girder_16 OK lods=4 filter=bilinear
+[matcat] material[13]=rock_2 OK lods=4 filter=bilinear
+[matcat] material[14]=girder_v OK lods=4 filter=bilinear
+[matcat] material[15]=wall_ruined_7 OK lods=4 filter=bilinear
+[matcat] material[16]=wood_1 OK lods=4 filter=bilinear
+[matcat] material[17]=wall_ruined_4 OK lods=4 filter=bilinear
+[matcat] material[18]=metal_floor_1 OK lods=4 filter=bilinear
+[matcat] material[19]=floor_dirty_concrete OK lods=4 filter=bilinear
+[matcat] material[20]=girder_v_16 OK lods=4 filter=bilinear
+[matcat] material[21]=big_decals_1 OK lods=1 filter=bilinear
+[matcat] material[22]=wood_3 OK lods=4 filter=bilinear
+[matcat] material[23]=__TB_empty NULL
+[matcat] material[24]=wall_ruined_6 OK lods=4 filter=bilinear
+[matcat] material[25]=rock_3 OK lods=4 filter=bilinear
+[matcat] material[26]=road1 OK lods=3 filter=bilinear
+[matcat] material[27]=invisible NULL
+[matcat] material[28]=glass_1 OK lods=1 filter=bilinear
+[matcat] material[29]=wood_fragile OK lods=4 filter=bilinear
+[matcat] material[30]=special_floor_1 OK lods=4 filter=bilinear
+[matcat] material[31]=TB_empty NULL
+[matcat] loaded 32 materials from rom:/lvl/forsyken-city/forsyken-city.manifest
+[spawn] authored=(0.00,25.60,89.60) grounded=(0.00,37.05,89.60) grounded=0
+[texroom] loaded: 415 verts, 114 batches, 114 faces, 0 discarded block=yes
+[texroom] loaded: 541 verts, 149 batches, 149 faces, 0 discarded block=yes
+[texroom] loaded: 541 verts, 149 batches, 149 faces, 0 discarded block=yes
+[texroom] loaded: 582 verts, 157 batches, 157 faces, 0 discarded block=yes
+[texroom] loaded: 996 verts, 254 batches, 254 faces, 0 discarded block=yes
+[texroom] loaded: 328 verts, 81 batches, 81 faces, 0 discarded block=yes
+[texroom] loaded: 150 verts, 40 batches, 40 faces, 0 discarded block=yes
+[texroom] loaded: 2280 verts, 591 batches, 591 faces, 0 discarded block=yes
+[texroom] loaded: 3527 verts, 920 batches, 920 faces, 0 discarded block=yes
+[texroom] loaded: 1034 verts, 262 batches, 262 faces, 0 discarded block=yes
+[texroom] loaded: 72 verts, 18 batches, 18 faces, 0 discarded block=yes
+[texroom] loaded: 952 verts, 240 batches, 240 faces, 0 discarded block=yes
+[texroom] loaded: 66 verts, 17 batches, 17 faces, 0 discarded block=yes
+[mappack] booted rom:/lvl/forsyken-city/forsyken-city.mappack: 45 rooms, start=cell_00_00
+[init] BootMapPack SUCCEEDED — use_map_pack_ should be true
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.092 ms (30.2 fps) update=0.162 (39.558 peak) ms
+[render-phases] high_priority=0.080 (5.598 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.419 ms (29.9 fps) update=0.163 (9.754 peak) ms
+[render-phases] high_priority=0.089 (5.603 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.121 ms (30.2 fps) update=0.162 (10.134 peak) ms
+[render-phases] high_priority=0.080 (5.589 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.417 ms (29.9 fps) update=0.162 (9.746 peak) ms
+[render-phases] high_priority=0.090 (5.589 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.404 ms (29.9 fps) update=0.163 (9.785 peak) ms
+[render-phases] high_priority=0.083 (5.606 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.137 ms (30.2 fps) update=0.162 (10.130 peak) ms
+[render-phases] high_priority=0.090 (5.588 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.404 ms (29.9 fps) update=0.163 (9.781 peak) ms
+[render-phases] high_priority=0.086 (5.591 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.412 ms (29.9 fps) update=0.163 (9.755 peak) ms
+[render-phases] high_priority=0.090 (5.588 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.130 ms (30.2 fps) update=0.163 (10.132 peak) ms
+[render-phases] high_priority=0.089 (5.611 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.415 ms (29.9 fps) update=0.162 (9.745 peak) ms
+[render-phases] high_priority=0.093 (5.591 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.401 ms (29.9 fps) update=0.163 (9.777 peak) ms
+[render-phases] high_priority=0.090 (5.588 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.128 ms (30.2 fps) update=0.162 (10.103 peak) ms
+[render-phases] high_priority=0.086 (5.590 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.410 ms (29.9 fps) update=0.162 (9.741 peak) ms
+[render-phases] high_priority=0.089 (5.588 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.120 ms (30.2 fps) update=0.163 (9.768 peak) ms
+[render-phases] high_priority=0.080 (5.603 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.419 ms (29.9 fps) update=0.162 (10.124 peak) ms
+[render-phases] high_priority=0.089 (5.588 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.400 ms (29.9 fps) update=0.162 (9.731 peak) ms
+[render-phases] high_priority=0.080 (5.588 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.138 ms (30.2 fps) update=0.163 (9.776 peak) ms
+[render-phases] high_priority=0.090 (5.590 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.404 ms (29.9 fps) update=0.163 (10.124 peak) ms
+[render-phases] high_priority=0.083 (5.605 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.416 ms (29.9 fps) update=0.162 (9.746 peak) ms
+[render-phases] high_priority=0.090 (5.588 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.125 ms (30.2 fps) update=0.164 (9.821 peak) ms
+[render-phases] high_priority=0.086 (5.605 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.412 ms (29.9 fps) update=0.162 (10.136 peak) ms
+[render-phases] high_priority=0.090 (5.588 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.409 ms (29.9 fps) update=0.163 (9.778 peak) ms
+[render-phases] high_priority=0.089 (5.589 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.137 ms (30.2 fps) update=0.163 (9.783 peak) ms
+[render-phases] high_priority=0.093 (5.604 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.401 ms (29.9 fps) update=0.162 (10.128 peak) ms
+[render-phases] high_priority=0.090 (5.604 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.407 ms (29.9 fps) update=0.162 (9.745 peak) ms
+[render-phases] high_priority=0.086 (5.589 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.131 ms (30.2 fps) update=0.163 (9.772 peak) ms
+[render-phases] high_priority=0.089 (5.589 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.399 ms (29.9 fps) update=0.162 (10.093 peak) ms
+[render-phases] high_priority=0.080 (5.589 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.419 ms (29.9 fps) update=0.162 (9.715 peak) ms
+[render-phases] high_priority=0.089 (5.589 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.121 ms (30.2 fps) update=0.162 (10.129 peak) ms
+[render-phases] high_priority=0.080 (5.589 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.417 ms (29.9 fps) update=0.162 (9.720 peak) ms
+[render-phases] high_priority=0.090 (5.588 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.404 ms (29.9 fps) update=0.163 (9.776 peak) ms
+[render-phases] high_priority=0.083 (5.589 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.137 ms (30.2 fps) update=0.162 (10.131 peak) ms
+[render-phases] high_priority=0.090 (5.603 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.404 ms (29.9 fps) update=0.163 (9.782 peak) ms
+[render-phases] high_priority=0.086 (5.591 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.412 ms (29.9 fps) update=0.162 (9.746 peak) ms
+[render-phases] high_priority=0.090 (5.604 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[input] pad=(style1,current0000,held0000) z=0 l=0 r=0 al=0 ar=0 | j=0 d=0 c=0 p=0
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+[profiler] avg frame time over 60 frames: 33.130 ms (30.2 fps) update=0.163 (10.116 peak) ms
+[render-phases] high_priority=0.089 (5.588 peak) streaming=0.000 (0.000 peak) ms
+[counters] near_batches=56 texture_uploads=9 vert_loads=56 syncs=56 pending=0 resident=13
+[move] pos=(0.0,36.9,89.6) v=(0.0,0.0,0.0) g=1 wall=0 ceil=0 st=N
+Unloaded madeline_cube_rom

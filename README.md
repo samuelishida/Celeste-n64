@@ -18,7 +18,7 @@ Completed:
 - Strawberry collection
 - Material catalog with textured geometry
 - **Full Forsaken City A-side `1.map`** as one traversable world: one global
-  collision mesh + per-cell LVL2 visual rooms + map-pack v2 manifest
+  collision mesh + per-cell LVL2 visual rooms + map-pack v4 manifest
   (`tools/ogworld/` canonical IR → `MapRuntime` + `WorldCollision`)
 
 In progress:
@@ -31,7 +31,7 @@ See [`.agents/map-creation.md`](.agents/map-creation.md) for the full end-to-end
 ## Interconnected map bake
 
 The full A-side `1.map` is baked through the canonical world IR into one
-global CMSH + per-cell LVL2 rooms + a map-pack v2 manifest:
+global CMSH + per-cell LVL2 rooms + a map-pack v4 manifest (MPP2/MPP3 remain readable):
 
 ```sh
 make bake-forsaken-city

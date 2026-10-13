@@ -1,9 +1,99 @@
 # Z-Split Horizon Fix
 
+## Current recovery status — 2026-10-09
+
+The single-pass rollback removed horizon coverage and did not satisfy the
+requested z-split goal. Runtime now re-enables per-cell DLOD using the separate
+buffered projection path, with depth cleared before near rendering and DLOD
+yielding only to near cells actually submitted this frame. DLOD/near/streaming
+telemetry is restored.
+The resident pool remains the 3×3 core plus four forward Cheb-2 cells (13),
+with camera-sector refresh. Near submission uses the conservative 3D AABB
+frustum predicate and margin shared with DLOD. DLOD yields only to READY
+residents actually submitted by near; pending and off-frustum cells cannot
+create a near/DLOD coverage gap. Hair vertex packing now avoids
+per-coordinate `std::lround` while preserving exact rounding/rejection. Hair
+sphere rendering now uses 20 vertices/36 triangles per node (32/60 before),
+without changing OG node counts or simulation.
+
+The DLOD baker no longer replaces disconnected coplanar loops with a convex
+hull, which had invented surfaces across gaps. The new regression failed
+before the fix (source area 2,048; hull area 5,120) and passes with source-face
+triangulation. Map rebake emitted 46 distant cells, 2,868 total faces, maximum
+80 per cell, with every cell under budget. Current source passes **142 host
+tests**. A follow-up performance candidate now culls near cells with the same
+conservative 3D AABB/frustum predicate and margin as DLOD. The synthetic
+13-resident test retains 8 visible cells and verifies near/DLOD ownership;
+this is not map-specific or FPS proof. ROM compiles without warnings. Current
+ROM SHA-256 is
+`ff9b1d1017ca471c243c4d2d7e4a9d45591ff7b69913fc2e9234a4a11250bdce`
+(1,900,544 bytes). This is source/build proof, not runtime proof. Ares visual,
+memory, and 30-fps qualification remain open. Older 2026-10-08 captures came
+from a different single-near revision: about 6.9–10.9 fps while moving, with
+~22 ms player skinning, ~9–12 ms hair, and ~7–49 ms near rendering as batch
+count changed. They identify workloads to remeasure, not this ROM's result.
+The immediately preceding idle capture (`fc7329…`) measured 8.9–9.0 fps,
+update 46.7–48.6 ms, near 24.7–24.8 ms, skinning ~22.0 ms, hair ~2.2 ms; it
+predates the single-influence skin fast path. Ares PID 994773 is user-controlled;
+do not close or relaunch it. Current hash adds exact skin fast path,
+fixed-step/actor-world/player-physics phases, near-group-build/textured-draw
+phases, and dynamic-solid visibility transition records; device validation
+still required.
+
+## Historical follow-up — freeze near/DLOD ownership at the 3×3 boundary (superseded)
+
+The implementation had drifted from the accepted streaming plan: its 3D
+frustum mask allowed READY Cheb-2 preloads to switch into detailed rendering
+as the camera moved, despite those cells being intended as preload-only. This
+made representation ownership camera-angle-dependent and could expose coarse
+vs. detailed geometry differences as platform flicker. Runtime now marks only
+Cheb-1 residents drawable; pending core cells and all Cheb-2 cells remain
+eligible for DLOD. Added regression coverage for a READY outer resident and
+all nine core cells, independent of camera facing. This is a source-level fix;
+current-ROM Ares observation and real-hardware frame-time proof are still
+required.
+
+The first re-enabled candidate exposed one more coverage flaw by source-level
+geometry analysis: the old DLOD near plane (`1.5 × tile_size`, 360u) assumed the
+camera stayed near its active cell center. During fast travel, camera follow can
+lead across that boundary while a Cheb-2 cell is still nonresident; the 360u
+projection clipped the cell's near portion. `MakeDistantCamera` now uses the
+same near plane as the detailed pass. The regression was observed failing
+against the old 360u rule and passing with shared near.
+Separate DLOD batch/load/sync counters now expose RSP work that the old
+`syncs` counter attributed only to near pass. Current-hash Ares validation
+remains open.
+
+## Goal continuation — near/DLOD visibility ownership (2026-10-09)
+
+Found a handoff hole: DLOD skipped every READY resident, while near frustum
+culling could also skip that same cell. A resident now owns the split only when
+its detailed renderer is ready AND its current near draw mask is visible;
+otherwise visible DLOD remains the fallback. Added host regression for ready,
+culled, and pending residents plus runtime source contract. Source contract
+failed before the renderer change and passes after it.
+
+Verification: full host suite **141 passed, 0 failed**; `./compile-rom.sh`
+passes with no warnings. ROM SHA-256
+`497de17fc807f34d3e0bd4344f373c91c18f74fc1fdd876af1ca945954966363` (1,900,544
+bytes). Ares PID 994773 remains user-controlled and was not relaunched. Fresh
+artifact visual/flicker, memory, and 30-fps checks remain open.
+
+## Coverage correction — preserve all 13 near residents (2026-10-09)
+
+The later `streaming-experience` Ares review established that the fixed 3×3
+draw mask still left terrain gaps with 240u cells and an 800u near far plane.
+Keep the bounded 13-cell set drawable, independent of camera angle. The split
+remains deterministic: DLOD yields only when a resident is both READY and in
+the fixed near draw mask; PENDING residents stay DLOD-owned. This supersedes
+the earlier 3×3-only mask follow-up. Four extra resident cells increase near
+RSP work, so the 30-fps budget must be remeasured on the current ROM; do not
+trade away coverage without that device evidence.
+
 ## Context
 
 The N64 renderer splits the world into a **near pass** (Z-on, detailed resident
-ring) and a **distant pass** (Z-off, coarse per-cell LOD meshes, back-to-front).
+ring) and a **distant pass** (Z-on, coarse per-cell LOD meshes).
 On device the split is visually wrong: the near↔distant handoff does not sit at
 the horizon. Distant coarse slabs appear **too close**, overlapping the detailed
 near ring; the transition reads as a hard, non-horizon-aligned seam; and when
@@ -85,9 +175,13 @@ original plan did not cover:
   `gameplay_scene.cpp:830-840`). This is the load-bearing fix: without it,
   widening the cull far has no visual effect past 800. Alternatives rejected:
   keep the shared projection (the horizon stays capped at 800 — the bug remains).
-- **Decision: world-space cull near/far.** `near = 1.5 × tile_size` (just past
-  the resident ring's diagonal neighbors at `√2 × tile_size ≈ 339.4` for the
-  Forsaken City grid). `far = MapFarClipDistance(world_bounds, margin)` = the
+- **Revised decision: distant near matches the detailed near plane.** The old
+  `1.5 × tile_size` (360u) threshold only cleared the 3×3 ring when the camera
+  stayed near the active-cell center. Fast camera follow can put a nonresident
+  Cheb-2 cell inside that clip range, slicing it before its detailed load is
+  ready. Since DLOD yields to every ready cell actually drawn by the near pass,
+  lowering the clip preserves pending-cell coverage without duplicate ownership.
+  `far = MapFarClipDistance(world_bounds, margin)` = the
   full map diagonal from any camera position (`2 × map-center→corner × margin`),
   so a camera at a map corner still sees the opposite corner. The cull
   predicate and the projection use the **same** near/far values.

@@ -97,11 +97,13 @@ Quando entrada aponta quase exatamente para frente (`dot >= 0.985`), direção �
 
 ## Demake implementation (og-mover-overhaul)
 
-O demake (N64, +Y up) implementa o mover único do OG com `MoveService`
-(`src/user/gameplay/player/player_movement.{hpp,cpp}`), chamado uma vez por tick
-pelo `PlayerController::MovePhase`. Substituiu o antigo `PlayerMotor`
-(desligado no Inc 2), que mantinha quatro caminhos de reparo paralelos — a causa
-da queda de clipping em paredes e pisos.
+O demake (N64, +Y up) usa uma implementação compartilhada do mover do OG com
+`MoveService` (`src/user/gameplay/player/player_movement.{hpp,cpp}`). Uma
+atualização pode fazer sweeps ordenados de escalada e velocidade, seguidos por
+um único `Popout(false)`, acumulando contatos até o fim do tick. Isso substituiu
+o antigo `PlayerMotor`, que mantinha quatro caminhos de reparo paralelos.
+Fixtures host e rotas no mapa real cobrem os casos testados; não garantem todos
+os formatos e contatos de malha possíveis.
 
 Mapeamento mover (OG Z-up → demake +Y-up, âncora nos pés: `feet =
 center.y - player_half_height`):
@@ -125,10 +127,10 @@ Remoções:
 ### Ledger de desvios
 1. kill plane `-200` (mundo do demake) vs OG `-100` — diferença de mundo, não
    de feel.
-2. hitstop do dash é local do controlador (OG congela o mundo): a velocidade
-   OG do dash é aplicada no frame de aceitação e esse primeiro deslocamento
-   ocorre antes do hitstop local; os ticks congelados seguintes não consomem
-   os 0.20 s ativos do dash.
+2. hitstop do dash pausa ticks inteiros do mundo, como no OG: entrada continua
+   sendo amostrada, enquanto jogador, atores, plataformas e timers de movimento
+   ficam parados. A velocidade do dash é preservada; o tempo ativo não diminui
+   durante os ticks congelados.
 3. zoom da câmera `1.8/1.0` — desvio pré-existente documentado.
 4. o gate de entrada por facing-dot `>= 0.5` foi removido: OG usa facing
    apenas para ordenar faces candidatas; direção de movimento, quando existe,
@@ -221,9 +223,14 @@ Correções aplicadas na revisão do PR:
   walljump direcional + neutral, dash, skid-jump, mantle) arma
   `ground_snap_cooldown = 0.10` — antes o setter faltava e o snap de 5 u
   comia o início de cada pulo.
-- **Faces MAT_DEATH voltaram a matar**: `MoveService::Popout` sinaliza
-  `PlayerState::death_contact` em qualquer face reparada com material de
-  morte; a cena combinou com o kill plane (`motor_result.death`).
+- **Legado MAT_DEATH**: `MoveService::Popout` ainda sinaliza
+  `PlayerState::death_contact` para mapas antigos que codificam morte em face.
+  O mapa principal agora usa MPP4: `DeathBlock`/`SpikeBlock` volumes AABB,
+  teste de waist-point antes do movimento e filtro direcional original das
+  spikes. Durante climb, OG também consulta dois pontos nos volumes de
+  `SpikeBlock`: bloqueia só movimento para cima no probe frontal e só
+  movimento lateral no probe da cintura; esses probes não usam filtro
+  direcional letal. Ver `docs/og_port_gap_matrix.md`.
 - `MovementProfile` deletado — uma única `MovementConfig` (o `jump_buffer_time`
   0.08 fantasma foi embora junto).
 - Um único `MoveService` em produção: `PlayerController::Mover()` é a instância

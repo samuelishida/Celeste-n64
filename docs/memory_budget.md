@@ -18,14 +18,24 @@ target was dropped.
 |---|---|---|---|---|
 | Inc 1 (pre-pooling) | 2,921,672 (2.79 MiB) | 2,899,576 | 22,096 | `build/baseline-inc1-20260907-002133.txt` |
 | Inc 4 (post-pooling) | 5,858,072 (5.59 MiB) | 5,822,032 | 36,040 | `build/raw-baseline-inc4j-20260907-123146.txt.log` |
+| Weighted player skin (2026-10-08) | 6,403,784 (6.11 MiB) | 6,369,896 | 33,888 | `build/baseline-weighted-skin-memory-retry-20261008-131312.txt` |
 
-The Inc 4 arena is ~2.9 MB higher because the renderer pools (memory-opt
-Inc 4) preallocate the per-cell renderer objects + their per-cell buffers at
-boot. In exchange, cell transitions allocate NOTHING from the heap — `used`
-is flat across a walk (the pools are fixed; the transient asset-load buffers
-are malloc'd + freed and reuse the same blocks). Total RDRAM ≈ 5.86 MB arena
-+ 0.45 MB framebuffers (320×240×16bpp×3) + stack ≈ 6.4 MB — ~1.6 MB headroom
-on the 8 MB pak.
+The weighted-skin capture is the newest stationary Ares sample and supersedes
+older arena figures for this ROM. A historical static-player capture before
+weighted runtime (`build/baseline-static-player-20260924-220758.txt`) measured
+6,138,472 / 6,101,104 / 37,368 bytes; the newer sample is +265,312 arena and
++268,792 used bytes, but this is not a controlled before/after build pair.
+The component buckets stayed unchanged and do not isolate player-skin
+allocations. `mallinfo` free bytes describe current arena reserve; `sbrk` may
+grow the arena, so 33,888 bytes is not total remaining Expansion Pak capacity.
+Full RDRAM accounting must also include framebuffers, stack, RSP allocations,
+and all other non-arena memory before claiming a total headroom figure.
+
+For the Inc 4 ROM, the arena was ~2.9 MB higher than Inc 1 because renderer
+pools preallocated per-cell objects and buffers at boot. Cell transitions
+then allocated nothing from the heap; `used` stayed flat during that walk.
+That ROM's rough RDRAM estimate (5.86 MB arena + 0.45 MB framebuffers + stack
+≈ 6.4 MB) is historical, not a current weighted-player headroom claim.
 
 ## Component caps (the `[budget]` registry in rom_main.cpp)
 
@@ -35,13 +45,23 @@ on the 8 MB pak.
 | `staging` | 128 KB | 125,867 | Reserved uncached staging pool = MaxLvlSize + margin |
 | `res_render` | 4 KB | 1,768 | Live resident renderer OBJECT bytes (13-resident ring) |
 | `coll_mesh` | 700 KB | 634,168 | Global CMSH file buffer + dequantized verts (boot-time, permanent) |
-| `mappack` | 500 KB | 422,580 | MapSpecV2 struct footprint (45 cells) |
-| `pool_highwater` | 26 | 13 | Renderer-pool high-water (capacity = kMaxResident + 1) |
+| `mappack` | 500 KB | 445,112 | MapSpecV2 fixed footprint including 512 MPP4 hazard slots (46 cells) |
+| `pool_highwater` | 14 | 13* | Renderer-pool high-water (bounded resident capacity + 1) |
 | `arena_peak` | 64 KB | 0 | Frame-arena peak since boot |
 
-Headroom target: > 1 % of the arena free at the stationary sample point
-(Inc 4: 36,040 / 5,858,072 ≈ 0.6 % — the arena can still grow via sbrk; the
-binding constraint is the 8 MB pak, not the arena).
+Historical Inc 4 sample had 36,040 / 5,858,072 bytes free (≈0.6%). Current
+weighted-skin sample has 33,888 / 6,403,784 bytes free (≈0.53%). The arena can
+still grow via `sbrk`; these ratios are allocator-reserve indicators, not the
+8 MB pak's total remaining capacity. Full current RDRAM accounting remains
+open.
+
+*The 2026-10-08 weighted-skin capture predates the memory-bounded streaming
+follow-up; its `pool_highwater=13` is historical, not post-change evidence.
+Current source caps residency at 13 cells (all 9 drawn cells plus 4
+forward-ranked preloads), and emits `[streamer-memory]` at boot with exact
+textured/flat pool storage. Textured builds no longer reserve the inactive
+flat pool. Re-capture at map center before updating arena/RDRAM figures or
+claiming the OOM is resolved.
 
 ## Revert knobs
 

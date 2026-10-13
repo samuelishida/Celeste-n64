@@ -1,41 +1,100 @@
-# OG port gap matrix
+# OG movement port gap matrix
 
-The original game is not hiding a separate physics engine behind `Player.cs`; it is leaning on a compact runtime substrate. This ledger names the pieces we need before future source ports become straightforward translation work.
+This is a source map for the current C++ demake, not a parity certificate. OG
+reference lines below were checked against `Celeste64-og/Source/Actors/Player.cs`
+and `Solid.cs`. Unless a row says **matched**, the behavior remains unproven or
+diverges and must not be described as parity. `Celeste64-og/` is read-only.
 
-## Trace contract
+## Coordinate and ownership contract
 
-Movement trace fixtures are JSON objects with:
-
-- `name`
-- `source` (`og` or `port`)
-- `dt`
-- `tolerance` (`position`, `velocity`, `scalar`)
-- `frames[]`, each with `input`, `position`, `velocity`, `grounded`, and optional tags
-
-Default parity tolerance unless a fixture says otherwise:
-
-- position: `0.05`
-- velocity: `0.05`
-- scalar timers: `0.01`
-
-## Dependency ledger
-
-| Source dependency | OG evidence | C++ status | Gap |
+| Boundary | OG | Demake | Status / proof |
 | --- | --- | --- | --- |
-| buffered virtual buttons | `Controls.cs`, historical Foster `VirtualButton` | **done (Inc 1)** | `InputSystem` owns `VirtualButtonState` (0.10 s device buffer + consume-once); controller's internal buffers deleted |
-| deadzoned virtual sticks | `Controls.cs`, Foster `VirtualStick` | **done (Inc 1)** | `VirtualStickState` + circular deadzone; `move_deadzone` defaults to OG 0.35 and remains configurable |
-| angle / approach / interval helpers | Foster `Calc`, local player helpers | partial | controller carries private clones (out of scope) |
-| state machine | `Helpers/StateMachine.cs` | **done (Inc 2)** | `StatePhase` dispatcher over Normal/Dashing/Skidding/Climbing with enter/exit hooks + same-tick transition cascade (enum stays at the 4 locomotion states) |
-| actor lifecycle / typed queries | `World.cs` | missing | actors are lightweight structs with bespoke scene wiring (out of scope) |
-| pickup / pushout / rider traits | `Interfaces.cs`, `Player.cs` | missing | behaviour is hardcoded per path (out of scope; Spring is wired directly by the scene, Inc 3) |
-| actor-backed solids | `Solid.cs`, `World.cs` | partial | query results exist, but ownership lives in fixed `Room` arrays |
-| moving-solid rider propagation | `Solid.MoveTo`, `IRidePlatforms` | partial | moving surfaces exist, but not through actor traits (out of scope) |
-| climb snap-up / cornering / ledge assist | `Player.cs` | **done for entry + corner system + ledge hop** | entry snap, wallUp climb movement, lateral-gated corner system, ledge hop ported (climb-fix loop + controls-physics-port Inc 4 winding-independent grab gate) |
+| Up axis | `+Z` | `+Y` in `PlayerState` and `Room` | **intentional N64 adaptation**. Every source `z` vertical component maps to C++ `y`; OG horizontal `XY` maps to C++ `XZ`. Check `MovementConfig` and `PlayerState`; fixture expectations below use that mapping. |
+| Body anchor | `Position` is at feet; `SolidWaistTestPos = Position + Z*3` and head probe is `+Z*10` (`Player.cs:843-851`; `:2280-2295`) | `PlayerState.position` is body center; `MoveService` uses `half_height`, with the climb waist at `center.y - half_height + 3` | **intentional N64 adaptation**. Feet height = `center.y - half_height`; waist = `center.y - half_height + 3`. Ground contact must restore center to `floor.y + half_height`. Wall fixture checks are in `physics_query_regression.cpp`; full response parity remains unproven. |
+| Input source | `Controls` exposes `VirtualStick`/`VirtualButton`; Move deadzone `.35`, Jump/Dash buffer `.1`, Climb unbuffered (`Celeste64-og/Source/Data/Controls.cs:5-13`) | `InputSystem` adapts N64 stick and raw Z/L/R to `PlayerInput`; fixed-step edge lifetime is covered by `input_compat_smoke` | **intentional N64 adaptation** for hardware mapping; fixed-tick press/release lifetime is host-tested. Windows Ares required R-Trigger polarity `Hi`; final captures show raw `z=l=r=0` at idle. |
 
-## Required trace fixtures
+## Method and call-order map
 
-- `buffered_jump.json` — press before landing, consume once
-- `wall_snap.json` — upward approach snaps into a climbable wall
-- `ledge_assist.json` — floor-edge correction preserves supported motion
-- `moving_platform_jump.json` — stored platform velocity adds once on takeoff
-- `actor_overlap.json` — trait-driven overlap query selects the expected actor
+| OG method / evidence and order | C++ owner / current order | Axis / anchor | Status | Observable proof or gap |
+| --- | --- | --- | --- | --- |
+| `Player.Update`: dead/cutscene gate; decrement timers; save previous velocity; `stateMachine.Update`; state-specific requests; ordinary `velocity * dt` sweep; final `Popout(false)` (`Player.cs:295-341`, `:343-375`) | `PlayerController::Step` runs timer/input, exactly one state handler, then `MovePhase`. Climbing submits its kinematic sweep into the shared `MoveService`; ordinary velocity sweep and one final popout follow in OG order. | OG +Z/feet → C++ +Y/center | **partially proven** | `movement_contracts_test`, `move_service_smoke`, `real_map_guided_climb_smoke`, `real_map_corner_traverse_smoke`; shared resolver, ordered sweeps and accumulated contacts are covered. Geometry formats and full OG response parity remain scoped gaps. |
+| `DeathBlock` / `SpikeBlock`: `Map.LoadActor` derives `WorldBounds` from first child Solid; `Player.Update` checks `SolidWaistTestPos` before timers/state. Spike kill also requires `Dot(velocity.Normalized(), Direction) < .5` (`Map.cs:64-65,275-306`; `SpikeBlock.cs:14-55`; `Player.cs:226-228,303-309`; `World.cs:599-620`) | MPP4 stores transformed actor AABBs and source-selected spike axis. `MapRuntime` applies the 10-unit `SolidRayCast` direction flip; scene tests waist point before movement. Hazard brush faces no longer masquerade as death/collision surfaces. | OG +Z up / feet+3 → C++ +Y / center-half-height+3; full 3D velocity dot | **host-proven for authored map bounds and point predicates; device-pending** | `og_hazard_volume_smoke`, `mappack_v4_test`, `mappack_spawn_flags_smoke`, `hazard_query_smoke`, and `map_runtime_v2_smoke` cover source bounds, serialization, inclusive point overlap, direction predicate, and runtime initialization for 98 spikes / 5 death volumes. Current-ROM Ares hazard routes and rendered spike actor parity remain open. |
+| `LateUpdate`: post-move `GroundCheck`, support correction, cooldown-gated 5-unit ground snap, coyote height/timer and dash refill (`Player.cs:391-420`) | `PlayerController::MovePhase` runs `MoveService` ground/contact work and `LateContactPhase`; `MoveService::GroundCheck` owns the query | OG feet position and `-Z` ray → center and `-Y` ray | **partially proven** | `physics_query_regression`, `movement_parity_smoke`, and real-map walljump/slope routes cover bounded support, post-move coyote refresh and support-dependent behavior. Remaining ground-snap boundary cases are not blanket-certified. |
+| `StNormalUpdate`: slope-adjusted true max; grounded analog magnitude; steering; climb check; dash check; coyote jump before wall jump; gravity last (`Player.cs:968-1214`, especially `:1010-1122`, `:1145-1183`) | `StNormalUpdate` applies horizontal steering and the fast-reverse Skidding early return before climb, dash, then jump/gravity; input is adapted in `TimerInputPhase` | horizontal XY → XZ; vertical Z → Y | **partially proven** | `movement_parity_smoke` now checks normal jump's positive-coyote gate, preserves an expired-coyote buffered press until support refresh, and still allows OG `WallJumpCheck` on a valid wall with stale grounded/expired coyote. `skid_smoke`, `locomotion_smoke`, `real_map_slope_smoke`, and Ares profiles cover other selected formulas/order. All transition combinations and extreme slopes remain open. |
+| Ground analog target: `MaxSpeed=64`; `mag = ClampedMap(|Move|,.4,.92,.3,1)` then `max *= mag`; `trueMax` is saved before scaling (`Player.cs:15`, `:1020-1027`) | `StNormalUpdate` uses `AnalogMagnitude(raw_input_length)` for ground target and retains `true_max_speed` separately | horizontal XZ | **matched for tested range** | `movement_parity_smoke` uses a real floor and half-stick magnitude `.5`; it independently asserts `64 * (.3 + (.5-.4)/(.92-.4)*.7)`. Other stick magnitudes are not exhaustively enumerated. |
+| Grounded overspeed: preserve velocity above pre-analog `trueMax`, use `PastMaxDeccel` when aligned, and rotate facing more slowly above max without overwriting that turn (`Player.cs:1061-1099`, `:1104-1119`) | `StNormalUpdate` stores `true_max_speed` and applies carry/turn logic | horizontal XY → XZ | **partially proven** | `movement_parity_smoke` checks aligned `100 → 99` carry, above-max diagonal turn, and a 30° slope where input turns across the ramp: source `trueMax=81.14875`, speed reaches `78.333`, and facing turns at normal `RotateSpeed` from the pre-turn uphill direction. Other slope angles, speeds, and input combinations remain open. |
+| Air movement normalizes input to full `MaxSpeed`; no-input air friction and movement/jump/walljump/gravity order (`Player.cs:1101-1122`, `:1156-1183`) | `StNormalUpdate` air branch and `ApplyJumpAndGravity` | horizontal XZ; vertical +Y | **matched for tested cases** | `locomotion_smoke` asserts full-speed partial-stick steering, no-input friction, facing/input acceleration mapping, and direct steering; `movement_parity_smoke` covers jump and dash launch ordering. Full continuous trajectories remain unproven. |
+| `Jump`, `WallJump`, `SkidJump`, `DashJump`, `AddPlatformVelocity`: coyote-height restore where applicable, set/boost velocity, consume bounded platform carry, arm ground-snap cancel (`Player.cs:722-834`) | Shared `StartWallJump`, `StartJump`, `StartDashJump`, skid handler, and `AddStoredPlatformVelocity` | OG `Position.Z=coyoteZ` → `position.y=contact.coyote_height`; carry vertical → y | **partially proven** | `movement_parity_smoke` now verifies normal jump requires positive `tCoyote`: stale grounded with expired timer leaves buffered press unconsumed, then grounded support refresh enables the next-tick launch and restores recorded coyote height. `dash_jump_smoke`, `surface_parity_smoke`, and `real_map_walljump_smoke` cover other launch/carry paths. Full takeoff combinations remain open. |
+| `StSkiddingUpdate`: timer; TryDash first; cancel if weak/misaligned input or not grounded; skid jump; accelerate and exit at end speed (`Player.cs:1371-1415`) | `PlayerController::StSkiddingUpdate` and state enter/exit hooks | horizontal XY → XZ | **matched for tested transitions** | `skid_smoke` uses a real floor and checks reverse entry, buffered dash and skid behavior. Other edge thresholds remain unproven. |
+| `StDashingEnter/Update`: capture grounded flag and facing; set grounded `(dir,0)*140` or air `normalize((dir,.4))*140`; decrement dash; air expiry scales all velocity; steer; DashJump gate (`Player.cs:30-34`, `:1241-1265`, `:1273-1308`, `:1341-1348`) | State enter/exit in `PlayerController`; `SetDashVelocity`, `StDashingUpdate` | air launch `new Vec3(dir,.4)` uses OG +Z vertical → C++ `{x,.4,z}` with +Y vertical | **partially proven** | `movement_parity_smoke` asserts grounded/air launches, expiry of collision-reduced 3D velocity, hitstop timer pause and dash-edge ordering. Device route and all steering collisions are not exhaustive. |
+| Refill pickup: strict waist-point radius20 overlap, amount-aware dash refill, hidden4s cooldown, then `.05s` whole-world hitstun (`Player.cs:162,378-386`; `Refill.cs:27,51-85`; `World.cs:348-352`) | `ProcessRefillPickups`, MPP3 actor flags, map-wide owned actors, and `ConsumeWorldHitstopTick` | OG waist `feet+3` → center `-half_height+3`; full 3D distance; simulation pauses before input/timers/camera/actors/player | **partially proven** | `refill_pickup_parity_smoke`, `refill_render_contract_smoke`, MPP2/MPP3 loader and real-map actor tests cover charge eligibility, strict boundary, cooldown, ordered hitstop and render wiring. Current ROM has not been manually loaded in Ares; pickup visuals/feel remain open. |
+| `TryClimb` / `ClimbCheckAt`: waist query in `-targetFacing`, optional +4-up recheck only while rising and airborne, direction gate, climb-normal gate; on success anchor to `wall.Point + (Position-waist) + normal*WallPushoutDist`, then face wall (`Player.cs:845-884`) | `PlayerController` climb query helpers and Normal handler; shared query primitives live in `World` | waist = feet +3 → center - half-height +3; optional OG +Z4 → C++ +Y4; normal threshold uses up-axis | **partially proven** | `climb_parity_smoke`, `physics_query_regression`, `real_map_guided_climb_smoke`, and the final Windows walljump/mantle/corner profiles exercise bounded geometry and real entry. Unsupported geometries remain unproven. |
+| `StClimbingEnter/Exit/Update`: zero velocity on enter; release/jump/dash early exits; refresh `CancelGroundSnap` on each held tick; translate stick; cancel downward movement on floor; block upward/lateral probes overlapping SpikeBlock bounds; move kinematically at `ClimbSpeed`; corner probes/ease; +Z lip miss mantle; TryClimb sustain/release (`Player.cs:1431-1447`, `:1449-1638`) | `PlayerController::StClimbingUpdate` submits climb displacement to common `MoveService`; MPP4 spike volumes flow through per-tick context; up/side gates are independent of lethal approach-dot test | climb wall tangent/up map to XZ/+Y; waist probe = feet+3 | **partially proven** | `climb_hazard_parity_smoke` checks OG probe points and component-wise blocking. Existing real-map/climb/mantle/corner routes cover selected geometry and facing; arbitrary wall topologies and manual feel remain open. |
+| `ClimbCheckAt(+Z)` ledge test then mantle hop sets `velocity=(targetFacing*40, +80)`, `tNoMove=.25`, climb cooldown `.3`, clears autoJump and adds platform velocity (`Player.cs:1604-1615`) | `StClimbingUpdate` mantle branch | OG +Z up → C++ +Y; wall-forward → XZ | **partially proven** | `climb_mantle_smoke` and the final real-map Ares mantle capture pass a bounded wall lip, mantle event, rise and clearance checks. This does not certify every wall-top shape. |
+| Inner-corner side ray; slope-away ray; outer-corner forward+side ray; outer corner stores destination and eases position/facing over `.20s` (`Player.cs:1566-1603`, `:1629-1637`) | `StClimbingUpdate` corner helpers and `ClimbState`; `AdoptCornerWall` and `OnStateEnter(Climbing)` now also snap `state.facing` so the rendered model tracks the wall normal | rays originate at waist; position/facing remain center/facing vectors | **partially proven** | `climb_corner_smoke`, `climb_animation_alignment_smoke`, `real_map_corner_traverse_smoke`, and final Ares corner capture assert one handoff, destination-face retention, bounded movement, clearance, and visual facing alignment within 2°. Other corner topologies are not covered. During ease, retain destination grip, allow explicit release and bound reach (`climb-ease-must-keep-destination.md`). |
+| `SweepTestMove(delta,resolveImpact)`: no-op on zero; repeated max-2-unit translations each followed by `Popout`; disable further impact resolution after first wall response (`Player.cs:642-664`) | `MoveService::SweepMove` handles both climb kinematic and ordinary velocity requests, with one final `Popout(false)` | full 3D delta; no anchor change | **matched for call structure** | `movement_contracts_test`, `move_service_smoke`, `real_map_guided_climb_smoke`, and `real_map_corner_traverse_smoke` cover shared resolver use, request order, accumulated contacts and bounded movement. Collision response parity for untested mesh edge cases remains open. |
+| `Popout`: ground `if`, ceiling `else if`, then independent wall query; wall response projects velocity and returns true only for wall (`Player.cs:669-720`) | `MoveService::Popout` | floor/ceiling vertical axes mapped; waist/head center-derived | **partially proven** | `move_service_smoke` checks oblique-edge radial pushout versus face-normal impact response, plus simultaneous floor/roof/wall contact: ground wins ceiling response while independent wall resolution still occurs. Other face-ranking, one-way and mixed-contact combinations remain explicit gaps. |
+| `SolidWallCheck`: one closest fan-triangle hit per authored face; first strict ties retained; max eight candidates (`World.cs:482-594`) | `QueryWallsFacePlaneMesh` streams BVH leaves; CMSH v2 maps worldspawn, `func_group` child solids, and entity-owned Solid face ranges to OG bounds/order; runtime ranks by first shared wrapped cell, solid insertion ordinal, then face ID before retaining eight | Static solid grouping plus entity Solid initial transforms, grouping, and insertion order survive CMSH/BVH | **partially proven** | `og_wall_order_smoke` maps 4,209 static faces (including 46 grouped faces) + 853 actor faces to 198 records; `og_entity_solid_transform_smoke` checks group-child inclusion, combined brushes, explicit origin+yaw, yaw-only, identity, and face order. `wall_plane_query_smoke` forces cell encounter to beat lower face ID; `dynamic_solid_query_smoke` covers live actor transforms/reinsertion. `physics_query_regression` covers OG's exact vertex-slice endpoint overwrite, strict plane/slice radius rejection (including one-ULP overrun), and source face 1 winning with 257 overlaps despite last BVH visit. Deprecated sphere-family `QueryWallsMesh` streams every overlapping BVH candidate. Static and dynamic wall paths use strict OG acceptance after conservative broad-phase bounds; broader device and geometry parity remain open. |
+| `SolidRayCast`: query inflated ray bounds; visit SolidGrid solids and source faces in order; replace only when distance is not farther than current closest (`World.cs:412-479`) | `RaycastRoomMesh` traverses BVH then ranks actual distance, first shared wrapped cell, solid insertion/reinsert ordinal, and source-face order; dynamic and static candidates use same comparator | OG XY grid → world X/−Z; ray distance unchanged | **partially proven** | `physics_query_regression` proves a later OG grid candidate replaces an exact-distance static hit, while a hit only 0.00005 nearer beats a later candidate. `dynamic_solid_query_smoke` moves an actor face onto a real static wall face, equalizes both ray distances to 3.000000, and verifies the OG-ordered dynamic candidate wins. Device and untested geometry parity remain open. |
+| `GroundCheck`: ray from `Position + Z*5` down 5.01; pushout is hit point minus feet `Position` (`Player.cs:2280-2295`) | `MoveService::GroundCheck` with center/half-height adapter | ray origin center-relative; final center = support point + half-height | **intentional N64 representation adaptation; partially proven** | `physics_query_regression`, movement support/coyote fixtures, and real-map routes assert bounded support, point/normal, and post-move support use. Exact ground-snap edge parity is still open. |
+| `Solid.Update/MoveTo`: move solid by `Velocity*dt`; find riders, provide stored platform velocity and move rider by solid delta before advancing solid position (`Solid.cs:76-80`, `:122-143`; Player rider callbacks `:2243-2277`) | `PlayerController::MovingSurfacePhase` and world moving-surface advance | center position; all axes map through shared world convention | **partially proven** | `surface_parity_smoke` covers moving support and runtime stored carry; jump-family tests check consumption. Complex interactions among multiple moving surfaces are not covered. |
+
+## Source-derived host fixtures
+
+| Fixture | OG oracle | Geometry / assertion | What it proves and does not prove |
+| --- | --- | --- | --- |
+| `movement_parity_smoke`, `locomotion_smoke` | `Player.cs:15`, `:30`, `:1020-1027`, `:1101-1122`, `:1163-1183`, and `:1341-1348` | Real horizontal floor for analog mapping; independent OG formula assertions for partial-air steering, idle friction, jump/dash vectors and dash expiry | Tested ground/air movement formulas and launch/update boundaries. Full continuous trajectories and every state combination remain open. |
+| `climb_parity_smoke` | `Player.cs:15`, `:25`, `:28`, `:748-762`, and `:854-884` | Exact walljump set vector `(normal*64*1.3, 90)` for the controller seam; query geometry is tested separately | Launch write order at the current flag-based seam only; no evidence of actual wall detection or physical climb route. |
+| `physics_query_regression` | `Player.cs:845-884`, `:2280-2295`; `Solid.cs:76-117` | Finite support plane and valid wall collider/rays; assert face identity, point, normal, and hits/misses | Query fixtures have real geometry. It does not prove the full player mover/state-machine response. |
+| `movement_contracts_test`, `move_service_smoke`, climb/mantle/corner routes, `climb_animation_alignment_smoke`, `real_map_guided_climb_smoke`, `real_map_walljump_smoke`, `real_map_corner_traverse_smoke`, `real_map_slope_smoke`, `dash_jump_smoke`, `skid_smoke`, `surface_parity_smoke` | Exact source ranges in rows above | Host routes assert source-derived values and ordered events; real-map routes use baked CMSH and actual controller/mover pipeline | Evidence is scoped to the named behavior and assertions. Passing the suite is not a blanket parity certificate; remaining rows and untested geometry are still gaps. |
+
+## Required call-order ledger for the port
+
+The OG code has one `SweepTestMove` implementation, but not one movement request
+per update. On a sustained climb, `StClimbingUpdate` first requests
+`SweepTestMove(climbDelta, false)` (`Player.cs:1514-1515`). Returning to
+`Player.Update`, the outer update then requests `SweepTestMove(velocity * dt,
+resolveImpact)` (`:367-371`) and finishes with one `Popout(false)` (`:373-374`).
+That ordering must survive in C++ through one shared resolver implementation.
+Do not merge the two deltas, clear per-tick contact state between them, or
+replace the final popout with a second state-specific repair algorithm.
+
+Timer ownership is likewise ordered: OG decrements the listed timers before
+the state handler (`Player.cs:318-338`); transitions synchronously run old-state
+exit and new-state enter hooks via the state machine; late support/coyote/dash
+refresh follows movement (`:391-420`). Every timer gate must be paired with all
+OG writers before it can be considered ported. `CancelGroundSnap` is defined at
+`:722-723` and called at Jump `:742`, WallJump `:758`, SkidJump `:775`, DashJump
+`:810`, break-bounce `:915`, TryDash `:939`, and on every sustained climb tick
+`:1473`; state and contact writes must be checked against all of these.
+
+## Acceptance language
+
+- **matched** means a fixture compares a source-derived expected value or
+  ordered event against a valid support/query fixture.
+- **intentional N64 adaptation** names only the device or representation
+  boundary; it does not claim the underlying gameplay behavior matched.
+- **unproven** means source or implementation is mapped but runtime behavior
+  has not been demonstrated by the named proof.
+- **divergent** means the current C++ structure/behavior differs from OG and
+  requires an explicit Inc 5-7 resolution or measured exception.
+
+## 2026-10-07 source behavior rewrite
+
+The previous movement-port and animation-alignment claims are superseded by docs/og_behavior_gap_audit.md. Restored source climb40/lip1, synchronous state hooks, late-owned grounded flags/facing/squash, true authored front/back geometry, raw-axis dash steering and source corner rays/camera easing. The canonical map output boundary now negates inward clipping normals; all45 visualcells and the global collision mesh were rebaked.
+
+Skeletal commands now originate in state methods. Normal airborne uses Clear+Run each tick; descent uses Climb.Idle; blends preserve fading clocks and pinned SharpGLTF alpha0031 channel semantics. Animation advances only on executed world ticks, and render samples buffered matrices once. Skid initial hold/timeline conversion is repaired.
+
+Exact acceptance concerns implemented locomotion and skeletal playback. Procedural ponytail simulation/rendering now exists, but visual/performance proof and cap/refill/double-dash/feather color behavior remain gaps. Feather/Bubble/cinematic states and complete actor-volume interactions also remain separate gaps. Device/host evidence is recorded in the audit ledger; no claim of every geometry edge or pixel-equivalent rendering follows from fixture passes.
+
+## Presentation parity — procedural hair (2026-10-08)
+
+`PlayerHairSimulation` ports OG `Hair.Update` ordering in source Z-up coordinates; `PlayerHeadAnchor` evaluates source `(0,1,-.4)` through the animated Head bone and actor matrix; `PlayerHairRenderer` draws source 6×6 sphere topology. Grounded dash refill starts OG `.05s` white flash, prioritized over charge color. Dash state now uses OG integer charges; zero/one/two hair colors and 10/16-node counts have host coverage. Latest host suite **111/111**; ROM SHA-256 `3cf30e1bcc6d37713fbc024aca6c4b7ccbdcf76a1e8a6587296f242ce12f31ff` (1,736,704 bytes). Ares visual/performance validation remains open. Body cap stays baked red; live pickup dispatch, `Refill.double` propagation, feather-state selection and cinematic visibility remain gaps.
+
+`player_hair` now has a separate profiler phase with rolling mean/peak, emitted on `[render-phases]`, so hair cost no longer merges into weighted-skin timing. Current device timing still requires loading the rebuilt ROM in Ares; do not disrupt an active interactive session.
+
+`animated_joint_pose_parity_smoke.py` compares prepared-GLB source poses with shipped T3DM/PAS1 data at all authored keys and interval midpoints: **11,067 joint poses, max matrix error 0**; **97,188** single-clip weighted vertices, max position error **6.64e-06** N64 units. It also feeds actual poses from all **42 directed clip transitions** at three blend fractions through production `BlendAnimationPoses`, compared against pinned SharpGLTF: **2,142 blended joints**, max local/matrix error **7.51e-06/1.81e-05**; **313,992 blended weighted vertices**, max position error **3.83e-05**. Arbitrary interrupted clock sequences, rendered pixels, hair attachment and device visuals remain open. Current-ROM Ares visual and performance proof remains open.
+
+## Dash charge parity — 2026-10-08
+
+`PlayerState.dashes` follows OG charge count. Normal/climb dash acceptance spends one; `RefillDash(amount)` raises only when below amount and starts `.05s` flash on change. Grounded refill, spring, DashJump, and respawn preserve source minimum-one behavior. The regression waits through dash hitstop, duration and cooldown before attempting a second charge, then verifies a third is rejected. Pickup overlap and mappack serialization of `Refill.double` remain unimplemented, so this does not yet make double refills playable. Active goal remains unfinished.

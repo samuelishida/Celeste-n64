@@ -129,7 +129,7 @@ The legacy LVL1 render path may continue using manifest-based validation while i
 exists. The active `.t3dm` render path must validate its own material references
 before ROM bundling so TMEM safety follows the artifact that actually renders.
 
-## Canonical world IR and map-pack v2 (interconnected rebuild)
+## Canonical world IR and map-pack v4 (interconnected rebuild)
 
 The interconnected rebuild (`tools/ogworld/`) introduces one canonical world
 representation from which all artifacts are emitted:
@@ -137,7 +137,7 @@ representation from which all artifacts are emitted:
 ```txt
 .map ──→ canonical world IR ──→ global CMSH (one, world-space)
                           └──→ per-visual-cell LVL2 rooms
-                          └──→ map-pack v2 manifest
+                          └──→ map-pack v4 manifest
 ```
 
 ### Canonical IR (`tools/ogworld/`)
@@ -150,9 +150,9 @@ representation from which all artifacts are emitted:
   from `render_mode`. Dynamic classes (`TrafficBlock`, `FallingBlock`,
   `MovingBlock`, `FloatyBlock`, `GateBlock`, `CassetteBlock`, `BreakBlock`,
   `DoubleDashPuzzleBlock`) are labeled **static-proxy** for this
-  collision-first milestone. `DeathBlock` is an invisible kill volume:
-  collision-only, not rendered (so it is not duplicated into dozens of visual
-  cells).
+  collision-first milestone. `DeathBlock` and `SpikeBlock` are actor-backed
+  hazard volumes in MPP4, not collision surfaces. `DeathBlock` stays invisible;
+  `SpikeBlock` brush is a visual proxy only until its actor model is ported.
 - `parse.py` — adapts the proven `ogmap_lib.parse_map` into the IR, preserving
   spawn names and entity properties.
 - `geometry.py` — computes brush polygons once, orients from the transformed
@@ -207,10 +207,9 @@ resolution.
 
 ### Bake defaults for `1.map` (interconnected)
 
-- `--chunk-size 1200` → 45 visual cells (with overlap partition + DeathBlock
+- `--chunk-size 1200` → 46 visual cells (with overlap partition + DeathBlock
   not rendered), max 920 faces / 3527 verts, all ≤ caps.
-- Global collision: ~20,868 verts, 10,618 tris, 8,191 BVH nodes, ~383 KB on
+- Global collision: 20,624 verts, 10,500 tris, 8,191 BVH nodes, ~383 KB on
   disk.
-- All 45 rooms reachable from `cell_00_00`; spawn records: 1 Start, 10 anchors,
+- All 46 rooms reachable from `cell_00_00`; spawn records: 1 Start, 10 anchors,
   20 strawberries, 10 cassettes, 8 refills, 6 springs.
-

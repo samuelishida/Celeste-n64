@@ -18,7 +18,7 @@ climb-ease-must-keep-destination:
   description: When turning a climb corner — the 0.2 s ease is one kinematic handoff; retain destination wall/grip, allow explicit release, suspend normal grip/facing gates, bound destination anchor reach, restore the pre-adoption ease origin, and validate on a real baked edge.
 og-single-mover-port:
   file: og-single-mover-port.md
-  description: When porting OG Celeste64 movement/collision or doing single-mover vs multi-path collision work — OG has ONE SweepTestMove+Popout per tick; the demake's four parallel repair paths caused persistent clip bugs. Port = relocate + gate-change, NOT re-port validated feel math. OG wall test is a SEPARATE if (not else after ground); Popout returns true only for wall pops; one-way pass-through means floor gate accepts at-or-above, ceiling gate rejects below; zero-amount SweepMove must still idle-popout; skid needs a real floor in host fixtures; feet-anchored conversion (center = hit + half_height).
+  description: When porting OG Celeste64 movement/collision — one shared resolver handles ordered climb sweep, velocity sweep, and final Popout(false); preserve contact order and do not infer formula parity from structure alone. Diagnose Ares raw shoulder bits/polarity before changing climb logic. Avoid synchronous long climb-entry traces; port hitstop at the whole-world tick owner. OG Popout floor/ceiling is if/else-if but wall is independent; simultaneous contacts need an ordering fixture. One-way pass-through and feet/center conversions have explicit contracts.
 sweep-contact-flags-must-accumulate:
   file: ../common-mistakes/sweep-contact-flags-must-accumulate.md
   description: When splitting one movement tick into collision substeps — Popout is repair, not a tick boundary; clear death/ceiling result flags once at SweepMove entry, then accumulate hits across every substep, step-up, and ground-snap path. Regression sweeps across a narrow death strip and verifies final contact survives after leaving it.
@@ -34,3 +34,27 @@ memory-opt-pooling-and-budget:
 controls-physics-port:
   file: controls-physics-port.md
   description: When converting hand-switched player blocks into a real state machine, adding OG-parity gameplay handlers (spring), or changing the climb grab gate — pre-FSM state-independent blocks create same-tick transition cascades (Skidding→Dashing still cascades; OG runs TryDash from Normal AND Skidding); a "gate" test can be dead code when the AABB prefilter is tighter than the test window (the height-band was a no-op — validate discriminators empirically against the real baked CMSH); winding-independent grab front-side = overhead-clearance reject (solid within 8 above the waist → overhang lip), measured 0% impact on the real map; probe fixtures gain a `reversed` flag on WALL faces only (the floor keeps its winding); device capture with fake input = temp gated steering + revert, and never pkill Ares in the same shell that launches it (self-match kills the launcher).
+og-n64-asset-conversion-runtime:
+  file: og-n64-asset-conversion-runtime.md
+  description: When extending OG-to-N64 conversion/runtime — keep manifest package paths canonical, route only static_player through bind-pose preparation, keep stale animation sidecars outside DFS, and require Ares path-load plus interactive visibility proof.
+player-wall-clearance-use-oriented-support:
+  file: ../common-mistakes/player-wall-clearance-use-oriented-support.md
+  description: When adjusting animated Madeline wall clearance — keep the corner-circle radius for finding nearby faces, but project packed T3DM bounds through the player facing for render support so empty bounding-box corners don't create a multi-unit visual wall gap; preserve both-plane corner checks.
+repeating-world-textures-need-lod-state:
+  file: ../common-mistakes/repeating-world-textures-need-lod-state.md
+  description: When fixing camera-angle texture shimmer — box-prefilter opaque repeating sources, use TMEM-bounded mip chains plus bilinear filtering, pass sprite_get_lod_count (base included) to rdpq_mode_mipmap after upload before reasserting tiny3d draw flags, and rebase clipped repeat UVs by whole periods before signed s10.5 packing; saturate clamp axes; keep straight-alpha decals unmipped until alpha-aware filtering exists.
+air-movement-parity:
+  file: ../common-mistakes/air-movement-parity.md
+  description: When porting Celeste movement — grounded analog magnitude and airborne normalized MaxSpeed are different OG rules; no-input air uses AirFrictionMult=0.1, and wall-jump launch must not receive same-tick friction.
+dashjump-launch-parity:
+  file: ../common-mistakes/dashjump-launch-parity.md
+  description: When porting impulse launches — DashJump restores recorded coyote height and consumes clamped stored platform velocity; audit SkidJump, both WallJumps, and mantle hop against OG AddPlatformVelocity callsites.
+real-map-slope-physics-gates:
+  file: real-map-slope-physics-gates.md
+  description: When validating slope-speed changes — synthetic normals do not prove real support or movement; replay uphill and downhill on stable CMSH ramp corridors, require nonzero displacement and continuous ground normals, then compare both speeds with flat baseline.
+physics-capture-must-prove-runtime-and-input:
+  file: ../common-mistakes/physics-capture-must-prove-runtime-and-input.md
+  description: When qualifying scripted N64 physics telemetry — one PASS line is insufficient; bind to artifact SHA/build, successful map/collision/material/texture loads, nonzero render counters, zero raw climb shoulders, and per-metric route gates.
+rom-build-marker-freshness:
+  file: rom-build-marker-freshness.md
+  description: When using Ares [build] timestamps to distinguish ROMs — __DATE__/__TIME__ can stay stale if rom_main.o is unchanged; force only that TU on each ROM build and use capture SHA-256 as authoritative identity.

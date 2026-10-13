@@ -30,6 +30,60 @@ controller feel or visual review.
 
 Record: emulator/hardware, controller, date, and any value that feels wrong before freezing constants.
 
+## Source-order movement fixes (2026-10-07)
+
+Normal movement now applies horizontal steering before the source-ordered
+climb and dash checks. A fast reverse returns into Skidding and leaves a
+simultaneous dash edge buffered for the next Skidding tick. Global jump-hold,
+coyote, and cooldown timers decrement before state dispatch; support refreshes
+coyote after movement. Dash entry sets auto-jump after the previous state's
+exit, and dash expiry scales the velocity left by collision before any new
+steering can replace it. Dash hitstop now consumes whole fixed world ticks in
+`GameplayScene`, preserving player velocity and timers while moving surfaces
+and actors pause. Spring alignment converts OG's feet anchor to the C++ body
+center before applying the same +3-unit approach.
+
+Host verification at the movement-port close-out: **87 passed, zero failed**
+(includes the `climb_animation_alignment_smoke` regression guard). The
+animation follow-up below records the newer ROM build and test count.
+
+Animation-alignment follow-up (2026-10-07): `PlayerController::StatePhase` was
+returning early for `Climbing`, so `state.facing` never tracked `target_facing`
+while climbing. The renderer derives yaw from `state.facing`, so the model did
+not visibly rotate when the wall normal changed during a 90° corner switch.
+Fixed by removing the early return, snapping `state.facing` on climb entry,
+inner/slope corner adopts (`AdoptCornerWall`), and outer-corner ease starts.
+The new `climb_animation_alignment_smoke` host test asserts the gap is below
+2° on a synthetic 90° inner corner. Corner-profile autoplay now also emits
+`[anim-align]` telemetry and the verifier checks `climb_max_facing_delta_deg`
+and `corner_max_facing_delta_deg` when present.
+
+Final Windows Ares captures (each isolated profile ROM is identified by its
+own SHA-256; all three passed startup, raw-input, and route gates):
+
+| Profile | Capture | ROM SHA-256 | Result |
+| --- | --- | --- | --- |
+| Walljump | `build/baseline-inc8-final-walljump-20261007-012631-26968.txt` | `92e5cfb9f7963f056e25858d823b7d868561a46e635b382d4574e8ab2c7982aa` | PASS; climb entry and shared walljump launch, outward speed 83.2, vertical 90, 91 clearance samples, zero violations |
+| Mantle | `build/baseline-inc8-final-mantle-20261007-012724-30852.txt` | `88bb6041541e1c05b25485bc7ec55606a3793054879ff05964cc68a5f70cef3a` | PASS; bounded lip mantle, 9.60 rise, 151 clearance samples, zero violations |
+| Corner | `build/baseline-inc8-final-corner-20261007-012804-21992.txt` | `be8d6501399263f69933a961473a608c50895627c2b61dffd323ec352c004672` | PASS; one destination handoff, bounded movement, 220 clearance samples, zero violations |
+
+Animation follow-up (2026-10-07): `StatePhase` now rotates `facing` during
+dash steering and snaps it to the launch direction on dash entry. Runtime
+selection now includes the existing `Skid` clip, treats lateral wall movement
+as climb motion, uses the OG run/climb animation rates, and resets the skeleton
+to bind pose when changing clips. Host suite: **89 passed, zero failed**. Normal
+ROM SHA-256: `a5949b6c8ef31b5ad9d40575ee7125643ab984920cd1fc60cd4dd3742a59cb49`.
+Windows Ares boot capture
+`build/baseline-animation-fix-20261007-145238-33952.txt` loaded
+`rom:/mdl/player.t3dm` with all 7 runtime clips and booted the 45-room map.
+This verifies clip loading and ROM startup; manual controller/visual acceptance
+is still open.
+
+The Ares VirtualPad1 R-Trigger was corrected from `Lo` to `Hi`; all final
+captures report `z=l=r=0` at idle. Automated routes and ROM health are
+qualified. Manual controller feel is still a human acceptance step and must
+not be inferred from autoplay telemetry.
+
 ## OG air-control parity check (2026-09-25)
 
 Source audit found air-control mismatches: partial stick used grounded analog
@@ -772,3 +826,101 @@ stick/A before rerunning physics acceptance. Do not mask Z in game code: that
 would hide the input fault and break intentional climbing. Rendered corner
 inspection and manual feel remain open; live trace proves climb/mantle state
 transitions, not visual clearance.
+
+## Climb bug reproduction window (2026-10-06)
+
+The ROM now keeps a 60-fixed-tick ring and emits it only when climb starts or
+ends, the existing waist grip query misses on two consecutive held-climb ticks,
+or one tick moves more than 5 world units. Each `[climb-window]` sample records
+tick, raw Z/L/R bits, debounced climb intent, state before/after, the existing
+climb query result/face/normal, wall anchor position, player position and
+velocity before/after, and the net collision correction for the sweep:
+`position_after_sweep - sweep_start - requested_amount`. That correction spans
+the existing sweep and its Popout repairs; it excludes the later ground snap.
+It does not issue another collision query or change input/physics behavior.
+The capture prints the event tick's 60-or-fewer preceding samples and the next
+30 samples. Event ids: 1=climb entry, 2=climb exit, 3=two-tick grip-query miss,
+4=movement over 5 units in one tick, 5=mantle, 6=corner adoption. Release
+reasons: 1=button, 2=facing, 3=grip lost, 4=wall jump, 5=dash. State ids:
+0=Normal, 1=Dashing, 2=Climbing, 3=Skidding. Raw shoulder
+bits are sampled once per render-frame input snapshot and copied unchanged to
+its fixed-tick samples; compare them with the existing unfiltered `[input]`
+line and the exact `[climb] START` record when a fixed tick repeats a sample.
+
+`capture_baseline.sh` retains `[climb-window]` records alongside build marker,
+ROM SHA-256, map/collision/catalog/room startup, render counters, raw input, and
+route telemetry. The autoplay capture still requires its selected terminal
+route event and checks the exact just-built ROM SHA. A host-only no-teleport
+real-map approach can be checked with:
+
+```sh
+./tests/run_host_tests.sh
+# The runner executes real_map_guided_climb_smoke when the baked staging map exists.
+```
+
+### Manual climb reproduction recipe
+
+1. Build the normal ROM with `./compile-rom.sh`, then record
+   `sha256sum madeline_cube_rom.z64` and the ROM's `[build] compiled=...` line.
+2. Start only one Ares instance with that ROM and capture its serial output.
+   Let the player idle, then move the stick and tap A while not touching Z/L/R.
+   Confirm raw `z=0 l=0 r=0` in idle and during movement before interpreting
+   an auto-grab. Check Ares Port 1 bindings if any shoulder bit is high; the game
+   intentionally accepts only digital Z/L/R for climb.
+3. From the Forsaken City `Start` spawn, walk toward a wall without teleporting.
+   Hold one shoulder only when within reach, climb vertically for several
+   seconds, then release. Repeat with an intentional wall jump, mantle, and
+   corner traversal. Save the complete serial log, including `[artifact]`,
+   `[build]`, map/runtime/render health, `[input]`, `[input-trace]`,
+   `[climb] START/EXIT`, and all `[climb-window]` lines.
+4. For each event, correlate raw shoulders with debounced intent and state
+   transition. Check the reported query face/normal and anchor, then inspect
+   the sweep correction and before/after position/velocity across the 60+30
+   tick window. An intentional scripted autoplay route is useful as a control,
+   but it cannot replace this live stick sequence.
+
+Ares was not available on 2026-10-06 (no active process was found and the
+configured `/snap/ares-emulator/current/usr/bin/ares` executable is absent in
+this environment). The new device trace and live reproduction remain
+**unverified**; no new ROM capture is claimed. The exact manual sequence above
+is pending a machine with the project Ares emulator installed.
+
+## Windows runtime correction — 2026-10-07
+
+The Linux-only availability finding above is superseded. Ares v147 is installed
+at `C:/Users/samue/Documents/ares-v147/ares.exe`. Debian WSL builds the ROM;
+Windows Ares reads it through the checkout's UNC path. Use the Windows capture
+helpers documented in `AGENTS.md` to preserve stdout and exact artifact identity.
+
+On ROM SHA `cd11b81addb8e72658db62b18f82d245e3c27740dafe24dfdf1e9ea6092486c8`,
+build `Oct 7 2026 00:03:54`, the real map and renderer booted successfully.
+Raw Z was repeatedly asserted and climb followed that input. The user confirmed
+that pressing the trigger released climb. Ares VirtualPad1 mapped R-Trigger
+to `0x12dc83106/0/2/Lo`; reversing this binding to `Hi` produced repeated
+`z=0 l=0 r=0` samples in repose. The original settings are backed up as
+`settings.bml.before-trigger-fix-20261007` beside the Windows executable.
+The ROM keeps normal digital shoulder polarity; no game-side inversion is used.
+
+The diagnostic trace introduced a synchronous 60-line dump at climb entry.
+Detailed windows are now opt-in through `physics-input-trace-rom` only;
+normal and autoplay ROMs emit no windows. The trace build collects its 60+30
+samples in memory, then drains at most one sample per fixed tick. This limits
+the diagnostic pause, although serial output still influences trace-build timing.
+Performance claims use normal/autoplay builds rather than live trace captures.
+
+Inc 3/4 passed all 85 host tests. Finite horizontal wall slices now replace
+infinite-plane bounds and per-candidate overhead rays; physical displacement
+uses the horizontal contact normal, while facing/impact use the face normal.
+The reduced-model clearance fixture was repaired to put the raised wall inside
+the actual 15.006-unit model height. The real-map guided route passed with zero
+rest drift, zero overlap/model violations and a successful mantle.
+
+The Windows scripted wall-jump capture
+`build/baseline-inc34-baseline-20261007-002450-29352.txt` qualified for ROM SHA
+`d6adfc193955c73528724d9b1cbfc6f100af0beff2f8ec7d6d142b42e7fd7b75`.
+Its acceptance is specific to that intermediate scripted profile. Final
+movement/climb integration and manual control feel remain pending.
+
+## Source parity rewrite acceptance (2026-10-07)
+
+Use docs/og_behavior_gap_audit.md for current evidence. Old immediate2-degree climb-facing requirement is invalid: OG visual Facing approaches after collision at4pi/s, with a78-degree first-tick lag on a90-degree inner corner. Test convergence and angular rate. Animation clocks freeze during world hitstop, and catch-up ticks preserve all state commands. Validate source orientation against brush interior, not only triangle/normal agreement. Ares route checks must identify build SHA, input rest bits, sustained climb, walljump/mantle/corner arrival and bounded physical displacement.

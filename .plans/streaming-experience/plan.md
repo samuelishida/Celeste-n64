@@ -1,6 +1,19 @@
 # Streaming Experience: kill the cell-load stutter and the visible pop-in
 
-## Context
+## Current implementation status — 2026-10-09
+
+Original single-near/no-DLOD decisions below are historical and superseded by
+the recovery notes near the end of this plan and `.plans/z-split-horizon-fix/`.
+Runtime currently has the two-pass DLOD z-split with buffered viewports, clears
+depth before the near pass, and keeps a bounded 13-cell resident set. Near and
+DLOD use the same conservative 3D AABB/frustum predicate and margin; DLOD
+yields only to READY cells submitted by near. Pending/off-frustum cells do not
+become near-owned. Nine repeating map textures are capped at 16px.
+Dynamic-platform visibility uses a conservative 3D frustum plus player/target
+safety margins. Host suite/build are green, but the current ROM still needs
+Ares visual, memory, and 30-fps qualification.
+
+## Historical context (original single-near streaming plan)
 
 The whole-map interconnected renderer (Forsaken City A-side, 45 cells at
 `--chunk-size 1200 --scale 0.2`) streams a 3×3 resident ring around the active
@@ -30,7 +43,7 @@ cells are loaded *before* they can be visible (preload ring), the load work is
 spread across frames (async DMA + staged parse), and the rare late load is
 masked by a brief reveal animation.
 
-## Architectural decisions
+## Historical architectural decisions (superseded where later corrections say so)
 
 - **Decision: keep the single near pass; do NOT resurrect the distant/DLOD
   pass.** The pop+stutter fix lives entirely in the near streamer (load
@@ -702,6 +715,26 @@ code and classified; EVERYTHING is resolved in the plan:
 
 No open questions remain (both passes fully resolved in-file).
 
+## Follow-up: memory-bounded residency and texture budget (2026-10-08)
+
+The 25-cell preload decision above predates weighted player skinning and the
+reported center-map OOM. It is superseded in runtime by a bounded 13-cell set:
+the complete 3×3 core plus four camera-forward-ranked Chebyshev-2 cells, all
+drawable to reduce known gaps with the 800u near camera and no DLOD. Full
+camera-view coverage remains a device-validation question. A one-cell forward
+transition keeps the overlap and loads/frees only the changed cells. Textured builds also stop reserving the inactive
+flat-renderer buffers. Together these source-level pool changes reduce reserved
+renderer storage by about 1.9 MiB; device memory and center-map stability still
+need a fresh Ares capture.
+
+For the nine large repeating map textures, conversion now caps the maximum
+dimension at 16px (preserving aspect ratio), keeps RGBA16 and the existing
+box-filter mip chain, and leaves smaller repeating textures and decals at
+their existing 32px cap. A 32×32 texture's base-plus-mip payload drops from 2,720 to 672
+bytes at 16×16. Re-bake the map metadata and ROM, then validate center
+traversal in the user's existing Ares session before claiming OOM or frame-time
+improvement.
+
 ## Out of scope
 
 - Resurrecting the distant/DLOD horizon pass (deleted; the `.dlod` files stay
@@ -713,3 +746,50 @@ No open questions remain (both passes fully resolved in-file).
   step").
 - The legacy single-room `.lvl` path (map-pack mode is the target; the legacy
   path is preserved as a fallback but not extended).
+
+## Correction: resident draw coverage (2026-10-08)
+
+Windows Ares screenshots after enforcing a Cheb-1-only draw mask showed large
+terrain gaps and stretched-looking fragments. The 240u cell size and 800u far
+plane make the old 3×3 draw boundary smaller than the camera's visible range.
+The earlier assumption that outer residents should remain hidden is therefore
+wrong for this camera configuration. Runtime now marks every occupied slot in
+the bounded 13-cell resident set drawable and removes per-frame camera-cone
+culling; the latter also changed cell visibility during camera motion.
+
+Host mask regressions now require all 13 residents to remain drawable across
+forward, reverse, and degenerate camera orientations. Full Ares traversal and
+30 fps qualification are still pending; no visual-stability or performance
+claim should be made until those checks pass. Memory capacity remains 13.
+
+The related dynamic-platform path had an XZ-only camera cone, which ignored
+camera pitch during climbs. On 2026-10-09, visibility switched to a conservative
+3D AABB/frustum test with the existing 48u player and 64u look-target safety
+margins and wider exit margin. Regression now covers a platform inside a steep
+climbing view that the old cone rejected, plus a genuinely off-frustum control.
+Device confirmation is still required for the user's floating-platform case.
+
+**Coverage rollback correction (2026-10-09):** the 9-cell/800u/no-DLOD
+rollback reintroduced the known Ares gaps. Runtime now restores the bounded
+13-cell forward set, all drawable, with angular culling still off. It extends
+coverage but does not guarantee the full far plane at every camera angle. This uses
+the existing resident pool and adds only four textured slots (~224 KiB of
+reserved slot storage); fresh Ares memory/FPS and visual qualification remain
+required before calling the map stable.
+
+**Follow-up: conservative near-work culling candidate (2026-10-09):** residency
+still contains the same 13-cell set, but the latest ROM no longer draws every
+resident unconditionally. Near and DLOD now share the same conservative 3D
+AABB/frustum test and margin; DLOD yields only to READY cells accepted by the
+near draw mask. This preserves DLOD fallback for pending/off-frustum residents
+while attempting to lower RSP work. The synthetic test culls 5 of 13 residents
+and verifies ownership, but proves neither baked-map coverage nor FPS. Candidate
+also fast-paths the 1,011 production skin vertices with one weight of exactly
+1; weighted math remains unchanged for other vertices. ROM hash is
+`ff9b1d1017ca471c243c4d2d7e4a9d45591ff7b69913fc2e9234a4a11250bdce`; 142 host
+tests pass and build is clean. Profiler now separates fixed-step, actor-world,
+player-physics, near-group-build, and textured-near-draw time and reports tick counts. Dynamic-solid first-sample and
+visibility-transition logs include actor identity and spatial bounds for
+platform-culling diagnosis. Exact-hash Ares visual, memory,
+and 30-fps qualification remain open; revert this cull experiment if it
+recreates platform or terrain flicker.

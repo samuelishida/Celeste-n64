@@ -38,10 +38,16 @@ Implemented:
   OG `TryClimb` parity (own waist query, re-anchors to `wall.point + normal*3`,
   airborne +4 snap-up). The full OG corner system is ported: inner-corner side
   ray, slope-away snap ray, outer-corner forward+side ray with a 0.2 s eased
-  position/facing lerp. `wall_contact` is physical-only (body-center sphere);
-  climb-state collision radius is 3.0 (= OG `WallPushoutDist`) so the entry
-  anchor is a zero-popout equilibrium. `Popout` keeps **impact-only** full-3D
-  velocity removal and full-3D positional popout (Y capped ±6). This removes the
+  position/facing lerp. Rays stay on the player's side of finite faces; an
+  unreachable back-side candidate is rejected so the player releases at an
+  unsupported edge instead of snapping through rock. `wall_contact` is
+  physical-only (body-center sphere).
+  Normal and climb physics use OG's 3-unit wall radius/pushout and 11.25-unit
+  center-to-feet half-height; the static model bounds (radius 8.61, height
+  21.86) do not change movement or grab reach. Renderer applies a separate
+  0.5-unit minimum model gap near walls, including both faces during corner
+  easing. `Popout` keeps **impact-only** full-3D velocity removal and full-3D
+  positional popout (Y capped ±6). This removes the
   grab→release→fall→regrab pump on the baked map. Camera zoom deviates from OG
   deliberately: `zoom_rate` 1.8/s + `zoom_snap_speed` 1.0/s (was implicit 1.0/s
   and 0.5)
@@ -50,12 +56,12 @@ Implemented:
   zoom isn't gated by the ~7%/frame follow lag. Orbit/follow/FOV stay OG-exact
   otherwise.
 - **Single-mover overhaul** (`.plans/og-mover-overhaul/`): movement/collision now
-  run OG Celeste64's ONE `SweepTestMove` + `Popout` mover via `MoveService`
-  (`player_movement.{hpp,cpp}`), called once per tick from
-  `PlayerController::MovePhase`. The old `PlayerMotor` (four parallel repair
-  paths) is DELETED. Wall/floor clipping is closed by construction: every tick
-  ends in a "popped-out" state, so a position inside any wall face is
-  impossible. OG feel ported: Skidding state, dash rotate-steering, 0.10 s dash
+  use one OG-shaped `SweepTestMove` + `Popout` implementation via `MoveService`
+  (`player_movement.{hpp,cpp}`). A tick may submit ordered climb and velocity
+  sweeps, followed by one final popout; contacts accumulate across them. The
+  old `PlayerMotor` (four parallel repair paths) is DELETED. Host and real-map
+  fixtures cover the tested wall/floor routes; this does not guarantee every
+  mesh edge case. OG feel ported: Skidding state, dash rotate-steering, 0.10 s dash
   input buffer, OG 0.10 s jump buffer, slope max-speed modulation, analog
   magnitude map. Host fixtures + `[move]` device telemetry validate.
 
@@ -73,8 +79,8 @@ Important current behavior:
 
 The main world is now the whole Forsaken City A-side `1.map`, baked through
 the **canonical world IR** (`tools/ogworld/`) into one global collision mesh +
-per-cell LVL2 visual rooms + a **map-pack v2** manifest
-(`filesystem/lvl/forsyken-city/`, 45 cells at `--chunk-size 1200`). The
+per-cell LVL2 visual rooms + a **map-pack v4** manifest (MPP2/MPP3 remain readable)
+(`filesystem/lvl/forsyken-city/`, 46 cells at `--chunk-size 1200`). The
 runtime (`MapRuntime` + `WorldCollision`) owns ONE global CMSH for the map
 lifetime and one authoritative active visual room; all static queries resolve
 through the global mesh, and the active room exposes a compatibility pointer
@@ -84,28 +90,25 @@ never map_z, which is the Quake UP axis. Boot uses the manifest `Start` spawn
 record. Render origins are per-cell centers so the full map's absolute
 coordinates do not overflow the int16 fixed-point packing.
 
-**Renderer (single near pass).** The renderer is a **single near pass** — the
-two-pass z-split (near + distant DLOD horizon) was removed because the distant
-pass was the source of persistent visual corruption (missing ground, floating
-fragments, distant geometry in the sky). `OpenWorldRenderer` drives one
-`CameraDesc` (near=5, far=800) per frame: skybox first, then the resident
-pool via `TileStreamer` (`DrawHighPriority`). The resident set is a **forward-
-prioritized 3×3 ring** (`ResolveForwardWedge` in `tile_streamer.hpp`): all
-Chebyshev-1 neighbors of the active cell are loaded (matching the 9-cell
-`kMaxRing` budget), and the camera direction only reorders cells so the most
-forward ones are placed first. This avoids the screen-edge gaps caused by an
-aggressive forward half-space cut while still putting the visible cells first.
-`TileStreamer` keeps the incremental `ResolveRingDiff` ring streaming and the
-global material grouping (one TMEM upload per material instead of per
-material·cell; the legacy per-cell block path and its
-`kEnableGlobalMaterialGrouping` gate were removed). The distant-only code paths
-(`DistantWorldRenderer`, `dlod_loader`, `dlod_format`,
-`LvlRoomRenderer::DrawBlockOnly`/`DrawRunsDirect`/`LoadFromDlod`, and the
-`uses_external_matrix_`/`no_block_` flags) are deleted. The `.dlod` files and
-baker remain on disk for a future distant-horizon feature but are not loaded
-at runtime. Telemetry is trimmed: `[render-phases]` reports only
-`high_priority`/`streaming`; `[counters]` reports only `near_batches`,
-`texture_uploads`, `vert_loads`, `syncs` (no distant counters).
+**Renderer (near + distant z-split).** The runtime draws the sky, then the
+frustum-culled DLOD horizon with its own projection, clears depth, and draws
+the detailed near pass (near=5/far=800). Three independently buffered Tiny3D
+viewports keep sky, distant, and near matrices stable while the RSP consumes
+them. Residency remains the bounded 13-cell set: the 3×3 Chebyshev-1 core plus
+up to four camera-forward Chebyshev-2 cells. Near submission and DLOD culling
+use the same conservative 3D AABB/frustum predicate and margin. DLOD yields
+only to ready cells the near pass actually submits; pending or off-frustum
+cells remain horizon-owned when visible to DLOD. Outer residency re-ranks
+after camera turns cross a heading sector, with a dead band to prevent load
+churn. Geometric reveal remains off. Dynamic-platform visibility uses
+conservative 3D camera-frustum tests, plus 48u player and 64u look-target
+safety margins. Incremental `ResolveRingDiff` and global material grouping remain.
+Ares visual/FPS qualification is required for each new ROM; do not infer split
+correctness or 30 fps from host tests.
+Telemetry reports `distant`/`high_priority`/`streaming` phases and
+`distant_cells`/`distant_faces`/`distant_batches`/`distant_vert_loads`/
+`distant_syncs`, separately from near `near_batches`/`texture_uploads`/
+`vert_loads`/`syncs` counters.
 
 **Texturing (UV wrap).** LVL2 UVs are **unwrapped world-scale texel units** (1
 unit = 1 texel), packed as s10.5 with **`1 texel = 32` units** (`u * 32.0f`).
@@ -265,21 +268,66 @@ Recommended validation habit:
 - Ares is the sole device emulator for this project. Use it for both quick
   smoke launches and serious validation of modern libdragon/tiny3d behavior.
 - For automated telemetry capture (baseline / before-after), use
-  `tools/capture_baseline.sh`, which launches Ares in the background, polls its
-  stdout for report lines, and kills it when done.
+  `bash tools/capture_baseline.sh`; it launches Ares only when no Ares process
+  is already running, polls its stdout, and kills only the process group it
+  created. Captures include ROM SHA-256 so runtime evidence identifies exact
+  build; interactive boot prints `[build] compiled=...` for manual sessions.
+  Do not launch a second Ares beside an interactive session.
+- For deterministic physics validation, use
+  `bash tools/capture_physics_autoplay.sh [wall_seconds] [label]`. It builds a
+  separate autoplay ROM and verifies artifact identity, map/render boot,
+  released raw climb shoulders, and route metrics; it refuses a live Ares.
+  A lone `[phys-test] result=PASS` is not sufficient evidence.
 
+### Windows host with Debian-mounted ext4 checkout
+
+The current machine runs Ares natively on Windows at
+`C:/Users/samue/Documents/ares-v147/ares.exe`. The checkout is accessed through
+`\\wsl.localhost\Debian\mnt\wsl\PHYSICALDRIVE0p1\Code\Celeste 64 Demake`;
+Debian owns compilation, while Windows Ares reads the ROM through that UNC path.
+A missing Linux snap does not mean the Windows emulator is unavailable.
+
+From PowerShell in the checkout, use:
+
+```powershell
+# Ordinary telemetry; visible permits deliberate manual controller interaction.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/capture_baseline_windows.ps1 -WallSeconds 120 -Label manual -Visible
+# Independent deterministic routes; build in Debian and verify the captured SHA.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/capture_physics_autoplay_windows.ps1 -Profile walljump -WallSeconds 30
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/capture_physics_autoplay_windows.ps1 -Profile mantle -WallSeconds 30
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/capture_physics_autoplay_windows.ps1 -Profile corner -WallSeconds 30
+```
+
+Both helpers refuse any existing Windows Ares process. Close the interactive
+session before capturing. They terminate only the emulator they launch, default
+to a hidden window, retain raw stdout/stderr under `build/`, and record the
+full ROM SHA-256 plus boot/map/render/input/physics telemetry. The autoplay
+helper applies `verify_physics_capture.py` with the selected profile and exact
+artifact hash. Its successful route qualification does not establish human
+movement feel. Inspect `[build] compiled=...` against the intended rebuild;
+when telemetry changes, rebuild the translation unit that emits the marker.
+
+If Z reads pressed while a trigger is released and releases when squeezed,
+check the Ares trigger mapping polarity. A `Lo` mapping can activate at the
+rest end of a trigger axis; use the correct `Hi` direction for that device,
+then prove `z=0 l=0 r=0` at rest and verify press/release in telemetry.
 ### Ares controller mapping hygiene (stuck-button runbook)
 
-A device capture on 2026-08-26 proved a stuck N64 **Z** bit (`[input] z=1`
-constant for minutes of active play) — every "auto grab" was a legitimate climb
-entry caused by lying input, not physics. When grabs happen with no shoulder
-held, remap before touching code:
+An older device capture on 2026-08-26 showed N64 **Z** stuck high. On
+2026-10-07, Windows Ares testing found a separate polarity error: VirtualPad1
+R-Trigger was mapped as `Lo`, so raw Z was high at rest and pressing the
+trigger released climb. The binding was corrected from `Lo` to `Hi`, backed up
+at `C:/Users/samue/Documents/ares-v147/settings.bml.before-trigger-fix-20261007`.
+The final walljump, mantle, and corner captures show `z=l=r=0` at rest. If this
+symptom returns, verify raw shoulder telemetry and Ares binding polarity before
+changing game-side logic:
 
 1. Open Ares → `Settings` → `Input` → controller for Port 1.
 2. Find the mapping feeding N64 **Z** (also check **L** / **R** if symptoms
    point at them). Common offenders: analog-trigger mappings whose rest value
    crosses Ares's pressed threshold, and stick-clicks with bad rest states.
-3. Rebind or clear the offender.
+3. Rebind or clear the offender. For the tested Windows R-Trigger mapping,
+   `Hi` is the working polarity.
 4. Launch the ROM and confirm the ungated `[input] z=0 l=0 r=0 ...` telemetry
    line shows all-zero shoulders at rest BEFORE interpreting any gameplay
    behavior. The `[climb] START` line names the raw bits at every grab frame.
@@ -316,8 +364,8 @@ First field issue already found:
 - The toolchain is stored in-repo (`.n64-bootstrap`, git-ignored) and accessed via the space-free symlink `~/.n64-bootstrap`, so it survives `/tmp` cleanup.
 - `setup.sh` handles the full cold-start bootstrap; `compile-rom.sh` locates the toolchain automatically.
 - The top-level `Makefile` is intentionally small and only compiles project-owned C++ sources.
-- Building full libdragon/tiny3d from scratch also builds many examples, so a cold bootstrap is slower than normal project iteration.
-- If `/tmp` is cleaned, re-run `./setup.sh` to rebuild the toolchain.
+- A cold Tiny3D bootstrap also builds its examples, so setup is slower than normal project iteration.
+- If `~/.n64-bootstrap` is missing, re-run `./setup.sh` to rebuild the toolchain.
 
 ### Code and gameplay
 
@@ -325,8 +373,8 @@ First field issue already found:
 - The current placeholder collision is intentionally crude: one axis-aligned island and one kill plane.
 - Camera, collision, input, and gameplay are still tightly simple on purpose. Avoid polishing abstractions before Milestone 1 exposes real needs.
 - The current first-pass movement values are in `docs/movement_spec.md`; tune by feel only after checking behavior in ROM.
-- **Target hardware is the N64 with the Expansion Pak (8 MB RDRAM).** `rom_main.cpp` calls `assert_memory_expanded()` at boot, so the ROM fails early with a clear error screen if the pak is absent. The whole-map interconnected renderer's streaming/memory budget assumes the full 8 MB heap. The authoritative device figure is the `[memory]` mallinfo arena: stationary `total` ≈ **2.16 MB**, `used` ≈ **2.15 MB** (ratio ≈ 0.991); walking `total` ≈ **2.29 MB**, `used` ≈ **2.23 MB** (ratio ≈ 0.975 — the ring holds more resident cells while streaming). Both are stable across every capture in `.plans/n64-optimization/`. The older "≈ 5.48 MB arena / used ≈ 5.39 MB" figure is stale — it does not match any device telemetry. The 4 MB base-RDRAM target was dropped.
-- **Build + render state (n64-optimization close-out):** per-TU compiler flags — 6 hot TUs (`tile_streamer.o`, `textured_room_renderer.o`, `lvl_room_renderer.o`, `open_world_renderer.o`, `camera_controller.o`, `player_movement.o`) build at `-O2` via target-specific `CXXFLAGS += -O2` Makefile overrides while the global build stays `-Os` (verify with `make -nB all`). Near-pass culling gate `kEnableNearCulling` (`tile_streamer.hpp`, default **OFF**) gates the `CellAabbInNearCone` per-resident-cell test in `TileStreamer::UpdateCamera` (center cell always drawn). Dead code removed (Inc 6): `distant_world_renderer.cpp`, `gameplay/arena.*`, `tests/runtime_smoke.cpp` are deleted; the `.dlod` files + baker (`tools/writers/dlod_writer.py`, `tools/ogworld/distant_lod.py`) remain on disk for a future distant-horizon feature and are not loaded at runtime.
+- **Target hardware is the N64 with the Expansion Pak (8 MB RDRAM).** `rom_main.cpp` calls `assert_memory_expanded()` at boot, so the ROM fails early with a clear error screen if the pak is absent. The whole-map interconnected renderer's streaming/memory budget assumes the full 8 MB heap. Latest weighted-skin Ares telemetry (`build/baseline-weighted-skin-memory-retry-20261008-131312.txt`) reports mallinfo arena `total=6,403,784`, `used=6,369,896`, `free=33,888` bytes. This supersedes older 2.16/2.29 MB figures for the current ROM; historical samples are not controlled comparisons. Mallinfo free is current arena reserve, not total remaining pak capacity (`sbrk` may grow arena); see `docs/memory_budget.md` before estimating full RDRAM headroom. The 4 MB base-RDRAM target was dropped.
+- **Build + render state (2026-10-09 candidate):** 9 hot TUs (`tile_streamer.o`, `textured_room_renderer.o`, `lvl_room_renderer.o`, `open_world_renderer.o`, `camera_controller.o`, `player_movement.o`, `animated_model.o`, `player_hair_renderer.o`, `coll_mesh.o`) build at `-O2`; global build stays `-Os`. Near pass uses conservative 3D AABB culling shared with per-cell DLOD; residency remains bounded at 13. Disconnected coplanar DLOD outlines preserve source polygons rather than filling gaps with a convex hull. Hair keeps OG node simulation/counts but now renders 20-vertex/36-triangle spheres instead of 32/60. Weighted skinning fast-paths the 1,011/2,492 production vertices with one influence; multi-influence math is unchanged. Profiler now reports fixed-step, actor-world, player-physics, near-group-build, and textured-near-draw time plus ticks/frame. Dynamic-solid visibility logs each actor's first sample and later transitions with IDs, bounds, camera, and player position for platform-culling diagnosis. Latest ROM SHA-256: `ff9b1d1017ca471c243c4d2d7e4a9d45591ff7b69913fc2e9234a4a11250bdce`; 142 host tests pass and ROM builds clean. Exact-hash Ares visual/FPS/memory qualification remains open. `distant_world_renderer.cpp`, `gameplay/arena.*`, `tests/runtime_smoke.cpp` remain deleted; compact runtime DLOD uses `DistantTierRenderer` + `dlod_loader`.
 
 ### Reference material
 
@@ -359,4 +407,3 @@ Milestone 2 should replace the hand-built island with one compact authored room.
   - camera orientation
   - world-space movement mapping
 - Keep the first public goal narrow: one room, one character, a few mechanics, good feel.
-
