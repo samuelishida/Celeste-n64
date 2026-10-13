@@ -7,6 +7,7 @@
 #include "gameplay/scene/gameplay_scene.hpp"
 #include "gameplay/scene/scene_manager.hpp"
 #include "gameplay/scene/title_scene.hpp"
+#include "gameplay/audio/audio_service.hpp"
 #include "gameplay/memory_budget.hpp"  // memory-opt Inc 5
 #include "n64/profiler.hpp"
 
@@ -66,7 +67,11 @@ int main() {
     // which is 60+ in light scenes and drops as more cells stream in. Capping
     // at 30 gives a steady target and halves the per-frame RSP/RDRAM budget,
     // which is where the streaming/memory optimization plan targets.
+#if defined(MC_PERF_FPS60)
+    display_set_fps_limit(60.0f);
+#else
     display_set_fps_limit(30.0f);
+#endif
     rdpq_init();
     t3d_init((T3DInitParams){});
 
@@ -87,7 +92,11 @@ int main() {
     }
 
     SceneManager scene_mgr;
+    AudioService audio_service;
+    const bool audio_ready = audio_service.Init("rom:/audio/events.tsv");
+    if (!audio_ready) debugf("[audio] unavailable; planned events remain disabled\n");
     GameplayScene gameplay;
+    gameplay.SetAudioService(audio_ready ? &audio_service : nullptr);
     gameplay.SetMapPack("rom:/lvl/forsyken-city/forsyken-city.mappack");
     // TitleScene title(&gameplay);
     scene_mgr.Register(0, &gameplay);  // skip title, go straight to gameplay
@@ -127,7 +136,7 @@ int main() {
     budget.RegisterCap({"res_render", 4 * 1024});
     budget.RegisterCap({"coll_mesh", 700 * 1024});
     budget.RegisterCap({"mappack", 500 * 1024});
-    budget.RegisterCap({"pool_highwater", 26});
+    budget.RegisterCap({"pool_highwater", 14});
     budget.RegisterCap({"arena_peak", 64 * 1024});
 
     uint32_t memory_report_counter = 0;
@@ -203,34 +212,60 @@ int main() {
                    static_cast<double>(
                        profiler.phase_peak_ms(n64::FrameProfiler::kPhaseUpdate)));
 
-            // Per-phase ms from the renderer's profiler. These are the
-            // remaining per-pass costs after removing the z-split distant pass.
-            // `peak=` is the worst single frame in the 60-frame window
-            // (streaming-experience Inc 1) — averages dilute transition spikes.
+            // Split distant horizon, detailed near pass, and streaming cost.
             const n64::FrameProfiler& rp = gameplay.Profiler();
-            debugf("[render-phases] high_priority=%.3f (%.3f peak) "
+            debugf("[render-phases] distant=%.3f (%.3f peak) "
+                   "high_priority=%.3f (%.3f peak) "
+                   "near_group_build=%.3f (%.3f peak) "
+                   "near_textured_draw=%.3f (%.3f peak) "
                    "streaming=%.3f (%.3f peak) ms\n",
+                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseDistant)),
+                   static_cast<double>(rp.phase_peak_ms(n64::FrameProfiler::kPhaseDistant)),
                    static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseHighPriority)),
                    static_cast<double>(rp.phase_peak_ms(n64::FrameProfiler::kPhaseHighPriority)),
+                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseNearGroupBuild)),
+                   static_cast<double>(rp.phase_peak_ms(n64::FrameProfiler::kPhaseNearGroupBuild)),
+                   static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseTextureUpload)),
+                   static_cast<double>(rp.phase_peak_ms(n64::FrameProfiler::kPhaseTextureUpload)),
                    static_cast<double>(rp.phase_average_ms(n64::FrameProfiler::kPhaseStreaming)),
                    static_cast<double>(rp.phase_peak_ms(n64::FrameProfiler::kPhaseStreaming)));
 
-            // Draw counters for the single near pass. `pending=` = cells still
-            // in the async-load backlog (queued + in-flight); `resident=` =
-            // resident pool depth (streaming-experience Inc 5: the backlog
-            // drains to 0 as the full 5×5 ring reaches READY).
-            debugf("[counters] near_batches=%u texture_uploads=%u "
-                   "vert_loads=%u syncs=%u pending=%d resident=%d\n",
+            debugf("[update-phases] fixed_step=%.3f/%.3f "
+                   "actor_world=%.3f/%.3f player_physics=%.3f/%.3f ms\n",
+                   static_cast<double>(rp.phase_average_ms(
+                       n64::FrameProfiler::kPhaseFixedStepLoop)),
+                   static_cast<double>(rp.phase_peak_ms(
+                       n64::FrameProfiler::kPhaseFixedStepLoop)),
+                   static_cast<double>(rp.phase_average_ms(
+                       n64::FrameProfiler::kPhaseActorWorldUpdate)),
+                   static_cast<double>(rp.phase_peak_ms(
+                       n64::FrameProfiler::kPhaseActorWorldUpdate)),
+                   static_cast<double>(rp.phase_average_ms(
+                       n64::FrameProfiler::kPhasePlayerPhysics)),
+                   static_cast<double>(rp.phase_peak_ms(
+                       n64::FrameProfiler::kPhasePlayerPhysics)));
+
+            debugf("[counters] distant_cells=%u distant_faces=%u "
+                   "distant_batches=%u distant_vert_loads=%u "
+                   "distant_syncs=%u "
+                   "near_material_groups=%u near_batches=%u texture_uploads=%u "
+                   "vert_loads=%u syncs=%u\n",
+                   static_cast<unsigned int>(c.distant_cells),
+                   static_cast<unsigned int>(c.distant_faces),
+                   static_cast<unsigned int>(c.distant_batches),
+                   static_cast<unsigned int>(c.distant_vert_loads),
+                   static_cast<unsigned int>(c.distant_syncs),
+                   static_cast<unsigned int>(c.near_material_groups),
                    static_cast<unsigned int>(c.near_batches),
                    static_cast<unsigned int>(c.texture_uploads),
                    static_cast<unsigned int>(c.vert_loads),
-                   static_cast<unsigned int>(c.syncs),
-                   gameplay.PendingLoads(),
-                   gameplay.ResidentLoads());
+                   static_cast<unsigned int>(c.syncs));
         }
     }
 
     // Unreachable on N64 hardware; kept for host-testing exit paths.
+    gameplay.Shutdown();
+    audio_service.Shutdown();
     t3d_destroy();
     return 0;
 }

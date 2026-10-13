@@ -29,12 +29,24 @@ int main() {
         std::fprintf(stderr, "FAIL: kDebugInputRecording must default to false\n");
         return 1;
     }
+    if (kEnableCellReveal) {
+        std::fprintf(stderr, "FAIL: cell terrain must not scale during async load\n");
+        return 1;
+    }
     // Backface culling must stay OFF by default: the og-baked Forsaken City
     // map loses floor textures with culling enabled (device-verified fix,
     // 2026-08-24 backcull baselines). Flip this contract + the flag together
     // only after every baked surface renders correctly under culling.
     if (kEnableBackCull) {
         std::fprintf(stderr, "FAIL: kEnableBackCull must default to false\n");
+        return 1;
+    }
+    if (kEnableDistantTier) {
+        std::fprintf(stderr, "FAIL: stable profile must keep unqualified horizon split disabled\n");
+        return 1;
+    }
+    if (kEnablePlayerHair) {
+        std::fprintf(stderr, "FAIL: stable profile must keep unqualified procedural hair disabled\n");
         return 1;
     }
     std::printf("debug_flags_contract: all checks passed\n");

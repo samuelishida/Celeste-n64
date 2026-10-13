@@ -6,9 +6,12 @@
 
 namespace madeline_cube {
 
+class AudioService;
+
 // Encapsulates the current gameplay loop (player, island, collectible, camera).
 class GameplayScene : public Scene {
 public:
+    void SetAudioService(AudioService* service);
     // Called by TitleScene before transitioning to set which level to load.
     void SetLevel(const char* lvl_path, const char* level_name);
 
@@ -58,6 +61,7 @@ private:
     const char* lvl_path_  = "rom:/lvl/first-room.lvl";
     const char* level_name_ = "first-room";
     const char* mappack_path_pending_ = nullptr;  // set by SetMapPack before Init
+    AudioService* audio_service_pending_ = nullptr; // set before Init
 };
 
 }  // namespace madeline_cube

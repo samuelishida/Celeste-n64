@@ -29,6 +29,25 @@ $(BUILD_DIR)/src/user/rom_main.o: refresh_rom_build_marker
 N64_CFLAGS += -std=gnu2x -Os
 N64_CXXFLAGS += -std=gnu++17 -Os -Isrc/user
 
+# Original animation clocks and STEP scales survive Blender/Tiny3D conversion.
+PLAYER_ANIMATION_SOURCE := src/user/gameplay/render/player_animation_source.hpp
+$(PLAYER_ANIMATION_SOURCE): Celeste64-og/Content/Models/player.glb tools/generate_player_animation_source.py tools/glb_assets.py
+	$(ASSET_PYTHON) tools/generate_player_animation_source.py --source $< --output $@
+$(BUILD_DIR)/src/user/gameplay/render/animated_model.o: $(PLAYER_ANIMATION_SOURCE)
+assets/og_converted/models/player.t3dm: tools/generate_player_animation_source.py
+
+# Manifest is source of truth for OG-derived converted assets.  Keep the rule
+# before the generated include so GNU Make can materialize it and restart
+# parsing.  Use -include so goals that do not build the ROM (e.g. `make test`)
+# do not require the asset venv; the ROM targets hard-require it via an
+# order-only prerequisite, so a missing venv still stops a ROM build.
+OG_ASSET_MANIFEST := assets/og_converted/asset_manifest.json
+OG_ASSET_INCLUDE := $(BUILD_DIR)/og_assets.mk
+$(OG_ASSET_INCLUDE): $(OG_ASSET_MANIFEST) tools/asset_manifest.py tools/glb_assets.py tools/asset_toolchain.lock.json
+	mkdir -p $(BUILD_DIR)
+	$(ASSET_PYTHON) tools/asset_manifest.py --manifest $(OG_ASSET_MANIFEST) --write-make $@
+-include $(OG_ASSET_INCLUDE)
+
 # DFS assets for baked level
 DFS_MDL_FILES := \
     filesystem/mdl/room_fixture.t3dm \
@@ -89,14 +108,15 @@ DFS_MAP_PACK_FILES := $(wildcard filesystem/lvl/forsyken-city/*.lvl) \
                       $(wildcard filesystem/lvl/forsyken-city/*.colmesh) \
                       $(wildcard filesystem/lvl/forsyken-city/*.mappack) \
                       $(wildcard filesystem/lvl/forsyken-city/*.manifest) \
+                      $(wildcard filesystem/lvl/forsyken-city/*.matmeta) \
                       $(wildcard filesystem/lvl/forsyken-city/*.json) \
-                      $(wildcard filesystem/lvl/forsyken-city/*.dlod)
+                      $(wildcard filesystem/lvl/forsyken-city/*.dsol)
 
 # Combine all DFS files
 DFS_ALL_FILES := $(DFS_LVL_FILES) $(DFS_MAP_PACK_FILES)
 
 # Create filesystem directories
-filesystem/mdl filesystem/tex filesystem/fnt filesystem/lvl:
+filesystem/mdl filesystem/tex filesystem/fnt filesystem/audio filesystem/lvl:
 	mkdir -p $@
 
 # Copy model files
@@ -139,7 +159,7 @@ filesystem/lvl/first-room.lvl filesystem/lvl/first-room.manifest filesystem/lvl/
 
 # FORSAKEN CITY MAP-PACK (whole interconnected map, v2)
 # Bakes main 1.map through the canonical IR into one global CMSH + per-cell
-# LVL2 rooms + a map-pack v2 manifest. This is the ONLY source of the
+# LVL2 rooms + MPP5 manifest and DSOL sidecar. This is the ONLY source of the
 # published Forsaken City directory.
 # Output: filesystem/lvl/forsyken-city/<chunk>.lvl, forsyken-city.colmesh,
 #         forsyken-city.mappack
@@ -154,14 +174,18 @@ filesystem/lvl/forsyken-city/%.lvl filesystem/lvl/forsyken-city/%.colmesh filesy
 	tools/ogworld/__init__.py \
 	tools/ogworld/model.py \
 	tools/ogworld/class_policy.py \
+	tools/asset_manifest.py \
 	tools/ogworld/parse.py \
 	tools/ogworld/geometry.py \
 	tools/ogworld/collision.py \
+	tools/ogworld/wall_order.py \
 	tools/ogworld/chunking.py \
 	tools/ogworld/distant_lod.py \
 	tools/writers/colmesh_world_writer.py \
+	tools/writers/dynamic_solid_writer.py \
 	tools/writers/lvl_world_writer.py \
 	tools/writers/dlod_writer.py \
+	tools/dsol_format.py \
 	tools/mappack_format.py \
 	tools/artifact_hash.py \
 	tools/ogmap_lib/__init__.py \
@@ -182,12 +206,14 @@ filesystem/lvl/forsyken-city/%.lvl filesystem/lvl/forsyken-city/%.colmesh filesy
 	@# Wipe the DFS subdir first so no stale (old-axis) chunk files leak into
 	@# the pack after a chunk-size/axis change.
 	rm -rf filesystem/lvl/forsyken-city/*
-	@# Copy the staged v2 artifacts to filesystem/lvl/forsyken-city/
+	@# Copy the staged MPP5 artifacts to filesystem/lvl/forsyken-city/
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.lvl filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.colmesh filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.mappack filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.manifest filesystem/lvl/forsyken-city/ 2>/dev/null || true
+	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.matmeta filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.dlod filesystem/lvl/forsyken-city/ 2>/dev/null || true
+	cp $(FORSYKEN_CITY_OUT_DIR)/staging/*.dsol filesystem/lvl/forsyken-city/ 2>/dev/null || true
 	@# memory-opt Inc 2: compress the SHIPPED pack copies (staging stays raw —
 	@# it is the smoke + rollback source). mkasset writes the level-1 (LZ4)
 	@# compressed form to the -o dir (same dir = in-place on the shipped copy);
@@ -210,7 +236,7 @@ filesystem/fnt/%.font64: assets/og_converted/fonts/%.font64 | filesystem/fnt
 	cp $< $@
 
 # Build DFS file
-madeline_cube_rom.dfs: $(DFS_MDL_FILES) $(DFS_TEX_FILES) $(DFS_FNT_FILES) $(DFS_ALL_FILES)
+madeline_cube_rom.dfs: $(DFS_MDL_FILES) $(DFS_TEX_FILES) $(DFS_FNT_FILES) $(DFS_ALL_FILES) $(OG_ASSET_PACKAGE_FILES) | $(OG_ASSET_INCLUDE)
 	$(N64_INST)/bin/mkdfs $@ filesystem/
 
 src = \
@@ -238,6 +264,10 @@ src = \
 	src/user/gameplay/actor/refill_actor.cpp \
 	src/user/gameplay/actor/spring_actor.cpp \
 	src/user/gameplay/render/model.cpp \
+	src/user/gameplay/render/animation_manifest.cpp \
+	src/user/gameplay/render/animated_model.cpp \
+	src/user/gameplay/render/player_hair_renderer.cpp \
+	src/user/gameplay/audio/audio_service.cpp \
 	src/user/gameplay/render/static_room_model.cpp \
 	src/user/gameplay/render/texture.cpp \
 	src/user/gameplay/render/material_catalog.cpp \
@@ -249,11 +279,14 @@ src = \
 	src/user/gameplay/render/skybox.cpp \
 	src/user/gameplay/render/distant_tier_renderer.cpp \
 	src/user/gameplay/render/dlod_loader.cpp \
+	src/user/gameplay/world/dynamic_solid_geometry.cpp \
+	src/user/gameplay/render/dynamic_solid_renderer.cpp \
 	src/user/gameplay/render/t3dm_room_renderer.cpp \
 	src/user/gameplay/world/level_loader.cpp \
 	src/user/gameplay/world/mappack_loader.cpp \
 	src/user/gameplay/world/map.cpp \
 	src/user/gameplay/world/map_runtime.cpp \
+	src/user/gameplay/world/dynamic_solid_world.cpp \
 	src/user/gameplay/world/artifact_hash.cpp \
 	src/user/gameplay/world/entity_dispatch.cpp \
 	src/user/gameplay/world/actor_factory.cpp \
@@ -273,13 +306,20 @@ $(BUILD_DIR)/src/user/gameplay/render/lvl_room_renderer.o: CXXFLAGS += -O2
 $(BUILD_DIR)/src/user/gameplay/render/open_world_renderer.o: CXXFLAGS += -O2
 $(BUILD_DIR)/src/user/gameplay/player/camera_controller.o: CXXFLAGS += -O2
 $(BUILD_DIR)/src/user/gameplay/player/player_movement.o: CXXFLAGS += -O2
+$(BUILD_DIR)/src/user/gameplay/render/animated_model.o: CXXFLAGS += -O2
+$(BUILD_DIR)/src/user/gameplay/render/player_hair_renderer.o: CXXFLAGS += -O2
+# Collision BVH traversal measured separately from diagnostic target searches.
+$(BUILD_DIR)/src/user/gameplay/physics/coll_mesh.o: CXXFLAGS += -O2
 
-all: madeline_cube_rom.z64
+all: madeline_cube_rom.z64 | $(OG_ASSET_INCLUDE)
 
 $(BUILD_DIR)/madeline_cube_rom.elf: $(src:%.cpp=$(BUILD_DIR)/%.o) madeline_cube_rom.dfs
 
 # Separate Ares-only movement diagnostics build. Its objects and ROM output
 # use a distinct stem/path, so it cannot contaminate the normal ROM build.
+physics-fps60-autoplay-rom:
+	$(MAKE) BUILD_DIR=build/physics-fps60-autoplay PHYSICS_AUTOPLAY=1 PERF_FPS60=1 physics_fps60_autoplay.z64
+
 physics-autoplay-rom:
 	$(MAKE) BUILD_DIR=build/physics-autoplay PHYSICS_AUTOPLAY=1 physics_autoplay.z64
 
@@ -308,9 +348,18 @@ ifeq ($(PHYSICS_AUTOPLAY_CORNER),1)
 $(BUILD_DIR)/src/user/gameplay/scene/gameplay_scene.o: CXXFLAGS += -DMC_DEBUG_PHYSICS_AUTOPLAY_CORNER
 endif
 
+ifeq ($(PERF_FPS60),1)
+$(BUILD_DIR)/src/user/rom_main.o: CXXFLAGS += -DMC_PERF_FPS60
+endif
+
 ifeq ($(INPUT_TRACE),1)
 $(BUILD_DIR)/src/user/gameplay/scene/gameplay_scene.o: CXXFLAGS += -DMC_DEBUG_INPUT_RECORDING
+$(BUILD_DIR)/src/user/gameplay/rom_telemetry.o: CXXFLAGS += -DMC_DEBUG_INPUT_RECORDING
 endif
+
+physics_fps60_autoplay.z64: N64_ROM_TITLE = "Physics FPS60 Autoplay"
+physics_fps60_autoplay.z64: $(BUILD_DIR)/physics_fps60_autoplay.elf madeline_cube_rom.dfs
+$(BUILD_DIR)/physics_fps60_autoplay.elf: $(src:%.cpp=$(BUILD_DIR)/%.o)
 
 physics_autoplay.z64: N64_ROM_TITLE = "Physics Autoplay"
 physics_autoplay.z64: $(BUILD_DIR)/physics_autoplay.elf madeline_cube_rom.dfs
@@ -374,3 +423,6 @@ test:
 	./tests/run_host_tests.sh
 
 .PHONY: all clean bake-colmesh bake-colmesh-all bake-forsaken-city test physics-autoplay-rom physics-mantle-autoplay-rom physics-corner-autoplay-rom physics-input-trace-rom
+
+
+.PHONY: physics-fps60-autoplay-rom

@@ -24,12 +24,22 @@
 #include "gameplay/input/input_trace_policy.hpp"
 #include "gameplay/render/lvl_room_renderer.hpp"
 #include "gameplay/render/open_world_renderer.hpp"
+#include "gameplay/render/fog_math.hpp"
 #include "gameplay/render/lod_math.hpp"
 #include "gameplay/render/material_catalog.hpp"
 #include "gameplay/render/model.hpp"
-#include "gameplay/render/player_model_clearance.hpp"
+#include "gameplay/render/animated_model.hpp"
+#include "gameplay/player/animation_state.hpp"
+#include "gameplay/render/player_presentation.hpp"
+#include "gameplay/render/player_hair_simulation.hpp"
+#include "gameplay/render/player_hair_color.hpp"
+#include "gameplay/render/player_hair_node_count.hpp"
+#include "gameplay/render/player_hair_renderer.hpp"
+#include "gameplay/player/player_model_clearance.hpp"
 #include "gameplay/render/texture.hpp"
+#include "gameplay/audio/audio_service.hpp"
 #include "gameplay/world/actor_world.hpp"
+#include "gameplay/world/refill_pickup.hpp"
 #include "gameplay/world/entity_dispatch.hpp"
 #include "gameplay/actor/cassette_actor.hpp"
 #include "gameplay/actor/strawberry_actor.hpp"
@@ -38,7 +48,10 @@
 #include "gameplay/physics/coll_mesh.hpp"
 #include "gameplay/world/level_loader.hpp"
 #include "gameplay/world/mappack_loader.hpp"
+#include "gameplay/world/hazard_query.hpp"
 #include "gameplay/world/map_runtime.hpp"
+#include "gameplay/world/dynamic_solid_world.hpp"
+#include "gameplay/world/dynamic_solid_geometry.hpp"
 #include "gameplay/world/respawn_system.hpp"
 #include "gameplay/world/room_data.hpp"
 #include "gameplay/rom_telemetry.hpp"
@@ -49,7 +62,15 @@ namespace madeline_cube {
 namespace {
 
 constexpr const char* kMadelineModelPath = "rom:/mdl/player.t3dm";
+constexpr const char* kMadelineAnimmapPath = "rom:/mdl/player.animmap";
+constexpr const char* kMadelineSkinPath = "rom:/mdl/player.wsk";
+constexpr const char* kMadelineAnimationCurvePath = "rom:/mdl/player.anim";
 constexpr const char* kCassetteModelPath = "rom:/mdl/tape_1.t3dm";
+constexpr const char* kRefillModelPath = "rom:/mdl/refill_gem.t3dm";
+constexpr const char* kDoubleRefillModelPath = "rom:/mdl/refill_gem_double.t3dm";
+constexpr float kMadelineScale = 0.07735f;
+constexpr float kMadelineFeetPivotOffset = 1.466675f;
+constexpr float kRefillModelScale = 2.0f / 64.0f;  // OG Refill scale / T3DM base scale
 constexpr float kFadeReloadSeconds = 0.5f;
 
 struct RenderObject {
@@ -137,23 +158,25 @@ void DrawCube(const T3DVertPacked* vertices, T3DMat4FP* matrix_fp) {
     t3d_tri_sync();
 }
 
-// Build the PlayerInput snapshot from the frame's InputSystem state.
-// Called once per render frame and replayed across all fixed-step ticks so
-// the physics sees one consistent input snapshot (§34: capture raw once).
-//
-// Inc 1: reads the device-owned virtual states (deadzone + press buffer +
-// consume-once) and wires the device pointers so the controller's
-// ConsumeJumpPress/ConsumeDashPress ALSO consume the device edge (OG
-// VirtualButton parity) — otherwise the buffered press re-fires next frame.
+// Construct a fresh snapshot after BeginTick. No raw poll occurs here and
+// claim receipts are committed by the scene after the state handler.
 PlayerInput ReadPlayerInput(InputSystem& input_system) {
     PlayerInput result;
     result.move = input_system.MoveValue();
     result.jump_pressed = input_system.Jump().pressed;
+    result.jump_edge = input_system.Jump().pressed_edge;
     result.jump_held = input_system.Jump().down;
     result.dash_pressed = input_system.Dash().pressed;
+    result.dash_edge = input_system.Dash().pressed_edge;
     result.climb_held = input_system.Climb().down;
-    result.jump_device = const_cast<VirtualButtonState*>(&input_system.Jump());
-    result.dash_device = const_cast<VirtualButtonState*>(&input_system.Dash());
+    const InputSystem::RawSnapshot& raw = input_system.LastRaw();
+    result.raw_climb_z = static_cast<int8_t>(raw.z);
+    result.raw_climb_l = static_cast<int8_t>(raw.l);
+    result.raw_climb_r = static_cast<int8_t>(raw.r);
+    result.jump_released = input_system.Jump().released;
+    result.dash_released = input_system.Dash().released;
+    result.climb_pressed = input_system.Climb().pressed;
+    result.climb_released = input_system.Climb().released;
     return result;
 }
 
@@ -167,29 +190,58 @@ CameraInput ReadCameraInput(const InputSystem& input_system) {
     return input;
 }
 
+// OG Solid.Update runs before each dynamic actor's class-specific Update.
+// Keep its velocity displacement at that actor's source-order slot; actor
+// routines can assign the next velocity afterward on later increments.
+void AdvanceDynamicSolidBaseUpdate(
+    DynamicSolidGeometry& geometry, uint16_t actor_index,
+    PlayerController& player_controller, PlayerState& player,
+    const Room& room, const ActorUpdateView& update_view,
+    float delta_seconds) {
+    if (actor_index >= geometry.ActorCount()) return;
+    DynamicSolidView* views = geometry.MutableViews();
+    const DynamicSolidView& view = views[actor_index];
+    const Vec3 velocity = view.velocity;
+    const float speed_squared = velocity.x * velocity.x +
+        velocity.y * velocity.y + velocity.z * velocity.z;
+    if (speed_squared <= 0.001f) return;
+    if (!view.update_off_screen &&
+        !update_view.IntersectsBounds(view.bounds.min, view.bounds.max)) return;
+    const Vec3 target{
+        view.position.x + velocity.x * delta_seconds,
+        view.position.y + velocity.y * delta_seconds,
+        view.position.z + velocity.z * delta_seconds};
+    MoveDynamicSolidTo(geometry, view.source_id, target, velocity,
+                       player_controller, player, room);
+}
+
 }  // namespace
 
 struct GameplayScene::Impl {
-    // Buffered (3 slots = swap-chain count) so the RSP's async DMA of the
-    // projection/camera matrices never reads a torn matrix mid-frame. The
-    // distant→near projection switch rewrites these 3×/frame (see
-    // open_world_renderer.cpp); unbuffered, the RSP could read a half-written
-    // matrix → mid-screen split under some camera angles. Freed in Shutdown.
+    AudioService* audio_service = nullptr;
+    // Independent buffered viewports keep sky, distant, and near matrices
+    // immutable while the RSP consumes them. Each is attached at most once per
+    // frame, so each triple buffer tracks in-flight framebuffers.
     T3DViewport viewport = t3d_viewport_create_buffered(3);
+    T3DViewport distant_viewport = t3d_viewport_create_buffered(3);
+    T3DViewport sky_viewport = t3d_viewport_create_buffered(3);
     T3DVec3 light_direction = {{0.2f, 0.8f, 0.6f}};
     uint8_t ambient_light[4] = {90, 85, 80, 0xFF};
     uint8_t directional_light[4] = {0xFF, 0xF8, 0xEE, 0xFF};
 
     T3DVertPacked* cube_vertices = nullptr;
 
-    RenderObject player_render;
     RenderObject room_geometry[Room::kMaxGeometry];
     int room_geometry_count = 0;
     RenderObject collectible_render;
 
     StaticModel strawberry_model;
     StaticModel cassette_model;
-    StaticModel madeline_model;
+    StaticModel refill_model;
+    StaticModel double_refill_model;
+    AnimatedModel madeline_model;
+    PlayerHairSimulation player_hair;
+    PlayerHairRenderer player_hair_renderer;
     StaticModel room_fixture_model;
     SpriteTexture rock1_texture;
 
@@ -198,9 +250,6 @@ struct GameplayScene::Impl {
 
     ActorWorld actor_world;
     CassetteActor cassette_actor;
-    StrawberryActor strawberry_actor;
-    RefillActor refill_actor;
-    SpringActor spring_actor;
 
     MovementConfig movement_config;
     PlayerController player_controller{movement_config};
@@ -222,6 +271,7 @@ struct GameplayScene::Impl {
     float render_alpha = 1.0f;
     float last_delta = 1.0f / 30.0f;  // streaming-experience Inc 4: last frame
                                       // delta (for the reveal animation age)
+    int simulation_ticks_this_frame = 0;
 
     DebugHUD debug_hud;
     RomTelemetry telemetry;
@@ -236,6 +286,9 @@ struct GameplayScene::Impl {
     // preserved as a fallback when no map-pack is loaded.
     MapRuntime map_runtime_;
     bool use_map_pack_ = false;
+    uint32_t player_source_id_ = 0;
+    uint32_t cassette_source_id_ = 0;
+    bool cassette_source_id_valid_ = false;
     const char* mappack_path_ = nullptr;  // set via SetMapPack before Init
     // Two-pass render orchestrator (Inc 2+). In map-pack mode this drives the
     // arch.md §21 frame order; near pass uses the TileStreamer (Inc 3).
@@ -288,6 +341,7 @@ struct GameplayScene::Impl {
     bool physics_autoplay_result_emitted_ = false;
     uint32_t physics_autoplay_approach_ticks_ = 0;
     uint32_t physics_autoplay_climb_ticks_ = 0;
+    float physics_autoplay_climb_rise_ = 0.0f;
     uint32_t physics_autoplay_clearance_samples_ = 0;
     uint32_t physics_autoplay_clearance_violations_ = 0;
     float physics_autoplay_min_model_gap_ = 1.0e9f;
@@ -340,6 +394,7 @@ struct GameplayScene::Impl {
 
     void ResetPlayerToRoomStart();
     void ReloadBakedLevel();
+    bool DispatchMapActors();
     // Initialize cassette actor from room data (extracted helper for DRY).
     void InitCassetteForRoom(const Room& room);
     // Boot a multi-room map-pack: load the manifest, ensure + activate the
@@ -431,7 +486,7 @@ void GameplayScene::Impl::ReloadBakedLevel() {
 
     level_geometry = {};
     room = Room{};
-    actor_world = ActorWorld{};
+    actor_world.Clear();
 
     // Load level data (entities, collision, atmosphere)
     if (!LoadLevel(lvl_path, room, level_geometry)) {
@@ -452,10 +507,7 @@ void GameplayScene::Impl::ReloadBakedLevel() {
         }
     }
 
-    DispatchLevelEntities(room, actor_world,
-                          strawberry_actor,
-                          refill_actor,
-                          spring_actor);
+    DispatchLevelEntities(room, actor_world);
     actor_world.ResolvePending();
 
 skip_entity_dispatch:
@@ -471,10 +523,49 @@ skip_entity_dispatch:
     cassette_reload_timer_ = 0.0f;
 }
 
+bool GameplayScene::Impl::DispatchMapActors() {
+    ActorSpawn spawns[ActorWorld::kMaxActors] = {};
+    const int spawn_count = map_runtime_.AllActorSpawns(
+        spawns, ActorWorld::kMaxActors);
+    if (spawn_count < 0) {
+        debugf("[actors] map has more than %u supported actors; boot aborted\n",
+               static_cast<unsigned int>(ActorWorld::kMaxActors));
+        actor_world.Clear();
+        return false;
+    }
+    const int dispatched = DispatchActorSpawns(spawns, spawn_count, actor_world);
+    if (dispatched != spawn_count) {
+        debugf("[actors] map actor dispatch incomplete: %d/%d\n",
+               dispatched, spawn_count);
+        actor_world.Clear();
+        return false;
+    }
+    actor_world.ResolvePending();
+    debugf("[actors] map-wide instances=%d\n", actor_world.Count());
+    return true;
+}
+
 // Initialize cassette actor from room data (extracted helper for DRY).
 void GameplayScene::Impl::InitCassetteForRoom(const Room& room) {
+    cassette_source_id_valid_ = false;
     if (room.has_cassette) {
         cassette_actor.InitAt(room.cassette);
+        if (use_map_pack_) {
+            const V2RoomSpec* active_spec = map_runtime_.ActiveSpec();
+            if (active_spec) {
+                for (int i = 0; i < active_spec->spawn_count; ++i) {
+                    const V2SpawnSpec& spawn = active_spec->spawns[i];
+                    if (spawn.kind == kSpawnActor &&
+                        std::strncmp(spawn.classname, "Cassette",
+                                     V2SpawnSpec::kClassLen) == 0) {
+                        cassette_actor.source_id = spawn.source_id;
+                        cassette_source_id_ = spawn.source_id;
+                        cassette_source_id_valid_ = true;
+                        break;
+                    }
+                }
+            }
+        }
         // Wire cassette target: if the room has a target set, use it.
         if (room.cassette_target[0] != '\0') {
             cassette_actor.target_level_path = room.cassette_target;
@@ -485,6 +576,7 @@ void GameplayScene::Impl::InitCassetteForRoom(const Room& room) {
 }
 
 bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
+    open_world_.SetDynamicSolids(nullptr);
     if (!mappack_path || mappack_path[0] == '\0') {
         debugf("[mappack] BootMapPack ENTRY: path=null — invalid\n");
         return false;
@@ -500,6 +592,12 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
         return false;
     }
     use_map_pack_ = true;
+    if (!open_world_.SetDynamicSolids(&map_runtime_.DynamicGeometry())) {
+        debugf("[mappack] dynamic-solid render preparation FAILED\n");
+        map_runtime_.Reset();
+        use_map_pack_ = false;
+        return false;
+    }
 
     // Load the material catalog for the textured near pass (Inc 5). The
     // manifest path is rom:/lvl/<pack>/<pack>.manifest (the bake emits it
@@ -528,13 +626,25 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
         }
     }
 
-    // Cache the world bounds for any future CPU-side math. With the z-split
-    // distant pass removed, the near pass uses a fixed far plane of 800 and
-    // does not need a per-map far clip.
+    // Cache the world bounds for the distant pass. The near pass uses a fixed
+    // far plane of 800; the distant projection reaches the full map diagonal.
     {
         const MapSpecV2& spec = map_runtime_.Spec();
         world_bounds = UnionRoomsAABB(spec.rooms, spec.room_count);
         world_bounds_valid_ = spec.room_count > 0;
+    }
+
+    // Inc 6: horizon fog for the distant tier. The range is derived from the
+    // distant projection's far plane (full map diagonal + margin) so the fade
+    // onset tracks the projection as the map grows. Static-by-design:
+    // world_bounds is fixed per map; if MapFarClipDistance ever becomes
+    // dynamic, move this setup to the per-frame distant-cam derivation.
+    {
+        const float distant_far = MapFarClipDistance(
+            world_bounds_valid_ ? &world_bounds : nullptr, 1.15f);
+        const float fog_min = distant_far > 0.0f ? distant_far * 0.4f : 300.0f;
+        const float fog_max = distant_far > 0.0f ? distant_far * 0.9f : 1200.0f;
+        open_world_.SetFog(MakeFog(fog_min, fog_max, {120.0f, 150.0f, 180.0f}));
     }
 
     const ActiveRoomView* active = map_runtime_.Active();
@@ -542,14 +652,21 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
         debugf("[mappack] MapRuntime active room null after Init\n");
         use_map_pack_ = false;
         map_runtime_.Reset();
+        room.dynamic_solids = nullptr;
         return false;
     }
 
     baked_level_loaded_ = true;
-    // Dispatch the start room's entities into its own ActorWorld.
-    DispatchLevelEntities(active->room, actor_world,
-                          strawberry_actor, refill_actor, spring_actor);
-    actor_world.ResolvePending();
+    // Actors are world-lifetime entities, not cell-lifetime entities. Build
+    // once from the complete manifest so cooldown/collection survives seams.
+    actor_world.Clear();
+    if (!DispatchMapActors()) {
+        use_map_pack_ = false;
+        map_runtime_.Reset();
+        room.dynamic_solids = nullptr;
+        baked_level_loaded_ = false;
+        return false;
+    }
     InitCassetteForRoom(active->room);
 
     // Boot IS a spawn: reset the player to the start room's spawn.
@@ -559,6 +676,7 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
     room.player_start = active->room.player_start;
     room.checkpoint = active->room.checkpoint;
     room.coll_mesh = active->room.coll_mesh;
+    room.dynamic_solids = active->room.dynamic_solids;
 
     // Boot from the manifest start_spawn (the 'Start'-named PlayerSpawn), not
     // from the .lvl's last PlayerSpawn, so the boot position is robust across
@@ -566,6 +684,7 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
     // non-start boot (continue-from-save, debug room) cannot teleport the
     // player to Start.
     const V2SpawnSpec* start = map_runtime_.FindStartSpawn();
+    player_source_id_ = start ? start->source_id : 0;
     if (start) {
         room.player_start = start->position;
         room.checkpoint = start->position;
@@ -706,10 +825,9 @@ bool GameplayScene::Impl::BootMapPack(const char* mappack_path) {
     const V2RoomSpec* start_spec = map_runtime_.ActiveSpec();
     if (start_spec) {
         open_world_.SetCenter(map_runtime_.Spec(), *start_spec, CameraForwardDir(), nullptr);
-        // render-distance Inc 4: load the whole-map horizon tier once at boot.
-        // 45 × ~1.4 KB decimated `.dlod` cells — cheap to keep resident for
-        // the map lifetime. Gated by kEnableDistantTier (default OFF — the
-        // merged approach regressed perf).
+        // Load the whole-map horizon tier once at boot. The current renderer
+        // keeps per-cell DLOD blocks and skips cells owned by ready near
+        // residents; this avoids the old merged-mesh overlap path.
         if (kEnableDistantTier) {
             open_world_.LoadDistantTier(map_runtime_.Spec(), nullptr);
         }
@@ -745,17 +863,15 @@ bool GameplayScene::Impl::TransitionToRoom(const char* room_id) {
     if (active_spec) {
         open_world_.SetCenter(map_runtime_.Spec(), *active_spec, CameraForwardDir(), nullptr);
     }
-    // Re-dispatch the new active room's entities and re-init cassette.
-    actor_world = ActorWorld{};
-    DispatchLevelEntities(active->room, actor_world,
-                          strawberry_actor, refill_actor, spring_actor);
-    actor_world.ResolvePending();
+    // Actor instances are map-wide and retain cooldown/collection state.
+    // Cassette remains room-local in this prototype.
     InitCassetteForRoom(active->room);
     // Mirror the active room's collision into the legacy `room` reference so
     // the existing motor/camera queries (which read `room`) keep working until
     // a later refactor routes them through ActiveRoom(). The active room
     // exposes a compatibility pointer to the global mesh.
     room.coll_mesh = active->room.coll_mesh;
+    room.dynamic_solids = active->room.dynamic_solids;
     room.has_cassette = active->room.has_cassette;
     room.cassette = active->room.cassette;
     // Mirror cassette target to legacy room reference.
@@ -787,6 +903,13 @@ void GameplayScene::SetMapPack(const char* mappack_path) {
     }
 }
 
+void GameplayScene::SetAudioService(AudioService* service) {
+    if (impl_) impl_->audio_service = service;
+    // SetAudioService is normally called before Init, so retain pointer in a
+    // scene-local slot through the pending map-pack field's sibling storage.
+    audio_service_pending_ = service;
+}
+
 const RenderCounters& GameplayScene::GetRenderCounters() const {
     // The two-pass orchestrator owns the per-frame counters; forward them so
     // the reporting profiler (rom_main.cpp) can print them (Inc 1 / D6).
@@ -811,8 +934,7 @@ int GameplayScene::PendingLoads() const {
 }
 
 int GameplayScene::ResidentLoads() const {
-    // Resident pool depth (the 5x5 preload ring that has been set up). 0
-    // before init.
+    // Resident pool depth (the bounded forward preload set). 0 before init.
     return impl_ ? impl_->open_world_.ResidentLoads() : 0;
 }
 
@@ -867,6 +989,7 @@ size_t GameplayScene::MapSpecBytes() const {
 
 void GameplayScene::Init() {
     impl_ = new Impl();
+    impl_->audio_service = audio_service_pending_;
     impl_->lvl_path   = lvl_path_;
     impl_->level_name = level_name_;
 
@@ -875,16 +998,46 @@ void GameplayScene::Init() {
     impl_->cube_vertices = static_cast<T3DVertPacked*>(malloc_uncached(sizeof(T3DVertPacked) * 12));
     BuildCubeGeometry(impl_->cube_vertices, 0x888888FF);
 
-    impl_->player_render.matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
     impl_->collectible_render.matrix_fp = static_cast<T3DMat4FP*>(malloc_uncached(sizeof(T3DMat4FP)));
 
     impl_->debug_hud.Init();
-    if (!impl_->strawberry_model.Load("rom:/mdl/strawberry.t3dm"))
+    if (!impl_->strawberry_model.Load("rom:/mdl/strawberry.t3dm",
+                                     "rom:/tex/overworld/strawberry.sprite"))
         debugf("[init] WARNING: strawberry model missing\n");
     if (!impl_->cassette_model.Load(kCassetteModelPath))
         debugf("[init] WARNING: cassette model missing\n");
-    if (!impl_->madeline_model.Load(kMadelineModelPath))
-        debugf("[init] FATAL: madeline model missing at %s\n", kMadelineModelPath);
+    if (!impl_->refill_model.Load(kRefillModelPath))
+        debugf("[refill-model] ERROR: required normal model missing path=%s\n",
+               kRefillModelPath);
+    if (!impl_->double_refill_model.Load(kDoubleRefillModelPath))
+        debugf("[refill-model] ERROR: required double model missing path=%s\n",
+               kDoubleRefillModelPath);
+    if (!impl_->madeline_model.Load(kMadelineModelPath, kMadelineAnimmapPath, kMadelineSkinPath,
+                                    kMadelineAnimationCurvePath)) {
+        debugf("[init] ERROR: madeline animated model failed: model=%s animmap=%s skin=%s\n",
+               kMadelineModelPath, kMadelineAnimmapPath, kMadelineSkinPath);
+    }
+    if (impl_->madeline_model.IsLoaded()) {
+        impl_->madeline_model.Configure(impl_->player.animation);
+        impl_->player.animation.Play(PlayerAnimState::Idle);
+        if (kEnablePlayerHair && !impl_->player_hair_renderer.Init()) {
+            debugf("[player-hair] renderer init FAILED\n");
+        }
+    }
+ else {
+        debugf("[player-envelope] scale=%.2f radius=%.2f half_height=%.2f "
+               "climb_anchor=%.2f model_radius=%.2f model_height=%.2f model_gap=%.2f\n",
+               static_cast<double>(kMadelineScale),
+               static_cast<double>(impl_->movement_config.player_wall_radius),
+               static_cast<double>(impl_->movement_config.player_half_height),
+               static_cast<double>(impl_->movement_config.climb_pushout_dist),
+               static_cast<double>(kMadelineModelRadius),
+               static_cast<double>(kMadelineModelHeight),
+               static_cast<double>(kMadelineModelWallGap));
+    }
+    if (impl_->audio_service) {
+        impl_->audio_service->PlayMusic(AudioEventId::ForsakenCityTheme);
+    }
     if (!impl_->room_fixture_model.Load("rom:/mdl/room_fixture.t3dm"))
         debugf("[init] WARNING: room fixture model missing\n");
     impl_->room_fixture_model.UpdateMatrix({0.0f, 40.0f, -120.0f}, 60.0f, 0.0f);
@@ -929,16 +1082,23 @@ void GameplayScene::Init() {
 void GameplayScene::Shutdown() {
     if (impl_ == nullptr) return;
 
+    if (impl_->audio_service) impl_->audio_service->StopMusic();
+
     impl_->debug_hud.Shutdown();
     impl_->strawberry_model.Free();
     impl_->cassette_model.Free();
+    impl_->refill_model.Free();
+    impl_->double_refill_model.Free();
     impl_->madeline_model.Free();
+    impl_->player_hair_renderer.Free();
     impl_->room_fixture_model.Free();
     impl_->room_renderer.Free();
+    impl_->open_world_.SetDynamicSolids(nullptr);
 
     // Free the multi-room map-pack runtime (frees the global collision mesh +
     // active room renderer). Safe to call when not using a map-pack (no-op).
     impl_->map_runtime_.Reset();
+    impl_->room.dynamic_solids = nullptr;
     impl_->material_catalog_.Unload();
 
     if (impl_->room.coll_mesh) {
@@ -947,15 +1107,16 @@ void GameplayScene::Shutdown() {
     }
 
     free_uncached(impl_->cube_vertices);
-    free_uncached(impl_->player_render.matrix_fp);
     free_uncached(impl_->collectible_render.matrix_fp);
     for (int i = 0; i < impl_->room_geometry_count; ++i) {
         free_uncached(impl_->room_geometry[i].matrix_fp);
     }
 
-    // Buffered viewports allocate an uncached _matFP ring that `delete impl_`
+    // Buffered viewports allocate uncached _matFP rings that `delete impl_`
     // will not free (Impl has no destructor). Safe no-op when _matFP is null.
     t3d_viewport_destroy(&impl_->viewport);
+    t3d_viewport_destroy(&impl_->distant_viewport);
+    t3d_viewport_destroy(&impl_->sky_viewport);
 
     delete impl_;
     impl_ = nullptr;
@@ -964,6 +1125,7 @@ void GameplayScene::Shutdown() {
 void GameplayScene::Update(float delta_seconds) {
     if (impl_ == nullptr) return;
     impl_->last_delta = delta_seconds;  // streaming-experience Inc 4: for the reveal age
+    impl_->simulation_ticks_this_frame = 0;
 
     // Open the renderer's per-frame profiler + reset arena/counters at the TOP
     // of Update (Inc 1 / instrumentation, D1). This MUST precede SetCenter/
@@ -982,10 +1144,13 @@ void GameplayScene::Update(float delta_seconds) {
     // until a full pause menu exists.
     if (impl_->input_system.Pause().pressed) {
         impl_->room_fixture_visible_ = !impl_->room_fixture_visible_;
+        impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
         debugf("[fixture] room fixture %s\n", impl_->room_fixture_visible_ ? "ON" : "OFF");
+        impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
     }
     PlayerInput input = ReadPlayerInput(impl_->input_system);
-    const CameraInput camera_input = ReadCameraInput(impl_->input_system);
+    CameraInput camera_input = ReadCameraInput(impl_->input_system);
+    if (kDebugPhysicsAutoplay) camera_input = {};
 
     // Temporary debug: auto-walk sideways so Ares can reproduce the
     // side-cell loading glitch without controller input. Gated by kDebugAutoWalk.
@@ -1005,7 +1170,7 @@ void GameplayScene::Update(float delta_seconds) {
             input.move = {1.0f, 0.0f};  // camera-relative right/left (sideways)
         }
     }
-    const Vec3 camera_forward = {
+    Vec3 camera_forward = {
         impl_->camera.target.x - impl_->camera.position.x,
         impl_->camera.target.y - impl_->camera.position.y,
         impl_->camera.target.z - impl_->camera.position.z,
@@ -1023,8 +1188,10 @@ void GameplayScene::Update(float delta_seconds) {
     // (default false) — USB output blocks the RSP and is a hidden per-frame
     // cost. Boot/init logs and the profiler report stay ungated.
     if (kVerboseFrameLogging) {
+        impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
         debugf("[update] frame start: coll_mesh=%p n_ticks=%d\n",
                (void*)impl_->room.coll_mesh, n_ticks);
+        impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
     }
     impl_->player.prev_position = impl_->player.position;
 
@@ -1046,8 +1213,35 @@ void GameplayScene::Update(float delta_seconds) {
     bool was_grounded_pre_last_tick = impl_->player.contact.was_grounded;
     bool did_respawn = false;
 
+
+    impl_->open_world_.Profiler().BeginPhase(
+        n64::FrameProfiler::kPhaseFixedStepLoop);
     for (int tick = 0; tick < n_ticks; ++tick) {
-        PlayerInput tick_input = input;
+        // OG World.Update returns during HitStun: moving surfaces, actors,
+        // input buffers, camera, player timers, state handlers, and collision
+        // do not advance. Hardware polling remains frame-level; latched edges
+        // wait until the first world tick after hitstun.
+        if (impl_->player_controller.ConsumeWorldHitstopTick(
+                impl_->player, FixedStepAccumulator::kTickDt)) {
+            continue;
+        }
+        // OG World captures this broadphase AABB before Actor.Update; Player
+        // camera/FOV changes later in the tick must not recull either pass.
+        const ActorUpdateView actor_update_view = BuildActorUpdateView(
+            impl_->camera.position, impl_->camera.target,
+            impl_->camera.fov_multiplier);
+        ++impl_->simulation_ticks_this_frame;
+        impl_->input_system.BeginTick(FixedStepAccumulator::kTickDt);
+        PlayerInput tick_input = ReadPlayerInput(impl_->input_system);
+        const bool defer_camera_input =
+            impl_->use_map_pack_ && !kDebugPhysicsAutoplay;
+        if (!defer_camera_input) {
+            impl_->camera_controller.InputPhase(
+                impl_->camera, camera_input, FixedStepAccumulator::kTickDt);
+        }
+        camera_forward = physics::Sub(impl_->camera.target,
+                                      impl_->camera.position);
+        if (kDebugAutoWalk) tick_input.move = input.move;
         const char* physics_phase = "live";
         uint32_t physics_tick = 0;
         if (kDebugPhysicsAutoplay) {
@@ -1224,6 +1418,7 @@ void GameplayScene::Update(float delta_seconds) {
                     impl_->physics_autoplay_target_start_gap_ = physics::Dot(
                         wall.plane_normal, physics::Sub(waist, wall.point));
                     impl_->physics_autoplay_target_found_ = true;
+                    impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
                     debugf("[phys-test] climb-target hit=1 height=%.0f max_height=%.0f face=%d range=%.1f band=%d "
                            "start_gap=%.1f approach=(%.2f,%.2f) point=(%.1f,%.1f,%.1f) n=(%.2f,%.2f,%.2f)\n",
                            static_cast<double>(wall_supported_height),
@@ -1239,7 +1434,9 @@ void GameplayScene::Update(float delta_seconds) {
                            static_cast<double>(wall.plane_normal.x),
                            static_cast<double>(wall.plane_normal.y),
                            static_cast<double>(wall.plane_normal.z));
+                    impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
                 } else {
+                    impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
                     debugf("[phys-test] climb-target hit=0 max_height=%.0f bands=(%.0f,%.0f,%.0f,%.0f,%.0f) short=%d "
                            "pos=(%.1f,%.1f,%.1f) waist=(%.1f,%.1f,%.1f)\n",
                            static_cast<double>(maximum_supported_height),
@@ -1255,6 +1452,7 @@ void GameplayScene::Update(float delta_seconds) {
                            static_cast<double>(waist.x),
                            static_cast<double>(waist.y),
                            static_cast<double>(waist.z));
+                    impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
                 }
                 if (wall.hit) {
                     physics_phase = "climb-approach";
@@ -1270,24 +1468,29 @@ void GameplayScene::Update(float delta_seconds) {
                         if (impl_->physics_autoplay_corner_seen_) {
                             physics_phase = impl_->player.climb.corner_ease > 0.0f
                                 ? "corner-ease" : "corner-stable";
-                            tick_input.move = impl_->player.climb.corner_ease > 0.0f
-                                ? WorldToCameraMove({-1.0f, 0.0f, 0.0f})
-                                : Vec2{};
+                            tick_input.move = {}; // Preserve destination through ease.
                         } else if (impl_->physics_autoplay_climb_ticks_ <= 1) {
                             physics_phase = "corner-first-step";
                             tick_input.move = {0.0f, 1.0f};
                         } else {
                             physics_phase = "corner-traverse";
-                            tick_input.move = WorldToCameraMove(
-                                {-1.0f, 0.0f, 0.0f});
+                            // Climb uses raw side with a latched sign, not the
+                            // world-to-camera movement transform. Match the
+                            // host route's +X travel toward the shared edge.
+                            const Vec3 normal = impl_->player.climb.wall_normal;
+                            const Vec3 right = NormalizeXZ({normal.z, 0.0f, -normal.x});
+                            const float desired_side = right.x >= 0.0f ? 1.0f : -1.0f;
+                            tick_input.move = {
+                                -desired_side * impl_->player.climb.input_sign, 0.0f};
                         }
                     } else if (!kDebugPhysicsAutoplayMantle &&
                         !impl_->physics_autoplay_walljump_attempted_ &&
-                        impl_->physics_autoplay_climb_ticks_ >= 10) {
+                        impl_->physics_autoplay_climb_ticks_ >= 4 &&
+                        impl_->physics_autoplay_climb_rise_ >= 4.0f) {
                         // Exercise climb-walljump on the real-map route before
                         // the selected wall's short upper lip can trigger a
-                        // mantle. Ten completed climb ticks still satisfy the
-                        // sustained-climb and clearance gates.
+                        // mantle. Prove sustained climbing by measured rise;
+                        // this wall's finite lip can be reached before ten ticks.
                         physics_phase = "wall-jump";
                         tick_input.jump_pressed = true;
                         tick_input.climb_held = true;
@@ -1317,12 +1520,14 @@ void GameplayScene::Update(float delta_seconds) {
                         if (!impl_->physics_autoplay_entry_attempted_) {
                             impl_->physics_autoplay_entry_attempted_ = true;
                             impl_->physics_autoplay_entry_gap_ = target_gap;
+                            impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
                             debugf("[phys-test] climb-entry gap=%.2f ticks=%u pos=(%.1f,%.1f,%.1f)\n",
                                    static_cast<double>(target_gap),
                                    static_cast<unsigned int>(impl_->physics_autoplay_approach_ticks_),
                                    static_cast<double>(impl_->player.position.x),
                                    static_cast<double>(impl_->player.position.y),
                                    static_cast<double>(impl_->player.position.z));
+                            impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
                         }
                     } else {
                         physics_phase = "climb-approach";
@@ -1350,28 +1555,107 @@ void GameplayScene::Update(float delta_seconds) {
                     impl_->player.velocity);
             }
         }
+        const Vec3 hazard_waist = ProbeAboveFeet(
+            impl_->player.position,
+            impl_->movement_config.player_half_height,
+            impl_->movement_config.climb_waist_offset);
+        const bool hazard_death_pre_tick = impl_->use_map_pack_ &&
+            AnyHazardKillsAtPoint(impl_->map_runtime_.Spec(), hazard_waist,
+                                  impl_->player.velocity);
+        const bool player_update_ran = !hazard_death_pre_tick;
         // og-mover-overhaul Inc 2: PlayerMotor is deleted. The tick pipeline is
         // now OG's shape: moving-surface carry -> TimerInput/State (velocity
         // edits only) -> MovePhase (SweepMove + Popout + ground check + snap).
         impl_->player.prev_position = impl_->player.position;
-        AdvanceMovingSurfaces(impl_->room, FixedStepAccumulator::kTickDt);
-        impl_->player_controller.MovingSurfacePhase(impl_->player, impl_->room);
         // Per-tick snapshot (review S5): the old code re-captured before the
         // motor step each tick, so the telemetry arg means "grounded at the
         // start of THIS tick", not at frame start.
         const bool was_grounded_pre_tick = impl_->player.contact.was_grounded;
         was_grounded_pre_last_tick = was_grounded_pre_tick;
         const Vec3 physics_tick_start_position = impl_->player.position;
-        // Controller: timers/input + state handler edit velocity only.
-        PlayerController::StepContext player_step = impl_->player_controller.TimerInputPhase(
-            impl_->player, tick_input, camera_forward, FixedStepAccumulator::kTickDt);
         const bool was_climbing_pre =
             impl_->player.movement_state == PlayerMovementState::Climbing;
         const bool was_dashing_pre =
             impl_->player.movement_state == PlayerMovementState::Dashing;
-        impl_->player_controller.StatePhase(impl_->player, tick_input, player_step, FixedStepAccumulator::kTickDt, &impl_->room);
-        const float ground_snap_after_state =
+        PlayerController::StepContext player_step{};
+        float ground_snap_after_state =
             impl_->player.contact.ground_snap_cooldown_remaining;
+        impl_->open_world_.Profiler().BeginPhase(
+            n64::FrameProfiler::kPhaseActorWorldUpdate);
+        if (impl_->use_map_pack_ && impl_->baked_level_loaded_) {
+            ActorWorld& actor_world = impl_->actor_world;
+            DynamicSolidGeometry& geometry =
+                impl_->map_runtime_.DynamicGeometry();
+            const DynamicSolidSpec* solids = geometry.Actors();
+            const uint16_t solid_count = geometry.ActorCount();
+            const float dt = FixedStepAccumulator::kTickDt;
+            bool cassette_before_player = impl_->room.has_cassette &&
+                impl_->cassette_source_id_valid_ &&
+                impl_->cassette_source_id_ < impl_->player_source_id_;
+            actor_world.BeginSourceOrderedPass(false, &actor_update_view);
+            for (uint16_t i = 0; i < solid_count; ++i) {
+                const uint32_t source_id = solids[i].source_id;
+                if (source_id >= impl_->player_source_id_) break;
+                if (cassette_before_player &&
+                    impl_->cassette_source_id_ < source_id) {
+                    actor_world.DispatchSourceOrderedActorSlot(
+                        impl_->cassette_actor, dt);
+                    cassette_before_player = false;
+                }
+                actor_world.DispatchSourceOrderedBefore(source_id, dt);
+                AdvanceDynamicSolidBaseUpdate(
+                    geometry, i, impl_->player_controller,
+                    impl_->player, impl_->room, actor_update_view, dt);
+            }
+            if (cassette_before_player) {
+                actor_world.DispatchSourceOrderedActorSlot(
+                    impl_->cassette_actor, dt);
+                cassette_before_player = false;
+            }
+            actor_world.DispatchSourceOrderedBefore(
+                impl_->player_source_id_, dt);
+            if (player_update_ran && defer_camera_input) {
+                // Camera orbit/zoom is part of Player.Update's source slot.
+                // The update-view AABB above remains the pre-pass snapshot.
+                impl_->camera_controller.InputPhase(impl_->camera,
+                                                    camera_input, dt);
+                camera_forward = physics::Sub(impl_->camera.target,
+                                              impl_->camera.position);
+            }
+        }
+        impl_->open_world_.Profiler().EndPhase(
+            n64::FrameProfiler::kPhaseActorWorldUpdate);
+        if (!hazard_death_pre_tick) {
+            impl_->open_world_.Profiler().BeginPhase(
+                n64::FrameProfiler::kPhasePlayerPhysics);
+            impl_->player_controller.BeginMoveTick(impl_->player);
+            AdvanceMovingSurfaces(impl_->room, FixedStepAccumulator::kTickDt);
+            impl_->player_controller.MovingSurfacePhase(impl_->player, impl_->room);
+            // Controller: timers/input + state handler edit velocity only.
+            player_step = impl_->player_controller.TimerInputPhase(
+                impl_->player, tick_input, camera_forward, FixedStepAccumulator::kTickDt);
+            player_step.camera_target_forward = impl_->camera.target_forward;
+            player_step.hazard_map = impl_->use_map_pack_
+                ? &impl_->map_runtime_.Spec() : nullptr;
+            impl_->player_controller.StatePhase(impl_->player, tick_input, player_step,
+                FixedStepAccumulator::kTickDt, &impl_->room);
+            if (!kDebugPhysicsAutoplay) {
+                impl_->input_system.EndTick(tick_input.jump_press_consumed,
+                                            tick_input.dash_press_consumed);
+            }
+            ground_snap_after_state = impl_->player.contact.ground_snap_cooldown_remaining;
+            // Player.Update motion ends after the sweeps/popout. Map actors
+            // run before Player.LateUpdate ground/snap resolution; legacy
+            // rooms retain the complete-tick compatibility ordering.
+            impl_->player_controller.MoveUpdatePhase(impl_->player,
+                FixedStepAccumulator::kTickDt, &impl_->room, &player_step);
+            if (!impl_->use_map_pack_) {
+                impl_->player_controller.LateMoveContactPhase(
+                    impl_->player, FixedStepAccumulator::kTickDt, &impl_->room);
+            }
+            impl_->open_world_.Profiler().EndPhase(
+                n64::FrameProfiler::kPhasePlayerPhysics);
+        }
         if (kDebugPhysicsAutoplay && physics_tick == 180 && tick_input.dash_pressed) {
             const PlayerState& p = impl_->player;
             impl_->physics_autoplay_dash_launch_recorded_ =
@@ -1384,10 +1668,11 @@ void GameplayScene::Update(float delta_seconds) {
                 p.velocity.z * p.velocity.z);
         }
 
-
-        // MovePhase applies velocity*dt through the single mover and resolves
-        // contact. `grounded` reflects the post-move ground state.
-        impl_->player_controller.MovePhase(impl_->player, FixedStepAccumulator::kTickDt, &impl_->room);
+        if (!was_dashing_pre &&
+            impl_->player.movement_state == PlayerMovementState::Dashing &&
+            impl_->audio_service) {
+            impl_->audio_service->PlaySfx(AudioEventId::PlayerDash);
+        }
 
         if (kDebugPhysicsAutoplayCorner) {
             if (player_step.corner_triggered) {
@@ -1395,6 +1680,7 @@ void GameplayScene::Update(float delta_seconds) {
                 impl_->physics_autoplay_corner_seen_ = true;
                 impl_->physics_autoplay_corner_target_normal_ =
                     impl_->player.climb.corner_normal_to;
+                impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
                 debugf("[phys-test] corner event=%u from=(%.2f,%.2f,%.2f) "
                        "to=(%.2f,%.2f,%.2f) ease=%.3f pos=(%.1f,%.1f,%.1f)\n",
                        static_cast<unsigned int>(impl_->physics_autoplay_corner_events_),
@@ -1408,6 +1694,7 @@ void GameplayScene::Update(float delta_seconds) {
                        static_cast<double>(impl_->player.position.x),
                        static_cast<double>(impl_->player.position.y),
                        static_cast<double>(impl_->player.position.z));
+                impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
             }
             if (impl_->physics_autoplay_corner_seen_) {
                 const Vec3 delta = physics::Sub(
@@ -1511,6 +1798,9 @@ void GameplayScene::Update(float delta_seconds) {
             impl_->player.movement_state == PlayerMovementState::Climbing) {
             impl_->physics_autoplay_climb_started_ = true;
             ++impl_->physics_autoplay_climb_ticks_;
+            impl_->physics_autoplay_climb_rise_ = std::max(
+                impl_->physics_autoplay_climb_rise_, impl_->player.position.y -
+                impl_->physics_autoplay_climb_entry_y_);
 
             const Vec3 feet = {
                 impl_->player.position.x,
@@ -1553,37 +1843,44 @@ void GameplayScene::Update(float delta_seconds) {
                     normal_b, physics::Sub(feet, plane_b));
                 const Vec3 render_offset = PlayerModelCornerHorizontalOffset(
                     normal_a, gap_a, normal_b, gap_b, kMadelineModelRadius,
-                    kMadelineModelHeight, required_gap);
+                    kMadelineModelHeight, required_gap,
+                    &impl_->player.facing, kMadelineScale);
                 record_model_gap(PlayerModelMinimumPlaneGapAfterTranslation(
                     normal_a, gap_a, kMadelineModelRadius,
-                    kMadelineModelHeight, render_offset));
+                    kMadelineModelHeight, render_offset,
+                    &impl_->player.facing, kMadelineScale));
                 record_model_gap(PlayerModelMinimumPlaneGapAfterTranslation(
                     normal_b, gap_b, kMadelineModelRadius,
-                    kMadelineModelHeight, render_offset));
+                    kMadelineModelHeight, render_offset,
+                    &impl_->player.facing, kMadelineScale));
             } else {
-                const Vec3 normal = impl_->player.climb.wall_normal;
-                const Vec3 waist = {
-                    feet.x,
-                    feet.y + impl_->movement_config.climb_waist_offset,
-                    feet.z,
-                };
-                const WallHit wall = QueryClimbWall(
-                    impl_->ActiveRoom(), waist,
-                    impl_->movement_config.climb_check_dist, normal);
-                Vec3 clearance_normal = normal;
-                float feet_wall_gap = impl_->movement_config.climb_pushout_dist -
-                    impl_->movement_config.climb_waist_offset * normal.y;
-                if (wall.hit) {
-                    clearance_normal = wall.plane_normal;
-                    feet_wall_gap = physics::Dot(
-                        clearance_normal, physics::Sub(feet, wall.point));
+                PlayerModelPlaneConstraint constraints[
+                    kMaxPlayerModelWallConstraints];
+                int count = QueryPlayerModelWallConstraints(
+                    impl_->ActiveRoom(), feet, kMadelineModelRadius,
+                    kMadelineModelHeight,
+                    impl_->movement_config.climb_waist_offset,
+                    required_gap, constraints,
+                    kMaxPlayerModelWallConstraints);
+                if (count == 0) {
+                    const Vec3 normal = impl_->player.climb.wall_normal;
+                    constraints[0] = {
+                        normal,
+                        impl_->movement_config.climb_pushout_dist -
+                            impl_->movement_config.climb_waist_offset * normal.y,
+                    };
+                    count = 1;
                 }
-                const float render_offset = PlayerModelHorizontalOffset(
-                    clearance_normal, feet_wall_gap, kMadelineModelRadius,
-                    kMadelineModelHeight, required_gap);
-                record_model_gap(PlayerModelMinimumPlaneGap(
-                    clearance_normal, feet_wall_gap, kMadelineModelRadius,
-                    kMadelineModelHeight, render_offset));
+                const Vec3 render_offset = PlayerModelMultiPlaneHorizontalOffset(
+                    constraints, count, kMadelineModelRadius,
+                    kMadelineModelHeight, required_gap,
+                    &impl_->player.facing, kMadelineScale);
+                for (int i = 0; i < count; ++i) {
+                    record_model_gap(PlayerModelMinimumPlaneGapAfterTranslation(
+                        constraints[i].normal, constraints[i].feet_signed_distance,
+                        kMadelineModelRadius, kMadelineModelHeight, render_offset,
+                        &impl_->player.facing, kMadelineScale));
+                }
             }
         }
 
@@ -1600,7 +1897,10 @@ void GameplayScene::Update(float delta_seconds) {
             impl_->physics_autoplay_result_emitted_ = true;
             const float required_gap = kMadelineModelWallGap;
             const bool climb_ok = impl_->physics_autoplay_climb_started_ &&
-                                  impl_->physics_autoplay_climb_ticks_ >= 10;
+                (kDebugPhysicsAutoplayCorner
+                    ? impl_->physics_autoplay_climb_ticks_ >= 10
+                    : impl_->physics_autoplay_climb_ticks_ >= 4 &&
+                      impl_->physics_autoplay_climb_rise_ >= 4.0f);
             const bool grounded_climb_entry_ok =
                 impl_->physics_autoplay_climb_entry_recorded_ &&
                 impl_->physics_autoplay_climb_entry_grounded_;
@@ -1662,13 +1962,14 @@ void GameplayScene::Update(float delta_seconds) {
                                 approach_ok && grounded_climb_entry_ok &&
                                 climb_first_step_ok && climb_ok &&
                                 selected_exit_ok && clearance_ok;
+            impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
             debugf("[phys-test] result=%s profile=%s movement=%u air_control=%u "
                    "air_steer_delta=%.1f air_release_drop=%.1f air_grounded=%u "
                    "run_peak=%.1f brake_min=%.1f reverse_speed=%.1f "
                    "jump_rise=%.1f dash_distance=%.1f dash_launch=%u "
                    "dash_airborne=%u dash_launch_y=%.1f dash_launch_speed=%.1f "
                    "target=%u approach=%u approach_ticks=%u start_gap=%.1f entry_gap=%.1f "
-                   "climb=%u climb_ticks=%u climb_entry_grounded=%u "
+                   "climb=%u climb_ticks=%u climb_rise=%.2f climb_entry_grounded=%u "
                    "climb_first_step_dy=%.2f climb_first_step_snap=%.3f "
                    "climb_first_step_ok=%u "
                    "walljump=%u walljump_ok=%u walljump_xy=%.1f walljump_y=%.1f "
@@ -1701,6 +2002,7 @@ void GameplayScene::Update(float delta_seconds) {
                    static_cast<double>(impl_->physics_autoplay_entry_gap_),
                    impl_->physics_autoplay_climb_started_ ? 1u : 0u,
                    static_cast<unsigned int>(impl_->physics_autoplay_climb_ticks_),
+                   static_cast<double>(impl_->physics_autoplay_climb_rise_),
                    impl_->physics_autoplay_climb_entry_grounded_ ? 1u : 0u,
                    static_cast<double>(impl_->physics_autoplay_climb_first_step_dy_),
                    static_cast<double>(impl_->physics_autoplay_climb_first_step_snap_cooldown_),
@@ -1725,6 +2027,7 @@ void GameplayScene::Update(float delta_seconds) {
                    static_cast<double>(p.position.y),
                    static_cast<double>(p.position.z),
                    static_cast<double>(p.velocity.y));
+            impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
         }
 
         if (kDebugInputRecording) {
@@ -1780,6 +2083,7 @@ void GameplayScene::Update(float delta_seconds) {
                  impl_->fixed_step.last_discarded_seconds > 0.0f);
             if (ShouldEmitInputTrace(seq, input_changed, state_changed,
                                      contact_changed, timing_anomaly)) {
+                impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
                 debugf("[input-trace] frame=%u sub=%d/%d seq=%u "
                        "sched=(frame_ms=%.1f,steps=%d,pending=%d,dropped_ms=%.1f) "
                        "pad=(style%u,current%04x,held%04x) "
@@ -1853,7 +2157,8 @@ void GameplayScene::Update(float delta_seconds) {
                        static_cast<double>(p.dash_time_remaining),
                        static_cast<double>(p.coyote_time_remaining),
                        static_cast<double>(p.hold_jump_time_remaining),
-                       p.air_dash_available ? 1u : 0u);
+                       p.dashes > 0 ? 1u : 0u);
+                impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
             }
             impl_->input_record_last_stick_x_bucket_ = stick_x_bucket;
             impl_->input_record_last_stick_y_bucket_ = stick_y_bucket;
@@ -1879,6 +2184,7 @@ void GameplayScene::Update(float delta_seconds) {
 
         if (kDebugPhysicsAutoplay && physics_tick % 6 == 0) {
             const PlayerState& p = impl_->player;
+            impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
             debugf("[phys] t=%u phase=%s in=(%.2f,%.2f) j=%u jh=%u d=%u c=%u pos=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f) g=%u gn=(%.2f,%.2f,%.2f) wall=%u ceil=%u wn=(%.2f,%.2f,%.2f) st=%u coy=%.2f snap=%.2f\n",
                    static_cast<unsigned int>(physics_tick), physics_phase,
                    static_cast<double>(tick_input.move.x),
@@ -1905,30 +2211,40 @@ void GameplayScene::Update(float delta_seconds) {
                    static_cast<unsigned int>(p.movement_state),
                    static_cast<double>(p.coyote_time_remaining),
                    static_cast<double>(p.contact.ground_snap_cooldown_remaining));
+            impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
         }
 
         // Spring board (OG Spring.cs Pickup/pickupRadius + Player.Spring):
         // when the player overlaps an active, non-cooling-down board, launch
         // her (OG parity v.y=160). The board's own 1.0 s cooldown prevents a
         // standing player being relaunched every tick (OG Spring.cs tCooldown).
-        if (SpringActor* sp = impl_->actor_world.Get<SpringActor>()) {
-            if (sp->active && sp->cooldown_remaining <= 0.0f) {
-                const float dx = impl_->player.position.x - sp->position.x;
-                const float dy = impl_->player.position.y - sp->position.y;
-                const float dz = impl_->player.position.z - sp->position.z;
-                if ((dx * dx + dy * dy + dz * dz) <= sp->pickup_radius * sp->pickup_radius) {
-                    impl_->player_controller.Spring(impl_->player, sp->position);
-                    sp->cooldown_remaining = SpringActor::kCooldown;
-                    // UNGATED (Inc 3): a spring launch must be attributable on
-                    // device — fires once per overlap (board cooldown gates re-fire).
-                    debugf("[spring] launch v.y=%.1f pos=(%.1f,%.1f,%.1f)\n",
-                           static_cast<double>(impl_->player.velocity.y),
-                           static_cast<double>(impl_->player.position.x),
-                           static_cast<double>(impl_->player.position.y),
-                           static_cast<double>(impl_->player.position.z));
-                }
+        bool spring_launched = false;
+        const Vec3 spring_waist = ProbeAboveFeet(impl_->player.position,
+            impl_->movement_config.player_half_height,
+            impl_->movement_config.climb_waist_offset);
+        impl_->actor_world.ForEachType<SpringActor>([&](SpringActor& sp) {
+            if (hazard_death_pre_tick) return;
+            if (spring_launched || !sp.active || sp.cooldown_remaining > 0.0f)
+                return;
+            const float dx = spring_waist.x - sp.position.x;
+            const float dy = spring_waist.y - sp.position.y;
+            const float dz = spring_waist.z - sp.position.z;
+            if ((dx * dx + dy * dy + dz * dz) < sp.pickup_radius * sp.pickup_radius) {
+                impl_->player_controller.Spring(impl_->player, sp.position);
+                sp.cooldown_remaining = SpringActor::kCooldown;
+                sp.update_off_screen = true;
+                spring_launched = true;
+                // UNGATED (Inc 3): a spring launch must be attributable on
+                // device — fires once per overlap (board cooldown gates re-fire).
+                impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
+                debugf("[spring] launch v.y=%.1f pos=(%.1f,%.1f,%.1f)\n",
+                       static_cast<double>(impl_->player.velocity.y),
+                       static_cast<double>(impl_->player.position.x),
+                       static_cast<double>(impl_->player.position.y),
+                       static_cast<double>(impl_->player.position.z));
+                impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
             }
-        }
+        });
 
         // Collapse telemetry onto the controller-owned ground state. The old
         // MotorResult is a 4-field adapter now (position/velocity/ice/oneway
@@ -1936,11 +2252,9 @@ void GameplayScene::Update(float delta_seconds) {
         motor_result.grounded = impl_->player.grounded;
         motor_result.ground_normal = impl_->player.contact.ground_normal;
         motor_result.wall_contact = impl_->player.wall_contact;
-        // Death (F2, restored parity with the old motor's FaceIsDeath): the
-        // mover flags a repaired contact face carrying MAT_DEATH; the kill
-        // plane is the other trigger. Same threshold + operator as
-        // RespawnSystem's own gate (S2: one contract, not two).
-        motor_result.death = impl_->player.death_contact ||
+        // OG checks actor-backed hazard AABBs at SolidWaistTestPos before the
+        // player state update; mesh death-face contact remains legacy-only.
+        motor_result.death = hazard_death_pre_tick || impl_->player.death_contact ||
                              impl_->player.position.y <= impl_->room.kill_plane_y;
         (void)was_grounded_pre_tick;  // consumed by the telemetry call post-loop
 
@@ -1950,8 +2264,9 @@ void GameplayScene::Update(float delta_seconds) {
             // UNGATED: a bogus auto-grab must name its raw button bits at the
             // exact grab frame — counter deltas alone cannot attribute it.
             const InputSystem::RawSnapshot& raw = impl_->input_system.LastRaw();
+            impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
             debugf("[climb] START pad=(style%u,current%04x,held%04x) "
-                   "z=%u l=%u r=%u al=%d ar=%d source=%s scripted_c=%u "
+                   "z=%u l=%u r=%u al=%d ar=%d source=%s action_c=%u "
                    "wn=(%.2f,%.2f) pos=(%.1f,%.1f,%.1f)\n",
                    static_cast<unsigned int>(raw.style),
                    static_cast<unsigned int>(raw.buttons_current),
@@ -1968,29 +2283,34 @@ void GameplayScene::Update(float delta_seconds) {
                    static_cast<double>(impl_->player.position.x),
                    static_cast<double>(impl_->player.position.y),
                    static_cast<double>(impl_->player.position.z));
+            impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
         }
         if (player_step.mantle_triggered) {
             impl_->telemetry.RecordClimbMantle();
             // UNGATED (Inc 5): a mantle hop must be attributable on device —
             // the counter hook alone cannot time it. Fires once per hop.
+            impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
             debugf("[climb] MANTLE hop=%.1f pos=(%.1f,%.1f,%.1f)\n",
                    static_cast<double>(impl_->player.velocity.y),
                    static_cast<double>(impl_->player.position.x),
                    static_cast<double>(impl_->player.position.y),
                    static_cast<double>(impl_->player.position.z));
+            impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
         }
         if (player_step.corner_triggered) {
             // UNGATED (Inc 5): fires once per corner adopt — validates the
             // Inc 3 corner system on device (≥1 CORNER line per intentional
             // corner traversal, no START-spam at a single position).
+            impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
             debugf("[climb] CORNER wn=(%.2f,%.2f) pos=(%.1f,%.1f,%.1f)\n",
                    static_cast<double>(impl_->player.climb.wall_normal.x),
                    static_cast<double>(impl_->player.climb.wall_normal.z),
                    static_cast<double>(impl_->player.position.x),
                    static_cast<double>(impl_->player.position.y),
                    static_cast<double>(impl_->player.position.z));
+            impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
         }
-        // (was_grounded snapshot is owned by MovePhase's LateContactPhase.)
+        // Map-pack late contact is deferred until Player's ordered LateUpdate slot.
 
         if (impl_->respawn_system.Step(impl_->player, impl_->checkpoint, impl_->room, impl_->player_controller.Mover(), motor_result.death)) {
             did_respawn = true;
@@ -2005,14 +2325,217 @@ void GameplayScene::Update(float delta_seconds) {
                         // Mirror active room into the legacy `room` reference so
                         // the next tick's collision query sees the chunk.
                         impl_->room.coll_mesh = impl_->map_runtime_.Active()->room.coll_mesh;
+                        impl_->room.dynamic_solids = impl_->map_runtime_.Active()->room.dynamic_solids;
                     } else {
+                        impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
                         debugf("[respawn] CommitActive(%s) FAILED — using current room\n", cp_room);
+                        impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
                     }
                 }
             }
         }
 
+        if (!impl_->use_map_pack_) {
+            if (impl_->player.climb.camera_forward_changed) {
+                impl_->camera.target_forward = impl_->player.climb.camera_forward;
+                impl_->player.climb.camera_forward_changed = false;
+            }
+            // Legacy single-room path retains its prior complete-player phase.
+            const float horiz_speed = std::sqrt(
+                (impl_->player.velocity.x * impl_->player.velocity.x) +
+                (impl_->player.velocity.z * impl_->player.velocity.z));
+            impl_->camera_controller.FollowPhase(
+                impl_->camera,
+                BodyFeet(impl_->player.position, impl_->movement_config.player_half_height),
+                impl_->player.movement_state == PlayerMovementState::Climbing,
+                impl_->player.grounded,
+                horiz_speed,
+                camera_input,
+                FixedStepAccumulator::kTickDt,
+                &impl_->room
+            );
+        }
+
+        impl_->open_world_.Profiler().BeginPhase(
+            n64::FrameProfiler::kPhaseActorWorldUpdate);
+        // OG Player.Update checks pickups after movement/camera and never
+        // collects while dying or respawning. A successful refill changes
+        // charges, hides the actor, and requests whole-world hitstun.
+        if (impl_->baked_level_loaded_ && !did_respawn) {
+            ProcessRefillPickups(impl_->actor_world, impl_->player_controller,
+                impl_->player, impl_->movement_config.player_half_height,
+                impl_->movement_config.climb_waist_offset);
+        }
+
+        // OG World runs all actor Updates around Player.Update by insertion
+        // order, then all LateUpdates around Player.LateUpdate by that order.
+        if (impl_->baked_level_loaded_) {
+            if (impl_->room.has_cassette && !impl_->cassette_reload_active_ &&
+                (!impl_->use_map_pack_ || player_update_ran) && !did_respawn) {
+                const Vec3 cassette_pickup_point{
+                    impl_->player.position.x,
+                    impl_->player.position.y -
+                        impl_->movement_config.player_half_height +
+                        impl_->movement_config.climb_waist_offset,
+                    impl_->player.position.z};
+                const bool picked_up = impl_->use_map_pack_
+                    ? impl_->cassette_actor.TryPickup(cassette_pickup_point)
+                    : impl_->cassette_actor.Step(
+                        FixedStepAccumulator::kTickDt,
+                        cassette_pickup_point);
+                if (picked_up) {
+                    impl_->cassette_reload_active_ = true;
+                    impl_->cassette_reload_timer_ = 0.0f;
+                }
+            }
+            if (impl_->use_map_pack_) {
+                ActorWorld& actor_world = impl_->actor_world;
+                DynamicSolidGeometry& geometry =
+                    impl_->map_runtime_.DynamicGeometry();
+                const DynamicSolidSpec* solids = geometry.Actors();
+                const uint16_t solid_count = geometry.ActorCount();
+                const float dt = FixedStepAccumulator::kTickDt;
+                bool cassette_after_player = impl_->room.has_cassette &&
+                    impl_->cassette_source_id_valid_ &&
+                    impl_->cassette_source_id_ > impl_->player_source_id_;
+                for (uint16_t i = 0; i < solid_count; ++i) {
+                    const uint32_t source_id = solids[i].source_id;
+                    if (source_id <= impl_->player_source_id_) continue;
+                    if (cassette_after_player &&
+                        impl_->cassette_source_id_ < source_id) {
+                        actor_world.DispatchSourceOrderedActorSlot(
+                            impl_->cassette_actor, dt);
+                        cassette_after_player = false;
+                    }
+                    actor_world.DispatchSourceOrderedBefore(source_id, dt);
+                    AdvanceDynamicSolidBaseUpdate(
+                        geometry, i, impl_->player_controller,
+                        impl_->player, impl_->room, actor_update_view, dt);
+                }
+                if (cassette_after_player) {
+                    actor_world.DispatchSourceOrderedActorSlot(
+                        impl_->cassette_actor, dt);
+                    cassette_after_player = false;
+                }
+                actor_world.DispatchSourceOrderedRemainder(dt);
+
+                // OG World.LateUpdate repeats source order around
+                // Player.LateUpdate. Dynamic solid class routines currently
+                // have no late work; keep their exact insertion slots ready.
+                actor_world.BeginSourceOrderedPass(true, &actor_update_view);
+                bool cassette_late_before_player = impl_->room.has_cassette &&
+                    impl_->cassette_source_id_valid_ &&
+                    impl_->cassette_source_id_ < impl_->player_source_id_;
+                for (uint16_t i = 0; i < solid_count; ++i) {
+                    const uint32_t source_id = solids[i].source_id;
+                    if (source_id >= impl_->player_source_id_) break;
+                    if (cassette_late_before_player &&
+                        impl_->cassette_source_id_ < source_id) {
+                        actor_world.DispatchSourceOrderedActorSlot(
+                            impl_->cassette_actor, dt);
+                        cassette_late_before_player = false;
+                    }
+                    actor_world.DispatchSourceOrderedBefore(source_id, dt);
+                }
+                if (cassette_late_before_player) {
+                    actor_world.DispatchSourceOrderedActorSlot(
+                        impl_->cassette_actor, dt);
+                    cassette_late_before_player = false;
+                }
+                actor_world.DispatchSourceOrderedBefore(
+                    impl_->player_source_id_, dt);
+                if (player_update_ran) {
+                    impl_->player_controller.LateMoveContactPhase(
+                        impl_->player, dt, &impl_->room);
+                    motor_result.grounded = impl_->player.grounded;
+                    motor_result.ground_normal = impl_->player.contact.ground_normal;
+                    motor_result.wall_contact = impl_->player.wall_contact;
+
+                    if (impl_->player.climb.camera_forward_changed) {
+                        impl_->camera.target_forward =
+                            impl_->player.climb.camera_forward;
+                        impl_->player.climb.camera_forward_changed = false;
+                    }
+                    const float horiz_speed = std::sqrt(
+                        (impl_->player.velocity.x * impl_->player.velocity.x) +
+                        (impl_->player.velocity.z * impl_->player.velocity.z));
+                    impl_->camera_controller.FollowPhase(
+                        impl_->camera,
+                        BodyFeet(impl_->player.position,
+                                 impl_->movement_config.player_half_height),
+                        impl_->player.movement_state ==
+                            PlayerMovementState::Climbing,
+                        impl_->player.grounded,
+                        horiz_speed,
+                        camera_input,
+                        dt,
+                        &impl_->room);
+                }
+                bool cassette_late_after_player = impl_->room.has_cassette &&
+                    impl_->cassette_source_id_valid_ &&
+                    impl_->cassette_source_id_ > impl_->player_source_id_;
+                for (uint16_t i = 0; i < solid_count; ++i) {
+                    const uint32_t source_id = solids[i].source_id;
+                    if (source_id <= impl_->player_source_id_) continue;
+                    if (cassette_late_after_player &&
+                        impl_->cassette_source_id_ < source_id) {
+                        actor_world.DispatchSourceOrderedActorSlot(
+                            impl_->cassette_actor, dt);
+                        cassette_late_after_player = false;
+                    }
+                    actor_world.DispatchSourceOrderedBefore(source_id, dt);
+                }
+                if (cassette_late_after_player) {
+                    actor_world.DispatchSourceOrderedActorSlot(
+                        impl_->cassette_actor, dt);
+                    cassette_late_after_player = false;
+                }
+                actor_world.DispatchSourceOrderedRemainder(dt);
+
+                if (!player_update_ran) {
+                    // A pre-tick hazard suppresses Player.Update and
+                    // Player.LateUpdate, but world actors still run in source
+                    // order around the absent Player slot.
+                    const float horiz_speed = std::sqrt(
+                        (impl_->player.velocity.x * impl_->player.velocity.x) +
+                        (impl_->player.velocity.z * impl_->player.velocity.z));
+                    impl_->camera_controller.FollowPhase(
+                        impl_->camera,
+                        BodyFeet(impl_->player.position,
+                                 impl_->movement_config.player_half_height),
+                        impl_->player.movement_state == PlayerMovementState::Climbing,
+                        impl_->player.grounded,
+                        horiz_speed,
+                        camera_input,
+                        dt,
+                        &impl_->room);
+                }
+            } else {
+                // Legacy single-room compatibility path.
+                impl_->actor_world.Update(FixedStepAccumulator::kTickDt);
+                impl_->actor_world.LateUpdate(FixedStepAccumulator::kTickDt);
+            }
+        } else {
+            TryCollect(impl_->collectible, impl_->player.position);
+        }
+        impl_->open_world_.Profiler().EndPhase(
+            n64::FrameProfiler::kPhaseActorWorldUpdate);
+
+        if (impl_->use_map_pack_ && !player_update_ran) {
+            motor_result.grounded = impl_->player.grounded;
+            motor_result.ground_normal = impl_->player.contact.ground_normal;
+            motor_result.wall_contact = impl_->player.wall_contact;
+        }
+
+        // Dash entry and pickups can request hitstun in this tick. Commit once
+        // after all source-ordered actor/pickup work; later requests replace
+        // earlier ones, matching OG's direct World.HitStun assignments.
+        impl_->player_controller.CommitWorldHitstopRequest(impl_->player);
+
+
     }
+    impl_->open_world_.Profiler().EndPhase(
+        n64::FrameProfiler::kPhaseFixedStepLoop);
 
     impl_->render_alpha = impl_->fixed_step.Alpha();
 
@@ -2044,36 +2567,7 @@ void GameplayScene::Update(float delta_seconds) {
         impl_->input_system.ConsumeDashPress();
         input.dash_pressed = false;
         impl_->telemetry.RecordRespawn();
-        impl_->camera_controller.Reset(impl_->camera, impl_->player.position);
-    }
-
-    // Camera reads the post-move (and post-respawn) player state.
-    const float horiz_speed = std::sqrt(
-        (impl_->player.velocity.x * impl_->player.velocity.x) +
-        (impl_->player.velocity.z * impl_->player.velocity.z));
-    impl_->camera_controller.Step(
-        impl_->camera,
-        impl_->player.position,
-        impl_->player.movement_state == PlayerMovementState::Climbing,
-        impl_->player.grounded,
-        horiz_speed,
-        camera_input,
-        delta_seconds,
-        &impl_->room
-    );
-
-    // Actors run after the player + camera so they can read the resolved
-    // player state for pickup checks and other gameplay reactions.
-    if (impl_->baked_level_loaded_) {
-        if (impl_->room.has_cassette && !impl_->cassette_reload_active_) {
-            if (impl_->cassette_actor.Step(delta_seconds, impl_->player.position)) {
-                impl_->cassette_reload_active_ = true;
-                impl_->cassette_reload_timer_ = 0.0f;
-            }
-        }
-        impl_->actor_world.Update(delta_seconds);
-    } else {
-        TryCollect(impl_->collectible, impl_->player.position);
+        impl_->camera_controller.Reset(impl_->camera, BodyFeet(impl_->player.position, impl_->movement_config.player_half_height));
     }
 
     if (impl_->cassette_reload_active_) {
@@ -2092,17 +2586,6 @@ void GameplayScene::Update(float delta_seconds) {
         }
     }
 
-    {
-        const Vec3 interp = impl_->player.InterpolatedPosition(impl_->render_alpha);
-        // Camera-at-origin view (see Render): the fallback cube must also be
-        // offset by -camera, otherwise it is drawn at world coordinates and
-        // disappears off-screen when the camera is far from the origin.
-        Vec3 camera_relative = interp;
-        camera_relative.x -= impl_->camera.position.x;
-        camera_relative.y -= impl_->camera.position.y;
-        camera_relative.z -= impl_->camera.position.z;
-        SetTransform(impl_->player_render, camera_relative, {5.0f, 10.0f, 5.0f});
-    }
     if (!impl_->baked_level_loaded_) {
         SetTransform(
             impl_->collectible_render,
@@ -2130,7 +2613,12 @@ void GameplayScene::Update(float delta_seconds) {
     // grabbing with no button held is visible as z/l/r=1 at rest.
     if (impl_->telemetry.frame_index % 60 == 0) {
         const InputSystem::RawSnapshot& raw = impl_->input_system.LastRaw();
-        debugf("[input] z=%u l=%u r=%u al=%d ar=%d | j=%u d=%u c=%u p=%u\n",
+        impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
+        debugf("[input] pad=(style%u,current%04x,held%04x) "
+               "z=%u l=%u r=%u al=%d ar=%d | j=%u d=%u c=%u p=%u\n",
+               static_cast<unsigned int>(raw.style),
+               static_cast<unsigned int>(raw.buttons_current),
+               static_cast<unsigned int>(raw.buttons_held),
                static_cast<unsigned int>(raw.z),
                static_cast<unsigned int>(raw.l),
                static_cast<unsigned int>(raw.r),
@@ -2140,6 +2628,7 @@ void GameplayScene::Update(float delta_seconds) {
                raw.dash_down ? 1u : 0u,
                raw.climb_down ? 1u : 0u,
                raw.pause_down ? 1u : 0u);
+        impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
     }
     // og-mover-overhaul Inc 2: ungated `[move]` line at 30-frame cadence so
     // clip forensics are grep-able from the first device capture (a position
@@ -2152,7 +2641,8 @@ void GameplayScene::Update(float delta_seconds) {
             case PlayerMovementState::Skidding: st = "K"; break;  // review C9
             default: st = "N"; break;
         }
-        debugf("[move] pos=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f) g=%u wall=%u ceil=%u st=%s\n",
+        impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhaseDebugOutput);
+        debugf("[move] pos=(%.1f,%.1f,%.1f) v=(%.1f,%.1f,%.1f) g=%u wall=%u ceil=%u st=%s ticks=%d/%d\n",
                static_cast<double>(impl_->player.position.x),
                static_cast<double>(impl_->player.position.y),
                static_cast<double>(impl_->player.position.z),
@@ -2162,7 +2652,8 @@ void GameplayScene::Update(float delta_seconds) {
                impl_->player.grounded ? 1u : 0u,
                impl_->player.wall_contact ? 1u : 0u,
                impl_->player.ceiling_contact ? 1u : 0u,
-               st);
+               st, impl_->simulation_ticks_this_frame, n_ticks);
+        impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhaseDebugOutput);
     }
 }
 
@@ -2186,16 +2677,30 @@ void GameplayScene::Render() {
     const float fov_deg = 45.0f * impl_->camera.fov_multiplier;
     const float near_plane = impl_->camera.render_near_plane;
 
-    // Single near-pass camera. The far plane is 800u for the 9-cell ring; when
-    // the distant tier is enabled (render-distance Inc 5), widen it to cover
-    // the whole-map horizon (.dlod cells up to ~2400u).
-    const CameraDesc cams = MakeNearCamera(
-        fov_deg, near_plane, kEnableDistantTier ? 2000.0f : 800.0f,
+    // Detailed pass stays at 800u. Separate distant projection begins beyond
+    // the resident ring and reaches the full map bounds.
+    const CameraDesc near_cam = MakeNearCamera(
+        fov_deg, near_plane, 800.0f,
         impl_->camera.position, impl_->camera.target,
         Vec3{0.0f, 1.0f, 0.0f});
+    float tile_size = 0.0f;
+    if (impl_->use_map_pack_) {
+        const MapSpecV2& spec = impl_->map_runtime_.Spec();
+        tile_size = spec.chunk_size * spec.scale;
+    }
+    const CameraDesc distant_cam = kEnableDistantTier
+        ? MakeDistantCamera(near_cam, tile_size,
+                            impl_->world_bounds_valid_ ? &impl_->world_bounds : nullptr)
+        : near_cam;
 
-    t3d_viewport_set_projection(&impl_->viewport, T3D_DEG_TO_RAD(fov_deg), near_plane,
-                                cams.far);
+    t3d_viewport_set_projection(&impl_->viewport, T3D_DEG_TO_RAD(fov_deg),
+                                near_cam.near, near_cam.far);
+    t3d_viewport_set_projection(&impl_->distant_viewport,
+                                T3D_DEG_TO_RAD(fov_deg),
+                                distant_cam.near, distant_cam.far);
+    t3d_viewport_set_projection(&impl_->sky_viewport,
+                                T3D_DEG_TO_RAD(fov_deg),
+                                near_cam.near, near_cam.far);
     // CRITICAL camera-at-origin coupling: model matrices are camera-relative
     // (LvlRoomRenderer::SetCameraPosition translates by render_origin -
     // camera_position). For the near-pass view to agree with those model
@@ -2210,6 +2715,10 @@ void GameplayScene::Render() {
         camera_target.z - camera_position.z
     }};
     t3d_viewport_look_at(&impl_->viewport, &view_origin, &view_target, &camera_up);
+    t3d_viewport_look_at(&impl_->distant_viewport, &view_origin, &view_target,
+                         &camera_up);
+    t3d_viewport_look_at(&impl_->sky_viewport, &view_origin, &view_target,
+                         &camera_up);
 
     // Rebase loaded room geometry so it renders camera-relative. Both the
     // map-pack ring (via the orchestrator) and the legacy single-room renderer
@@ -2219,7 +2728,11 @@ void GameplayScene::Render() {
 
     rdpq_attach(display_get(), display_get_zbuf());
     t3d_frame_start();
-    t3d_viewport_attach(&impl_->viewport);
+    const bool map_pack_render = impl_->baked_level_loaded_ &&
+                                 impl_->use_map_pack_ &&
+                                 !impl_->room_fixture_visible_;
+    t3d_viewport_attach(map_pack_render ? &impl_->sky_viewport
+                                       : &impl_->viewport);
     t3d_screen_clear_color(RGBA32(88, 163, 221, 0xFF));  // normal blue sky
     t3d_screen_clear_depth();
 
@@ -2239,11 +2752,13 @@ void GameplayScene::Render() {
         // In map-pack mode, drive the single near-pass orchestrator.
         // Otherwise use the legacy single-room renderer.
         if (impl_->use_map_pack_) {
-            // The viewport is already attached above with the gameplay
-            // projection. SetViewport is kept for host-test compatibility.
-            impl_->open_world_.SetViewport(&impl_->viewport);
-            impl_->open_world_.UpdateCamera(cams, impl_->last_delta);
-            impl_->open_world_.Render(cams);
+            // OpenWorldRenderer switches from its dedicated distant viewport
+            // to this independently buffered near viewport between passes.
+            impl_->open_world_.SetViewports(&impl_->viewport,
+                                            &impl_->distant_viewport);
+            impl_->open_world_.UpdateCamera(near_cam, impl_->last_delta);
+            impl_->open_world_.Render(near_cam, distant_cam,
+                                      &impl_->player.position);
         } else {
             impl_->room_renderer.Draw();
         }
@@ -2259,16 +2774,32 @@ void GameplayScene::Render() {
             impl_->cassette_model.Draw();
         }
         constexpr float kStrawberryScale = 0.05f;
-        if (StrawberryActor* sa = impl_->actor_world.Get<StrawberryActor>()) {
+        impl_->actor_world.ForEachType<StrawberryActor>([&](StrawberryActor& sa) {
+            if (sa.collected) return;
             const Vec3 cam = impl_->camera.position;
-            Vec3 pos = sa->position;
+            Vec3 pos = sa.position;
             pos.x -= cam.x;  // camera-at-origin view: world coords must be offset by -camera
             pos.y -= cam.y;
             pos.z -= cam.z;
             impl_->strawberry_model.UpdateMatrix(pos, kStrawberryScale, 0.0f);
             SetActorShadedState();
             impl_->strawberry_model.Draw();
-        }
+        });
+        impl_->actor_world.ForEachType<RefillActor>([&](RefillActor& refill) {
+            if (!refill.active || refill.collected) return;
+            StaticModel& model = refill.IsDouble()
+                ? impl_->double_refill_model : impl_->refill_model;
+            if (!model.IsLoaded()) return;
+            const Vec3 cam = impl_->camera.position;
+            Vec3 pos = refill.VisualPosition();
+            pos.x -= cam.x;
+            pos.y -= cam.y;
+            pos.z -= cam.z;
+            model.UpdateMatrix(pos, kRefillModelScale,
+                               refill.VisualSpinYawRadians());
+            SetActorShadedState();
+            model.Draw();
+        });
     } else {
         // Graybox: cube geometry
         t3d_state_set_drawflags(static_cast<T3DDrawFlags>(T3D_FLAG_SHADED | T3D_FLAG_DEPTH));
@@ -2284,20 +2815,202 @@ void GameplayScene::Render() {
     }
 
     if (impl_->madeline_model.IsLoaded()) {
-        constexpr float kMadelineScale = 5.0f;  // coin is tiny; scale up
-        constexpr float kMadelineYOffset = 0.0f;
+        // gltf_to_t3d bakes manifest scale (5). Prepared player pivot is at
+        // feet, so place it at capsule feet rather than capsule center.
+        // Keep manifest scale. Physics wall radius stays OG-sized; a separate
+        // render-only offset keeps the prepared mesh outside nearby walls.
         const Vec3 facing = impl_->player.facing;
-        const float yaw = std::atan2(facing.x, facing.z);
+        // tiny3d's positive Y rotation turns the model's local +Z toward -X.
+        // Invert the lateral angle so the mesh faces the movement direction;
+        // the forward/back headings remain unchanged (0 / ±PI).
+        const bool climbing =
+            impl_->player.movement_state == PlayerMovementState::Climbing;
+        const float facing_len = std::sqrt(facing.x * facing.x + facing.z * facing.z);
+        const Vec3 safe_facing = facing_len > 0.0001f
+            ? facing
+            : Vec3{0.0f, 0.0f, 1.0f};
+        const float yaw = -std::atan2(safe_facing.x, safe_facing.z);
+        if (kVerboseFrameLogging && climbing) {
+            const float target_yaw = -std::atan2(
+                impl_->player.target_facing.x, impl_->player.target_facing.z);
+            const Vec3 n = impl_->player.climb.wall_normal;
+            debugf("[anim-align] tick=%u facing=%.4f target=%.4f yaw=%.4f "
+                   "wall_n=(%.3f,%.3f) corner_ease=%.4f\n",
+                   static_cast<unsigned int>(impl_->telemetry.frame_index),
+                   yaw, target_yaw,
+                   -std::atan2(n.x, n.z),
+                   static_cast<double>(n.x), static_cast<double>(n.z),
+                   impl_->player.climb.corner_ease);
+        }
         Vec3 draw_pos = impl_->player.InterpolatedPosition(impl_->render_alpha);
-        draw_pos.y += kMadelineYOffset;
+        draw_pos.y -= impl_->movement_config.player_half_height;
+        const Vec3 presentation_scale = PlayerPresentationScale(impl_->player.model_scale);
+        draw_pos.y += kMadelineFeetPivotOffset * presentation_scale.y;
+        const float minimum_gap = kMadelineModelWallGap;
+        if (impl_->player.movement_state == PlayerMovementState::Climbing) {
+            if (impl_->player.climb.corner_ease > 0.0f) {
+                const Vec3 normal_a = impl_->player.climb.corner_normal_from;
+                const Vec3 normal_b = impl_->player.climb.corner_normal_to;
+                const float anchor_y = impl_->movement_config.player_half_height -
+                                       impl_->movement_config.climb_waist_offset;
+                const Vec3 plane_a = {
+                    impl_->player.climb.corner_from.x -
+                        normal_a.x * impl_->movement_config.climb_pushout_dist,
+                    impl_->player.climb.corner_from.y -
+                        normal_a.y * impl_->movement_config.climb_pushout_dist - anchor_y,
+                    impl_->player.climb.corner_from.z -
+                        normal_a.z * impl_->movement_config.climb_pushout_dist,
+                };
+                const Vec3 plane_b = {
+                    impl_->player.climb.corner_to.x -
+                        normal_b.x * impl_->movement_config.climb_pushout_dist,
+                    impl_->player.climb.corner_to.y -
+                        normal_b.y * impl_->movement_config.climb_pushout_dist - anchor_y,
+                    impl_->player.climb.corner_to.z -
+                        normal_b.z * impl_->movement_config.climb_pushout_dist,
+                };
+                const float feet_gap_a = physics::Dot(
+                    normal_a, physics::Sub(draw_pos, plane_a));
+                const float feet_gap_b = physics::Dot(
+                    normal_b, physics::Sub(draw_pos, plane_b));
+                const Vec3 render_offset = PlayerModelCornerHorizontalOffset(
+                    normal_a, feet_gap_a, normal_b, feet_gap_b,
+                    kMadelineModelRadius, kMadelineModelHeight, minimum_gap,
+                    &impl_->player.facing, kMadelineScale);
+                draw_pos.x += render_offset.x;
+                draw_pos.z += render_offset.z;
+            } else {
+                PlayerModelPlaneConstraint constraints[
+                    kMaxPlayerModelWallConstraints];
+                int count = QueryPlayerModelWallConstraints(
+                    impl_->ActiveRoom(), draw_pos, kMadelineModelRadius,
+                    kMadelineModelHeight,
+                    impl_->movement_config.climb_waist_offset,
+                    minimum_gap, constraints,
+                    kMaxPlayerModelWallConstraints);
+                if (count == 0) {
+                    const Vec3 normal = impl_->player.climb.wall_normal;
+                    constraints[0] = {
+                        normal,
+                        impl_->movement_config.climb_pushout_dist -
+                            impl_->movement_config.climb_waist_offset * normal.y,
+                    };
+                    count = 1;
+                }
+                const Vec3 render_offset = PlayerModelMultiPlaneHorizontalOffset(
+                    constraints, count, kMadelineModelRadius,
+                    kMadelineModelHeight, minimum_gap,
+                    &impl_->player.facing, kMadelineScale);
+                draw_pos.x += render_offset.x;
+                draw_pos.z += render_offset.z;
+            }
+        } else {
+            // The static mesh is wider than OG's point-query collision shell.
+            // Offset only the rendered mesh near real wall planes; never
+            // enlarge the gameplay wall pushout radius to match art bounds.
+            const Vec3 waist = {
+                draw_pos.x,
+                draw_pos.y + impl_->movement_config.climb_waist_offset,
+                draw_pos.z,
+            };
+            const Vec3 prefer_dir = {
+                -impl_->player.last_facing.x, 0.0f,
+                -impl_->player.last_facing.z,
+            };
+            const WallHit wall = QueryClimbWall(
+                impl_->ActiveRoom(), waist,
+                kMadelineModelRadius + minimum_gap, prefer_dir);
+            if (wall.hit) {
+                const float feet_gap = physics::Dot(
+                    wall.plane_normal, physics::Sub(draw_pos, wall.point));
+                const float render_offset = PlayerModelHorizontalOffset(
+                    wall.plane_normal, feet_gap, kMadelineModelRadius,
+                    kMadelineModelHeight, minimum_gap,
+                    &impl_->player.facing, kMadelineScale);
+                const float normal_xz = std::sqrt(
+                    wall.plane_normal.x * wall.plane_normal.x +
+                    wall.plane_normal.z * wall.plane_normal.z);
+                if (normal_xz > 0.1f) {
+                    draw_pos.x += (wall.plane_normal.x / normal_xz) * render_offset;
+                    draw_pos.z += (wall.plane_normal.z / normal_xz) * render_offset;
+                }
+            }
+        }
+        const Vec3 model_root_offset = PlayerModelRootOffset(
+            safe_facing, presentation_scale.x);
+        draw_pos.x += model_root_offset.x;
+        draw_pos.z += model_root_offset.z;
         draw_pos.x -= impl_->camera.position.x;
         draw_pos.y -= impl_->camera.position.y;
         draw_pos.z -= impl_->camera.position.z;
-        impl_->madeline_model.UpdateMatrix(draw_pos, kMadelineScale, yaw);
-        SetActorShadedState();
-        impl_->madeline_model.Draw();
-    } else {
-        DrawCube(impl_->cube_vertices, impl_->player_render.matrix_fp);
+        impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhasePlayerAnimation);
+        impl_->madeline_model.Sample(impl_->player.animation);
+        impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhasePlayerAnimation);
+        impl_->madeline_model.UpdateMatrix(draw_pos,
+            Vec3{kMadelineScale * presentation_scale.x,
+                 kMadelineScale * presentation_scale.y,
+                 kMadelineScale * presentation_scale.z}, yaw);
+        impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhasePlayerSkin);
+        const bool weighted_skin_ready = impl_->madeline_model.PrepareDraw();
+        impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhasePlayerSkin);
+        if (weighted_skin_ready) {
+            SetActorShadedState();
+            impl_->madeline_model.Draw();
+            if (kEnablePlayerHair) {
+                impl_->open_world_.Profiler().BeginPhase(n64::FrameProfiler::kPhasePlayerHair);
+                Vec3 hair_head_world{};
+                const Vec3 hair_forward = {
+                    -safe_facing.x, 0.0f, -safe_facing.z,
+                };
+                const bool hair_anchor_ready =
+                    impl_->madeline_model.HeadPoint({0.0f, 1.0f, -0.4f},
+                                                    hair_head_world) &&
+                    impl_->player_hair_renderer.IsReady();
+                if (hair_anchor_ready) {
+                    const int hair_nodes = ResolvePlayerHairNodeCount(impl_->player.dashes);
+                    for (int tick = 0; tick < impl_->simulation_ticks_this_frame; ++tick) {
+                        impl_->player_hair.Update(hair_nodes,
+                            FixedStepAccumulator::kTickDt, hair_head_world,
+                            hair_forward, impl_->player.grounded);
+                    }
+                    // First render initializes the anchor while the accumulator
+                    // may not yet have produced a simulation tick. This is setup,
+                    // not ongoing hair motion.
+                    if (impl_->simulation_ticks_this_frame == 0 &&
+                        impl_->player_hair.NodeCount() == 0) {
+                        impl_->player_hair.Update(hair_nodes, 0.0f,
+                            hair_head_world, hair_forward, impl_->player.grounded);
+                    }
+                }
+                if (hair_anchor_ready && impl_->player_hair.NodeCount() > 0) {
+                    // PlayerPresentationScale is in N64 X/Y/Z axes; hair vertices
+                    // are generated in OG X/Y/Z axes before FromOgAxes conversion.
+                    const Vec3 hair_squish_og = {
+                        presentation_scale.x,
+                        presentation_scale.z,
+                        presentation_scale.y,
+                    };
+                    // Keep OG's refill flash ahead of its 0/1/2-charge hair colors.
+                    const PlayerHairColorState hair_color_state = ResolvePlayerHairColor(
+                        impl_->player.dashes,
+                        impl_->player.dash_refill_flash_remaining);
+                    color_t hair_color = RGBA32(0xDB, 0x2C, 0x00, 0xFF);
+                    if (hair_color_state == PlayerHairColorState::NoDash) {
+                        hair_color = RGBA32(0x6E, 0xC0, 0xFF, 0xFF);
+                    } else if (hair_color_state == PlayerHairColorState::TwoDashes) {
+                        hair_color = RGBA32(0xFA, 0x91, 0xFF, 0xFF);
+                    } else if (hair_color_state == PlayerHairColorState::RefillFlash) {
+                        hair_color = RGBA32(0xFF, 0xFF, 0xFF, 0xFF);
+                    }
+                    if (!impl_->player_hair_renderer.Draw(
+                            impl_->player_hair, hair_forward, hair_squish_og,
+                            hair_color)) {
+                        debugf("[player-hair] draw FAILED\n");
+                    }
+                }
+                impl_->open_world_.Profiler().EndPhase(n64::FrameProfiler::kPhasePlayerHair);
+            }
+        }
     }
 
     // Switch to 2D for overlays

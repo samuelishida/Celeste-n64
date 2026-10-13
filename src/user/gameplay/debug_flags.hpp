@@ -61,16 +61,9 @@ inline constexpr bool kDebugInputRecording = true;
 inline constexpr bool kDebugInputRecording = false;
 #endif
 
-// streaming-experience Inc 4: per-cell reveal animation gate. When true, a
-// cell that enters the drawn 3×3 while still loading (or whose staged parse
-// lands while it is already drawn) animates in via a matrix pivot-scale about
-// its render origin (epsilon → 1 over `kRevealDurationSec`) instead of a hard
-// pop. Preloaded cells (READY before any drawn frame) snap at 100% with zero
-// animation. When false, all cells draw at scale 1.0 (today's behavior,
-// byte-identical path) — the A/B rollback. The reveal composes into the
-// CPU-built camera-relative matrix only; the precompiled RSPQ block is
-// unchanged, so it adds zero RSP cost.
-inline constexpr bool kEnableCellReveal = true;
+// Per-cell scale-in deforms terrain while async-loaded. Keep disabled: stream
+// cells at full scale; any future fade must change opacity/color, never geometry.
+inline constexpr bool kEnableCellReveal = false;
 
 // render-distance-and-scaleup Inc 1: backface-cull the near pass. tiny3d's
 // RSP microcode performs the per-triangle winding test when T3D_FLAG_CULL_BACK
@@ -82,13 +75,14 @@ inline constexpr bool kEnableCellReveal = true;
 // double-clean under winding tests.
 inline constexpr bool kEnableBackCull = false;
 
-// render-distance Inc 4/5: the whole-map horizon tier (DLOD) — merged into
-// ONE block. Default OFF: the merged single-block approach regressed the
-// frame (146 ms vs 48.8 ms near-only) because it forces all distant geometry
-// through one block every frame with no per-cell culling. Keeping it OFF
-// preserves the shipped perf; flip ON only after the distant pass is made
-// cheap (per-cell cull + smaller budget).
+// Stable recovery profile: use one near pass until the separate DLOD projection
+// is visually qualified. Its depth reset and ownership handoff previously
+// produced flicker/coverage artifacts on this map.
 inline constexpr bool kEnableDistantTier = false;
+
+// Procedural hair is a separate vertex renderer, not part of Tiny3D's joint
+// skinning. Keep it off until its head anchor and frame cost are device-proven.
+inline constexpr bool kEnablePlayerHair = false;
 
 // memory-opt Inc 2: route cell/map-pack loads through libdragon's asset
 // compression layer (level-1 LZ4, documented faster-than-uncompressed) when
